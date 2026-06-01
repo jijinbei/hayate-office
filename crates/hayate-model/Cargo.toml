@@ -1,0 +1,11 @@
+[package]
+name = "hayate-model"
+description = "HayateOffice editing layer: uniform operations, transactions, undo/redo (gpui-free)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hayate-ir.workspace = true
+serde.workspace = true

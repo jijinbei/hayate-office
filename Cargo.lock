@@ -10,6 +10,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hayate-model"
+version = "0.0.0"
+dependencies = [
+ "hayate-ir",
+ "serde",
+]
+
+[[package]]
 name = "proc-macro2"
 version = "1.0.106"
 source = "registry+https://github.com/rust-lang/crates.io-index"
