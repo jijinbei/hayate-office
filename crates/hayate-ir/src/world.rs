@@ -84,6 +84,16 @@ macro_rules! define_world {
                         self.$field.get(&e).cloned().map(CompValue::$variant), )*
                 }
             }
+
+            /// Collect every component currently attached to `e` (used to build the inverse
+            /// of a despawn operation).
+            pub fn components_of(&self, e: Entity) -> Vec<CompValue> {
+                let mut out = Vec::new();
+                $( if let Some(v) = self.$field.get(&e) {
+                    out.push(CompValue::$variant(v.clone()));
+                } )*
+                out
+            }
         }
     };
 }
@@ -134,6 +144,15 @@ impl World {
     pub fn spawn(&mut self) -> Entity {
         let e = Entity(self.next);
         self.spawn_at(e);
+        e
+    }
+
+    /// Reserve a fresh id without bringing it to life. The editing layer uses this to
+    /// allocate an id for a `Spawn` operation without mutating document content, so the
+    /// spawn stays fully captured by the (undoable) transaction.
+    pub fn reserve_id(&mut self) -> Entity {
+        let e = Entity(self.next);
+        self.next += 1;
         e
     }
 
