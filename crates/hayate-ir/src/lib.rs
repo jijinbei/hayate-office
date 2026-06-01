@@ -7,5 +7,6 @@ pub mod color;
 pub mod frac;
 pub mod geom;
 pub mod paint;
+pub mod shape;
 pub mod units;
 pub mod world;
