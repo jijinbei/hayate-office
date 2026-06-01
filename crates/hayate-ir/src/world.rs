@@ -4,6 +4,10 @@
 //! absence of a component represents an override/inherit decision (DESIGN 6.8), and plugin
 //! data will later live in dynamic, runtime-registered columns. The UI layer (gpui) does
 //! not use this model; it stays reactive.
+//!
+//! `define_world!` also generates a tagged `CompValue` / `CompKind` and generic
+//! `set`/`remove`/`get`, which is the substrate for the uniform component operations in the
+//! editing layer (DESIGN 6.10's four-kind Operation).
 
 use crate::doc::{LayoutInfo, MasterInfo, PlaceholderRef, SlideInfo};
 use crate::frac::FracIndex;
@@ -19,11 +23,10 @@ new_key_type! {
     pub struct Entity;
 }
 
-/// Generates the `World` with one sparse column per listed component, plus a private
-/// `clear_components` that drops an entity from every column. Adding a built-in component
-/// is a one-line change here.
+/// Generates `World` (one sparse column per component), a tagged `CompValue`, a `CompKind`
+/// tag, and generic `set`/`remove`/`get`. Adding a built-in component is a one-line change.
 macro_rules! define_world {
-    ($($(#[$m:meta])* $field:ident : $ty:ty),* $(,)?) => {
+    ($($(#[$m:meta])* $field:ident : $variant:ident : $ty:ty),* $(,)?) => {
         /// Entities plus sparse component columns.
         #[derive(Default, Serialize, Deserialize)]
         pub struct World {
@@ -31,9 +34,51 @@ macro_rules! define_world {
             $( $(#[$m])* pub $field: SecondaryMap<Entity, $ty>, )*
         }
 
+        /// A component value tagged by its kind (one variant per column).
+        #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+        pub enum CompValue {
+            $( $variant($ty), )*
+        }
+
+        /// The kind of a component, used to address a column without a value.
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+        pub enum CompKind {
+            $( $variant, )*
+        }
+
+        impl CompValue {
+            pub fn kind(&self) -> CompKind {
+                match self { $( CompValue::$variant(_) => CompKind::$variant, )* }
+            }
+        }
+
         impl World {
             fn clear_components(&mut self, e: Entity) {
                 $( self.$field.remove(e); )*
+            }
+
+            /// Set a component on `e`, returning the previous value if present.
+            pub fn set(&mut self, e: Entity, v: CompValue) -> Option<CompValue> {
+                match v {
+                    $( CompValue::$variant(val) =>
+                        self.$field.insert(e, val).map(CompValue::$variant), )*
+                }
+            }
+
+            /// Remove a component of `kind` from `e`, returning the previous value if present.
+            pub fn remove(&mut self, e: Entity, kind: CompKind) -> Option<CompValue> {
+                match kind {
+                    $( CompKind::$variant =>
+                        self.$field.remove(e).map(CompValue::$variant), )*
+                }
+            }
+
+            /// Read a component value of `kind` from `e`.
+            pub fn get(&self, e: Entity, kind: CompKind) -> Option<CompValue> {
+                match kind {
+                    $( CompKind::$variant =>
+                        self.$field.get(e).cloned().map(CompValue::$variant), )*
+                }
             }
         }
     };
@@ -41,39 +86,39 @@ macro_rules! define_world {
 
 define_world! {
     /// Bounding box in slide coordinates (EMU), pre-rotation.
-    frames: RectEmu,
+    frames: Frame: RectEmu,
     /// Rotation in degrees, clockwise.
-    rotations: f32,
+    rotations: Rotation: f32,
     /// Sibling order key among children sharing a parent.
-    order: FracIndex,
+    order: Order: FracIndex,
     /// Parent entity (group / slide). Absent = root of its container.
-    parent: Entity,
+    parent: Parent: Entity,
     /// Optional human-readable name (debugging and Morph matching aid).
-    names: String,
+    names: Name: String,
     /// Interior fill.
-    fills: Fill,
+    fills: Fill: Fill,
     /// Outline.
-    strokes: Stroke,
+    strokes: Stroke: Stroke,
     /// Opacity in 0.0..=1.0 (absent = fully opaque).
-    opacity: f32,
+    opacity: Opacity: f32,
     /// Vector geometry; presence marks the entity as a vector shape.
-    geometries: Geometry,
+    geometries: Geometry: Geometry,
     /// Rich text content; presence marks the entity as a text box.
-    texts: TextBody,
+    texts: Text: TextBody,
 
     // --- structural (DESIGN 6.8) ---
     /// Marks the entity as a slide.
-    slide_info: SlideInfo,
+    slide_info: Slide: SlideInfo,
     /// Marks the entity as a layout.
-    layout_info: LayoutInfo,
+    layout_info: Layout: LayoutInfo,
     /// Marks the entity as a master.
-    master_info: MasterInfo,
+    master_info: Master: MasterInfo,
     /// Background fill override; resolves slide -> layout -> master.
-    backgrounds: Fill,
+    backgrounds: Background: Fill,
     /// Speaker notes (on slide entities).
-    speaker_notes: String,
+    speaker_notes: Notes: String,
     /// Placeholder link for inheriting geometry/style from layout/master.
-    placeholders: PlaceholderRef,
+    placeholders: Placeholder: PlaceholderRef,
 }
 
 impl World {
@@ -152,5 +197,27 @@ mod tests {
         assert!(w.frames.contains_key(a) && !w.frames.contains_key(b));
         assert!(w.rotations.contains_key(b) && !w.rotations.contains_key(a));
         assert_eq!(w.iter().count(), 2);
+    }
+
+    #[test]
+    fn generic_set_remove_get_roundtrip() {
+        let mut w = World::new();
+        let e = w.spawn();
+        let v = CompValue::Frame(RectEmu::new(1, 2, 3, 4));
+        assert_eq!(v.kind(), CompKind::Frame);
+
+        // set on empty returns None
+        assert_eq!(w.set(e, v.clone()), None);
+        assert_eq!(w.get(e, CompKind::Frame), Some(v.clone()));
+
+        // set again returns previous
+        let v2 = CompValue::Frame(RectEmu::new(5, 6, 7, 8));
+        assert_eq!(w.set(e, v2.clone()), Some(v));
+        assert_eq!(w.get(e, CompKind::Frame), Some(v2.clone()));
+
+        // remove returns previous, then None
+        assert_eq!(w.remove(e, CompKind::Frame), Some(v2));
+        assert_eq!(w.get(e, CompKind::Frame), None);
+        assert_eq!(w.remove(e, CompKind::Frame), None);
     }
 }
