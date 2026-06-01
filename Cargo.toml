@@ -5,6 +5,7 @@ resolver = "2"
 members = [
     "crates/hayate-ir",
     "crates/hayate-model",
+    "crates/hayate-render",
 ]
 
 [workspace.package]

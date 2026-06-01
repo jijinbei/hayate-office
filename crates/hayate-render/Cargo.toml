@@ -1,0 +1,10 @@
+[package]
+name = "hayate-render"
+description = "HayateOffice scene builder: Presentation -> backend-agnostic display list (gpui-free)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hayate-ir.workspace = true
