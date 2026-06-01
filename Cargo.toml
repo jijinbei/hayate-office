@@ -15,6 +15,7 @@ repository = "https://github.com/jijinbei/HayateOffice"
 [workspace.dependencies]
 hayate-ir = { path = "crates/hayate-ir" }
 serde = { version = "1", features = ["derive"] }
+slotmap = { version = "1", features = ["serde"] }
 
 # UI は gpui（jijinbei/zed fork を rev ピン）。hayate-app を追加する段で有効化する。
 # 今はコアのビルドを軽く保つため未使用（[workspace.dependencies] の未参照定義は fetch されない）。
