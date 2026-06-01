@@ -10,5 +10,6 @@ pub mod geom;
 pub mod paint;
 pub mod shape;
 pub mod text;
+pub mod theme;
 pub mod units;
 pub mod world;

@@ -3,6 +3,16 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Script class used to pick a per-script font family during resolution.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Script {
+    Latin,
+    /// East-Asian (e.g. Japanese).
+    Ea,
+    /// Complex script (e.g. Arabic).
+    Cs,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeFontSlot {
     /// Heading font.
