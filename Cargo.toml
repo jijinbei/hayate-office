@@ -1,0 +1,25 @@
+# HayateOffice — Rust製の軽量・高速Officeスイート（最初のモジュール=プレゼン）
+# 設計は docs/DESIGN.md / docs/REQUIREMENTS.md を参照。
+[workspace]
+resolver = "2"
+members = [
+    "crates/hayate-ir",
+]
+
+[workspace.package]
+version = "0.0.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/jijinbei/HayateOffice"
+
+[workspace.dependencies]
+hayate-ir = { path = "crates/hayate-ir" }
+serde = { version = "1", features = ["derive"] }
+
+# UI は gpui（jijinbei/zed fork を rev ピン）。hayate-app を追加する段で有効化する。
+# 今はコアのビルドを軽く保つため未使用（[workspace.dependencies] の未参照定義は fetch されない）。
+# gpui          = { git = "https://github.com/jijinbei/zed", rev = "4fe71ffcc6a01b007df7e035df23e80647143b31" }
+# gpui_platform = { git = "https://github.com/jijinbei/zed", rev = "4fe71ffcc6a01b007df7e035df23e80647143b31" }
+
+[profile.dev.package."*"]
+opt-level = 2

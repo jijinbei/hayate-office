@@ -1,0 +1,10 @@
+[package]
+name = "hayate-ir"
+description = "HayateOffice のドキュメントモデル基本型（gpui非依存・純データ）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true
