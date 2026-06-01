@@ -29,7 +29,7 @@ impl Presentation {
 
     /// Order key to append after the current maximum among `siblings`.
     fn append_key(&self, siblings: &[Entity]) -> FracIndex {
-        let last = siblings.last().and_then(|&e| self.world.order.get(e));
+        let last = siblings.last().and_then(|e| self.world.order.get(e));
         FracIndex::after(last)
     }
 
@@ -79,9 +79,9 @@ impl Presentation {
         let mut v: Vec<Entity> = self
             .world
             .iter()
-            .filter(|&e| self.world.parent.get(e) == Some(&parent))
+            .filter(|e| self.world.parent.get(e) == Some(&parent))
             .collect();
-        v.sort_by(|&a, &b| self.world.order.get(a).cmp(&self.world.order.get(b)));
+        v.sort_by(|a, b| self.world.order.get(a).cmp(&self.world.order.get(b)));
         v
     }
 
@@ -90,35 +90,35 @@ impl Presentation {
         let mut v: Vec<Entity> = self
             .world
             .iter()
-            .filter(|&e| self.world.slide_info.contains_key(e))
+            .filter(|e| self.world.slide_info.contains_key(e))
             .collect();
-        v.sort_by(|&a, &b| self.world.order.get(a).cmp(&self.world.order.get(b)));
+        v.sort_by(|a, b| self.world.order.get(a).cmp(&self.world.order.get(b)));
         v
     }
 
     /// The master that a slide ultimately inherits from.
     pub fn master_of(&self, slide: Entity) -> Option<Entity> {
-        let layout = self.world.slide_info.get(slide)?.layout;
-        Some(self.world.layout_info.get(layout)?.master)
+        let layout = self.world.slide_info.get(&slide)?.layout;
+        Some(self.world.layout_info.get(&layout)?.master)
     }
 
     /// The theme in effect for a slide (via its master).
     pub fn theme_of(&self, slide: Entity) -> Option<&Theme> {
         let master = self.master_of(slide)?;
-        self.world.master_info.get(master).map(|m| &m.theme)
+        self.world.master_info.get(&master).map(|m| &m.theme)
     }
 
     /// Resolve a slide's background, falling back slide -> layout -> master.
     pub fn background_of(&self, slide: Entity) -> Option<Fill> {
-        if let Some(f) = self.world.backgrounds.get(slide) {
+        if let Some(f) = self.world.backgrounds.get(&slide) {
             return Some(*f);
         }
-        let layout = self.world.slide_info.get(slide)?.layout;
-        if let Some(f) = self.world.backgrounds.get(layout) {
+        let layout = self.world.slide_info.get(&slide)?.layout;
+        if let Some(f) = self.world.backgrounds.get(&layout) {
             return Some(*f);
         }
-        let master = self.world.layout_info.get(layout)?.master;
-        self.world.backgrounds.get(master).copied()
+        let master = self.world.layout_info.get(&layout)?.master;
+        self.world.backgrounds.get(&master).copied()
     }
 }
 

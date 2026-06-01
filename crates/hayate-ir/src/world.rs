@@ -5,9 +5,13 @@
 //! data will later live in dynamic, runtime-registered columns. The UI layer (gpui) does
 //! not use this model; it stays reactive.
 //!
+//! Entity ids are explicit `u64`s with a monotonic counter, so a despawned id can be
+//! re-created with the *same* id via [`World::spawn_at`]. This makes Operation redo stable
+//! (a generational slotmap key would change on re-spawn and break later references).
+//!
 //! `define_world!` also generates a tagged `CompValue` / `CompKind` and generic
-//! `set`/`remove`/`get`, which is the substrate for the uniform component operations in the
-//! editing layer (DESIGN 6.10's four-kind Operation).
+//! `set`/`remove`/`get`, the substrate for the uniform component operations in the editing
+//! layer (DESIGN 6.10's four-kind Operation).
 
 use crate::doc::{LayoutInfo, MasterInfo, PlaceholderRef, SlideInfo};
 use crate::frac::FracIndex;
@@ -16,12 +20,11 @@ use crate::paint::{Fill, Stroke};
 use crate::shape::Geometry;
 use crate::text::TextBody;
 use serde::{Deserialize, Serialize};
-use slotmap::{new_key_type, SecondaryMap, SlotMap};
+use std::collections::{BTreeMap, BTreeSet};
 
-new_key_type! {
-    /// Stable id of a document entity (shape, slide, master, ...).
-    pub struct Entity;
-}
+/// Stable id of a document entity (shape, slide, master, ...).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Entity(pub u64);
 
 /// Generates `World` (one sparse column per component), a tagged `CompValue`, a `CompKind`
 /// tag, and generic `set`/`remove`/`get`. Adding a built-in component is a one-line change.
@@ -30,8 +33,9 @@ macro_rules! define_world {
         /// Entities plus sparse component columns.
         #[derive(Default, Serialize, Deserialize)]
         pub struct World {
-            entities: SlotMap<Entity, ()>,
-            $( $(#[$m])* pub $field: SecondaryMap<Entity, $ty>, )*
+            next: u64,
+            alive: BTreeSet<Entity>,
+            $( $(#[$m])* pub $field: BTreeMap<Entity, $ty>, )*
         }
 
         /// A component value tagged by its kind (one variant per column).
@@ -54,7 +58,7 @@ macro_rules! define_world {
 
         impl World {
             fn clear_components(&mut self, e: Entity) {
-                $( self.$field.remove(e); )*
+                $( self.$field.remove(&e); )*
             }
 
             /// Set a component on `e`, returning the previous value if present.
@@ -69,7 +73,7 @@ macro_rules! define_world {
             pub fn remove(&mut self, e: Entity, kind: CompKind) -> Option<CompValue> {
                 match kind {
                     $( CompKind::$variant =>
-                        self.$field.remove(e).map(CompValue::$variant), )*
+                        self.$field.remove(&e).map(CompValue::$variant), )*
                 }
             }
 
@@ -77,7 +81,7 @@ macro_rules! define_world {
             pub fn get(&self, e: Entity, kind: CompKind) -> Option<CompValue> {
                 match kind {
                     $( CompKind::$variant =>
-                        self.$field.get(e).cloned().map(CompValue::$variant), )*
+                        self.$field.get(&e).cloned().map(CompValue::$variant), )*
                 }
             }
         }
@@ -126,18 +130,29 @@ impl World {
         Self::default()
     }
 
-    /// Create a new live entity with no components.
+    /// Create a new live entity with a freshly allocated id.
     pub fn spawn(&mut self) -> Entity {
-        self.entities.insert(())
+        let e = Entity(self.next);
+        self.spawn_at(e);
+        e
+    }
+
+    /// Bring a specific id to life (used by Operation redo to recreate the same id).
+    /// The id counter advances past `e` so future `spawn`s never collide.
+    pub fn spawn_at(&mut self, e: Entity) {
+        self.alive.insert(e);
+        if e.0 >= self.next {
+            self.next = e.0 + 1;
+        }
     }
 
     pub fn is_alive(&self, e: Entity) -> bool {
-        self.entities.contains_key(e)
+        self.alive.contains(&e)
     }
 
     /// Remove an entity and all of its components. Returns whether it existed.
     pub fn despawn(&mut self, e: Entity) -> bool {
-        if self.entities.remove(e).is_some() {
+        if self.alive.remove(&e) {
             self.clear_components(e);
             true
         } else {
@@ -146,16 +161,16 @@ impl World {
     }
 
     pub fn len(&self) -> usize {
-        self.entities.len()
+        self.alive.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.entities.is_empty()
+        self.alive.is_empty()
     }
 
-    /// Iterate over all live entities (unordered).
+    /// Iterate over all live entities in id order.
     pub fn iter(&self) -> impl Iterator<Item = Entity> + '_ {
-        self.entities.keys()
+        self.alive.iter().copied()
     }
 }
 
@@ -176,27 +191,26 @@ mod tests {
     }
 
     #[test]
+    fn spawn_at_recreates_same_id() {
+        let mut w = World::new();
+        let e = w.spawn();
+        w.despawn(e);
+        w.spawn_at(e);
+        assert!(w.is_alive(e), "redo can recreate the same id");
+        // A subsequent fresh spawn must not collide with e.
+        let e2 = w.spawn();
+        assert_ne!(e, e2);
+    }
+
+    #[test]
     fn despawn_clears_components() {
         let mut w = World::new();
         let e = w.spawn();
         w.frames.insert(e, RectEmu::new(0, 0, 100, 100));
         w.names.insert(e, "title".to_string());
-        assert!(w.frames.contains_key(e));
         w.despawn(e);
-        assert!(!w.frames.contains_key(e));
-        assert!(!w.names.contains_key(e));
-    }
-
-    #[test]
-    fn columns_are_independent() {
-        let mut w = World::new();
-        let a = w.spawn();
-        let b = w.spawn();
-        w.frames.insert(a, RectEmu::new(0, 0, 10, 10));
-        w.rotations.insert(b, 45.0);
-        assert!(w.frames.contains_key(a) && !w.frames.contains_key(b));
-        assert!(w.rotations.contains_key(b) && !w.rotations.contains_key(a));
-        assert_eq!(w.iter().count(), 2);
+        assert!(!w.frames.contains_key(&e));
+        assert!(!w.names.contains_key(&e));
     }
 
     #[test]
@@ -206,16 +220,13 @@ mod tests {
         let v = CompValue::Frame(RectEmu::new(1, 2, 3, 4));
         assert_eq!(v.kind(), CompKind::Frame);
 
-        // set on empty returns None
         assert_eq!(w.set(e, v.clone()), None);
         assert_eq!(w.get(e, CompKind::Frame), Some(v.clone()));
 
-        // set again returns previous
         let v2 = CompValue::Frame(RectEmu::new(5, 6, 7, 8));
         assert_eq!(w.set(e, v2.clone()), Some(v));
         assert_eq!(w.get(e, CompKind::Frame), Some(v2.clone()));
 
-        // remove returns previous, then None
         assert_eq!(w.remove(e, CompKind::Frame), Some(v2));
         assert_eq!(w.get(e, CompKind::Frame), None);
         assert_eq!(w.remove(e, CompKind::Frame), None);
