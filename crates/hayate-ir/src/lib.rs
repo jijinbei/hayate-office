@@ -4,6 +4,7 @@
 //! live in other crates. See `docs/DESIGN.md`.
 
 pub mod color;
+pub mod doc;
 pub mod font;
 pub mod frac;
 pub mod geom;

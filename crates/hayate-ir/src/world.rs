@@ -5,6 +5,7 @@
 //! data will later live in dynamic, runtime-registered columns. The UI layer (gpui) does
 //! not use this model; it stays reactive.
 
+use crate::doc::{LayoutInfo, MasterInfo, PlaceholderRef, SlideInfo};
 use crate::frac::FracIndex;
 use crate::geom::RectEmu;
 use crate::paint::{Fill, Stroke};
@@ -59,6 +60,20 @@ define_world! {
     geometries: Geometry,
     /// Rich text content; presence marks the entity as a text box.
     texts: TextBody,
+
+    // --- structural (DESIGN 6.8) ---
+    /// Marks the entity as a slide.
+    slide_info: SlideInfo,
+    /// Marks the entity as a layout.
+    layout_info: LayoutInfo,
+    /// Marks the entity as a master.
+    master_info: MasterInfo,
+    /// Background fill override; resolves slide -> layout -> master.
+    backgrounds: Fill,
+    /// Speaker notes (on slide entities).
+    speaker_notes: String,
+    /// Placeholder link for inheriting geometry/style from layout/master.
+    placeholders: PlaceholderRef,
 }
 
 impl World {
