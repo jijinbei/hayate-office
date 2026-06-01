@@ -9,6 +9,7 @@ use crate::frac::FracIndex;
 use crate::geom::RectEmu;
 use crate::paint::{Fill, Stroke};
 use crate::shape::Geometry;
+use crate::text::TextBody;
 use serde::{Deserialize, Serialize};
 use slotmap::{new_key_type, SecondaryMap, SlotMap};
 
@@ -56,6 +57,8 @@ define_world! {
     opacity: f32,
     /// Vector geometry; presence marks the entity as a vector shape.
     geometries: Geometry,
+    /// Rich text content; presence marks the entity as a text box.
+    texts: TextBody,
 }
 
 impl World {

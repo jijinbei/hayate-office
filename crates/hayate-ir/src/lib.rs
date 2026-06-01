@@ -4,9 +4,11 @@
 //! live in other crates. See `docs/DESIGN.md`.
 
 pub mod color;
+pub mod font;
 pub mod frac;
 pub mod geom;
 pub mod paint;
 pub mod shape;
+pub mod text;
 pub mod units;
 pub mod world;
