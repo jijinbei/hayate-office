@@ -1,7 +1,7 @@
-//! HayateOffice ドキュメントモデルの基本型（gpui非依存・純データ）。
+//! Core document-model types for HayateOffice (gpui-free, pure data).
 //!
-//! ここはデータ型のみを持ち、編集ロジック（操作・Undo）や描画には依存しない。
-//! 設計は `docs/DESIGN.md` を参照。
+//! This crate holds data types only; editing logic (operations/undo) and rendering
+//! live in other crates. See `docs/DESIGN.md`.
 
 pub mod color;
 pub mod frac;

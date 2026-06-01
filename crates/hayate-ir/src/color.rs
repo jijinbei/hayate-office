@@ -1,7 +1,8 @@
-//! 色とテーマ参照（§DESIGN 6.14）。
+//! Colors and theme references (DESIGN 6.14).
 //!
-//! 色は「リテラル」または「テーマトークン + 変換」で持つ。後者により、テーマの
-//! 配色を変えるだけで全スライドの該当色が連動する（リテラル直書きを避ける理由）。
+//! A color is held either as a literal or as a theme token plus a transform. The latter
+//! lets changing the theme palette propagate to every slide that references it, which is
+//! why we avoid hard-coding literal colors.
 
 use serde::{Deserialize, Serialize};
 
@@ -25,7 +26,7 @@ impl Rgba {
     pub const TRANSPARENT: Rgba = Rgba::rgba(0, 0, 0, 0);
 }
 
-/// OOXML の配色スキーム 12 トークン。
+/// The 12 tokens of an OOXML color scheme.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ThemeColorToken {
     Dk1,
@@ -42,8 +43,9 @@ pub enum ThemeColorToken {
     FolHlink,
 }
 
-/// テーマ色への変換（明暗・透過）。すべて省略可（None = 恒等）。
-/// 値は 0.0..=1.0。`lum_mod`/`lum_off` は近似実装（厳密な OOXML 一致は PPTX 対応時に詰める）。
+/// Transform applied to a theme color (luminance/tint/shade/alpha). Each field is optional
+/// (None = identity). Values are 0.0..=1.0. `lum_mod`/`lum_off` are approximate for now
+/// (exact OOXML matching is deferred to PPTX support).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ColorXf {
     pub lum_mod: Option<f32>,
@@ -54,7 +56,7 @@ pub struct ColorXf {
 }
 
 impl ColorXf {
-    /// 変換を Rgba に適用する。
+    /// Apply the transform to an `Rgba`.
     pub fn apply(&self, c: Rgba) -> Rgba {
         let mut r = c.r as f32;
         let mut g = c.g as f32;
@@ -72,13 +74,13 @@ impl ColorXf {
             b += o * 255.0;
         }
         if let Some(t) = self.tint {
-            // 白に近づける
+            // Move toward white.
             r += (255.0 - r) * t;
             g += (255.0 - g) * t;
             b += (255.0 - b) * t;
         }
         if let Some(s) = self.shade {
-            // 黒に近づける
+            // Move toward black.
             r *= 1.0 - s;
             g *= 1.0 - s;
             b *= 1.0 - s;
@@ -92,7 +94,7 @@ impl ColorXf {
     }
 }
 
-/// 図形等が持つ色。`Theme` はマスターのテーマ経由で解決される（§DESIGN 6.8/6.14）。
+/// A color held by shapes etc. `Theme` is resolved via the master's theme (DESIGN 6.8/6.14).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Color {
     Literal(Rgba),

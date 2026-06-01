@@ -1,4 +1,4 @@
-//! スライド座標系の幾何型（EMU 単位）。
+//! Slide-coordinate geometry types (in EMU).
 
 use crate::units::Emu;
 use serde::{Deserialize, Serialize};
@@ -56,7 +56,8 @@ impl RectEmu {
         )
     }
 
-    /// 軸並行の包含判定（回転前。回転図形のヒットテストは Scene 側で行う＝§DESIGN 6.7）。
+    /// Axis-aligned containment (pre-rotation). Hit-testing of rotated shapes is done
+    /// at the Scene layer (DESIGN 6.7).
     pub fn contains(&self, p: PointEmu) -> bool {
         p.x >= self.origin.x && p.x < self.right() && p.y >= self.origin.y && p.y < self.bottom()
     }

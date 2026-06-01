@@ -1,11 +1,13 @@
-//! 兄弟要素の順序キー（fractional indexing、§DESIGN 6.10 / §8.1-4）。
+//! Sibling order key (fractional indexing, DESIGN 6.10 / 8.1-4).
 //!
-//! スライドや図形の並び順を `Vec` の添字でなく「0..1 の分数」を表す可変長キーで持つ。
-//! 任意の2キーの間に新しいキーを生成できるため、挿入・並べ替えが他要素に影響せず、
-//! Undo/将来のCRDT/Morph の同一性が安定する。
+//! Slide and shape order is stored as a variable-length key representing a fraction in
+//! 0..1, rather than a `Vec` index. A new key can always be generated between any two
+//! existing keys, so insertion/reordering does not disturb other elements, which keeps
+//! Undo / future CRDT / Morph identity stable.
 //!
-//! 表現: `Vec<u8>` を「基数256の小数点以下の桁列」とみなす（例: `[128]` = 0.5）。
-//! 生成結果は末尾が必ず非ゼロになるため、`Vec<u8>` の辞書式順序がそのまま分数順序に一致する。
+//! Representation: `Vec<u8>` is treated as the digits after the radix point in base 256
+//! (e.g. `[128]` = 0.5). Generated results never end in a zero byte, so the lexicographic
+//! ordering of `Vec<u8>` matches the fraction ordering exactly.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,8 +17,8 @@ pub struct FracIndex(pub Vec<u8>);
 const BASE: u16 = 256;
 
 impl FracIndex {
-    /// `lo` と `hi` の中間キーを生成する。`None` は開放端（lo=0.0 / hi=1.0）。
-    /// 事前条件: `lo < hi`（指定時）。返り値 `m` は `lo < m < hi` を満たす。
+    /// Generate a key between `lo` and `hi`. `None` is an open end (lo = 0.0 / hi = 1.0).
+    /// Precondition: `lo < hi` (when both given). The result `m` satisfies `lo < m < hi`.
     pub fn between(lo: Option<&FracIndex>, hi: Option<&FracIndex>) -> FracIndex {
         let lo = lo.map(|x| x.0.as_slice()).unwrap_or(&[]);
         let mut hi: Option<&[u8]> = hi.map(|x| x.0.as_slice());
@@ -29,26 +31,27 @@ impl FracIndex {
                 None => BASE, // 1.0
             };
             if l + 1 < h {
-                // l と h の間に整数桁の余地がある → 中点を採用して終了（必ず >= 1 で末尾非ゼロ）
+                // There is room for an integer digit between l and h: take the midpoint and
+                // stop (always >= 1, so the last byte is non-zero).
                 out.push(((l + h) / 2) as u8);
                 return FracIndex(out);
             }
-            // 桁が等しい or 隣接 → lo の桁を採用して次の桁へ降りる
+            // Digits equal or adjacent: take lo's digit and descend to the next one.
             out.push(l as u8);
             if l < h {
-                // 隣接(l+1==h): 以降は上限が開放(1.0)になる
+                // Adjacent (l+1 == h): the upper bound becomes open (1.0) from here on.
                 hi = None;
             }
             i += 1;
         }
     }
 
-    /// 末尾に追加する新規キー（既存最大 `last` の後ろ）。
+    /// New key appended after the current maximum `last`.
     pub fn after(last: Option<&FracIndex>) -> FracIndex {
         FracIndex::between(last, None)
     }
 
-    /// 先頭に追加する新規キー（既存最小 `first` の前）。
+    /// New key prepended before the current minimum `first`.
     pub fn before(first: Option<&FracIndex>) -> FracIndex {
         FracIndex::between(None, first)
     }
@@ -77,7 +80,7 @@ mod tests {
 
     #[test]
     fn repeated_subdivision_stays_ordered() {
-        // 同じ2点の間に100回挿入しても順序が壊れないこと
+        // Inserting 100 times between the same two points must not break ordering.
         let mut lo = FracIndex::between(None, None);
         let hi = FracIndex::after(Some(&lo));
         let mut prev = lo.clone();
@@ -86,7 +89,7 @@ mod tests {
             assert!(lo < m && m < hi, "lo={lo:?} m={m:?} hi={hi:?}");
             assert!(m > prev || prev == lo, "monotonic shrink toward lo");
             prev = m.clone();
-            lo = m; // 毎回 lo 寄りに詰めていく
+            lo = m; // Keep packing toward lo each iteration.
         }
     }
 
@@ -104,6 +107,6 @@ mod tests {
         }
         let mut sorted = keys.clone();
         sorted.sort();
-        assert_eq!(keys, sorted, "append順とソート順が一致すること");
+        assert_eq!(keys, sorted, "append order matches sorted order");
     }
 }
