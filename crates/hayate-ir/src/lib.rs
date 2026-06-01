@@ -4,5 +4,6 @@
 //! 設計は `docs/DESIGN.md` を参照。
 
 pub mod color;
+pub mod frac;
 pub mod geom;
 pub mod units;
