@@ -7,6 +7,7 @@
 
 use crate::frac::FracIndex;
 use crate::geom::RectEmu;
+use crate::paint::{Fill, Stroke};
 use serde::{Deserialize, Serialize};
 use slotmap::{new_key_type, SecondaryMap, SlotMap};
 
@@ -46,6 +47,12 @@ define_world! {
     parent: Entity,
     /// Optional human-readable name (debugging and Morph matching aid).
     names: String,
+    /// Interior fill.
+    fills: Fill,
+    /// Outline.
+    strokes: Stroke,
+    /// Opacity in 0.0..=1.0 (absent = fully opaque).
+    opacity: f32,
 }
 
 impl World {
