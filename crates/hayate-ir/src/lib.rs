@@ -9,6 +9,7 @@ pub mod font;
 pub mod frac;
 pub mod geom;
 pub mod paint;
+pub mod presentation;
 pub mod shape;
 pub mod text;
 pub mod theme;
