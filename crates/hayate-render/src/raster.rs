@@ -49,6 +49,11 @@ pub fn rasterize(scene: &Scene, out_w: u32, out_h: u32) -> Vec<u8> {
             Primitive::Text(_) => {
                 // Text is skipped: thumbnails do not render glyphs.
             }
+            Primitive::Image { bounds, .. } => {
+                // Image pixels are not resolved here; paint a light-gray placeholder.
+                let placeholder = Rgba::rgb(220, 220, 220);
+                fill_rect(&mut buf, w, h, scaled(bounds, sx, sy), placeholder);
+            }
         }
     }
 

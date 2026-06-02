@@ -41,6 +41,12 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
 
         let prim = if let Some(tb) = p.world.texts.get(&e) {
             Primitive::Text(resolve_text(tb, &theme, &vp, bounds))
+        } else if let Some(pic) = p.world.pictures.get(&e) {
+            // A picture takes precedence over any geometry on the same entity.
+            Primitive::Image {
+                bounds,
+                media_key: pic.media_key.clone(),
+            }
         } else if let Some(geom) = p.world.geometries.get(&e) {
             match geom {
                 Geometry::Ellipse => Primitive::Ellipse {
@@ -209,6 +215,39 @@ mod tests {
                 assert!(run.size_px > 0.0);
             }
             other => panic!("expected text, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn picture_with_frame_yields_image_node() {
+        use hayate_ir::geom::SizeEmu;
+        use hayate_ir::image::PictureRef;
+
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        let slide = p.add_slide(layout);
+
+        // An entity with both a picture and a (competing) geometry: picture wins.
+        let pic = p.add_shape(slide);
+        p.world.frames.insert(pic, RectEmu::new(0, 0, 914_400, 914_400));
+        p.world.geometries.insert(pic, Geometry::Rect);
+        p.world.pictures.insert(
+            pic,
+            PictureRef {
+                media_key: "sha256:logo".to_string(),
+                natural: SizeEmu::new(640, 480),
+            },
+        );
+
+        let scene = build_slide_scene(&p, slide, PxSize { w: 960.0, h: 540.0 });
+        assert_eq!(scene.nodes.len(), 1);
+        match &scene.nodes[0].prim {
+            Primitive::Image { media_key, bounds } => {
+                assert_eq!(media_key, "sha256:logo");
+                assert!(bounds.w > 0.0 && bounds.h > 0.0);
+            }
+            other => panic!("expected image, got {other:?}"),
         }
     }
 }

@@ -97,7 +97,19 @@ fn emit_node(out: &mut String, node: &SceneNode) {
             stroke,
         } => emit_ellipse(out, node, *bounds, fill, stroke),
         Primitive::Text(block) => emit_text(out, node, block),
+        Primitive::Image { bounds, .. } => emit_image(out, node, *bounds),
     }
+}
+
+/// Emit a light-gray `<rect>` placeholder for an image (actual pixels are resolved elsewhere).
+fn emit_image(out: &mut String, node: &SceneNode, bounds: PxRect) {
+    out.push_str(&format!(
+        "<rect x=\"{}\" y=\"{}\" width=\"{}\" height=\"{}\"",
+        bounds.x, bounds.y, bounds.w, bounds.h
+    ));
+    push_paint(out, "fill", Some(Rgba::rgb(220, 220, 220)));
+    out.push_str(&rotation_attr(node.rotation_deg, bounds));
+    out.push_str("/>");
 }
 
 fn push_stroke(out: &mut String, stroke: &Option<StrokePx>) {

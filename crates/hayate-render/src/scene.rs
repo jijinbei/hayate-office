@@ -109,6 +109,12 @@ pub enum Primitive {
         stroke: Option<StrokePx>,
     },
     Text(TextBlock),
+    /// An embedded image, referenced by its media content key. The actual pixels are resolved
+    /// by the app/media store; the render crate only carries the placement and key.
+    Image {
+        bounds: PxRect,
+        media_key: String,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -136,6 +142,7 @@ pub fn prim_bounds(prim: &Primitive) -> PxRect {
         Primitive::Quad { bounds, .. } => *bounds,
         Primitive::Ellipse { bounds, .. } => *bounds,
         Primitive::Text(block) => block.bounds,
+        Primitive::Image { bounds, .. } => *bounds,
     }
 }
 
@@ -209,6 +216,21 @@ mod tests {
                 h: 40.0,
             })
         );
+    }
+
+    #[test]
+    fn prim_bounds_returns_image_bounds() {
+        let bounds = PxRect {
+            x: 3.0,
+            y: 4.0,
+            w: 20.0,
+            h: 30.0,
+        };
+        let prim = Primitive::Image {
+            bounds,
+            media_key: "sha256:img".to_string(),
+        };
+        assert_eq!(prim_bounds(&prim), bounds);
     }
 
     #[test]
