@@ -28,11 +28,11 @@ use hayate_ir::shape::Geometry;
 use hayate_ir::text::{Paragraph, Run, TextBody};
 use hayate_ir::theme::Theme;
 use hayate_ir::units::{inch_f, pt};
-use hayate_ir::world::Entity;
+use hayate_ir::world::{CompValue, Entity};
 use hayate_model::{edit, History, Operation, Transaction};
 use hayate_core::CommandRegistry;
 use hayate_render::scene::{Paint, Primitive, PxRect, PxSize, ResolvedRun, Scene, TextBlock};
-use hayate_render::{alignment_guides, build_slide_scene, hit_test, Guide, GuideKind};
+use hayate_render::{alignment_guides, build_slide_scene, grid_lines, hit_test, Guide, GuideKind};
 
 const SELECTION: u32 = 0x3B82F6;
 const DOC_PATH: &str = "hayate-sample.hayate";
@@ -100,6 +100,10 @@ fn view_px(pres: &Presentation, zoom: f32) -> PxSize {
     }
 }
 
+fn pt_to_emu(v: f32) -> i64 {
+    (v * 12_700.0) as i64
+}
+
 fn rgb_u32(c: Rgba) -> u32 {
     ((c.r as u32) << 16) | ((c.g as u32) << 8) | (c.b as u32)
 }
@@ -152,10 +156,27 @@ struct HayateApp {
     registry: CommandRegistry,
     /// Command palette state when open.
     palette: Option<PaletteState>,
-    /// Rotation numeric-entry buffer (Some while the angle field is being typed into).
-    rot_edit: Option<String>,
+    /// Numeric field being typed into (rotation/position/size/opacity), if any.
+    field_edit: Option<FieldEdit>,
     /// Alignment guides shown while dragging (scene/px coords relative to the slide origin).
     guides: Vec<Guide>,
+    /// Whether the editing grid is shown.
+    show_grid: bool,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum FieldKind {
+    Rotation,
+    PosX,
+    PosY,
+    SizeW,
+    SizeH,
+    Opacity,
+}
+
+struct FieldEdit {
+    kind: FieldKind,
+    buf: String,
 }
 
 struct PaletteState {
@@ -182,8 +203,9 @@ impl HayateApp {
             zoom,
             registry: hayate_core::builtins(),
             palette: None,
-            rot_edit: None,
+            field_edit: None,
             guides: Vec::new(),
+            show_grid: false,
         }
     }
 
@@ -206,33 +228,111 @@ impl HayateApp {
         self.zoom = z;
     }
 
-    /// Handle a key while the rotation field is being edited (digits only, 0..=360).
-    fn rot_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+    /// Handle a key while a numeric field is being edited (digits / . / -).
+    fn field_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.clone();
         match key.as_str() {
-            "escape" => self.rot_edit = None,
+            "escape" => self.field_edit = None,
             "enter" => {
-                if let Some(buf) = self.rot_edit.take() {
-                    if let Ok(v) = buf.trim().parse::<f32>() {
-                        self.set_rotation_abs(v.rem_euclid(360.0));
+                if let Some(fe) = self.field_edit.take() {
+                    if let Ok(v) = fe.buf.trim().parse::<f32>() {
+                        match fe.kind {
+                            FieldKind::Rotation => self.set_rotation_abs(v.rem_euclid(360.0)),
+                            FieldKind::PosX => self.set_frame_field(|f| f.origin.x = pt_to_emu(v)),
+                            FieldKind::PosY => self.set_frame_field(|f| f.origin.y = pt_to_emu(v)),
+                            FieldKind::SizeW => self.set_frame_field(|f| f.size.w = pt_to_emu(v).max(12_700)),
+                            FieldKind::SizeH => self.set_frame_field(|f| f.size.h = pt_to_emu(v).max(12_700)),
+                            FieldKind::Opacity => self.set_opacity_pct(v),
+                        }
                     }
                 }
             }
             "backspace" => {
-                if let Some(b) = self.rot_edit.as_mut() {
-                    b.pop();
+                if let Some(fe) = self.field_edit.as_mut() {
+                    fe.buf.pop();
                 }
             }
-            s if s.len() == 1 && (s.chars().all(|c| c.is_ascii_digit()) || s == ".") => {
-                if let Some(b) = self.rot_edit.as_mut() {
-                    if b.len() < 6 {
-                        b.push_str(s);
+            s if s.len() == 1 && (s.chars().all(|c| c.is_ascii_digit()) || s == "." || s == "-") => {
+                if let Some(fe) = self.field_edit.as_mut() {
+                    if fe.buf.len() < 8 {
+                        fe.buf.push_str(s);
                     }
                 }
             }
             _ => {}
         }
         cx.notify();
+    }
+
+    fn set_frame_field(&mut self, f: impl FnOnce(&mut RectEmu)) {
+        if let Some(e) = self.selection {
+            if let Some(mut fr) = self.pres.world.frames.get(&e).copied() {
+                f(&mut fr);
+                let tx = edit::set_frame(e, fr);
+                self.commit_tx(tx);
+            }
+        }
+    }
+
+    fn set_opacity_pct(&mut self, pct: f32) {
+        if let Some(e) = self.selection {
+            let v = (pct / 100.0).clamp(0.0, 1.0);
+            let tx = Transaction::new(
+                "set opacity",
+                vec![Operation::SetComponent { entity: e, value: CompValue::Opacity(v) }],
+            );
+            self.commit_tx(tx);
+        }
+    }
+
+    fn field_current(&self, kind: FieldKind) -> String {
+        let frame = self.selection.and_then(|e| self.pres.world.frames.get(&e).copied());
+        let to_pt = |v: i64| (v as f32 / 12_700.0).round() as i32;
+        match kind {
+            FieldKind::Rotation => format!("{}", self.sel_rotation().round() as i32),
+            FieldKind::PosX => frame.map(|f| to_pt(f.origin.x)).unwrap_or(0).to_string(),
+            FieldKind::PosY => frame.map(|f| to_pt(f.origin.y)).unwrap_or(0).to_string(),
+            FieldKind::SizeW => frame.map(|f| to_pt(f.size.w)).unwrap_or(0).to_string(),
+            FieldKind::SizeH => frame.map(|f| to_pt(f.size.h)).unwrap_or(0).to_string(),
+            FieldKind::Opacity => {
+                let o = self
+                    .selection
+                    .and_then(|e| self.pres.world.opacity.get(&e).copied())
+                    .unwrap_or(1.0);
+                format!("{}", (o * 100.0).round() as i32)
+            }
+        }
+    }
+
+    fn begin_field_edit(&mut self, kind: FieldKind) {
+        self.field_edit = Some(FieldEdit {
+            kind,
+            buf: self.field_current(kind),
+        });
+    }
+
+    /// A clickable numeric field (click to type; shows the current value otherwise).
+    fn num_field(&self, id: &'static str, kind: FieldKind, cx: &mut Context<Self>) -> impl IntoElement {
+        let editing = matches!(&self.field_edit, Some(fe) if fe.kind == kind);
+        let shown = if editing {
+            format!(
+                "{}|",
+                self.field_edit.as_ref().map(|f| f.buf.clone()).unwrap_or_default()
+            )
+        } else {
+            self.field_current(kind)
+        };
+        div()
+            .id(id)
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(if editing { rgb(0x1f3a5f) } else { rgb(0x3a3a3a) })
+            .child(shown)
+            .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+                this.begin_field_edit(kind);
+                cx.notify();
+            }))
     }
 
     /// Commands matching the palette query, as (id, title).
@@ -395,8 +495,7 @@ impl HayateApp {
             // Revert to the start, then commit the whole move as one undoable step.
             self.pres.world.frames.insert(d.entity, d.start_frame);
             let tx = edit::set_frame(d.entity, final_f);
-            self.history.commit(&mut self.pres.world, tx);
-            self.rebuild();
+            self.commit_tx(tx);
         }
         cx.notify();
     }
@@ -406,43 +505,61 @@ impl HayateApp {
             self.palette_key(ev, cx);
             return;
         }
-        if self.rot_edit.is_some() {
-            self.rot_key(ev, cx);
+        if self.field_edit.is_some() {
+            self.field_key(ev, cx);
             return;
         }
         let k = &ev.keystroke;
         let cmd = k.modifiers.platform || k.modifiers.control;
-        let mut dirty = true;
         match k.key.as_str() {
             "p" if cmd => {
                 self.palette = Some(PaletteState { query: String::new(), sel: 0 });
-                dirty = false;
                 cx.notify();
             }
+            "e" if cmd => self.export_svg(),
             "z" if cmd && k.modifiers.shift => {
                 self.history.redo(&mut self.pres.world);
+                self.after_doc_change();
+                cx.notify();
             }
             "z" if cmd => {
                 self.history.undo(&mut self.pres.world);
+                self.after_doc_change();
+                cx.notify();
             }
-            "s" if cmd => {
-                self.save();
-                dirty = false;
-            }
+            "s" if cmd => self.save(),
             "o" if cmd => {
                 self.open();
+                cx.notify();
+            }
+            "g" if !cmd => {
+                self.show_grid = !self.show_grid;
+                cx.notify();
             }
             "r" if !cmd => {
                 self.add_rect();
+                cx.notify();
             }
             "delete" | "backspace" if !cmd => {
                 self.delete_selection();
+                cx.notify();
             }
-            _ => dirty = false,
+            _ => {}
         }
-        if dirty {
-            self.rebuild();
-            cx.notify();
+    }
+
+    /// Rebuild + autosave after a document change (undo/redo, etc.).
+    fn after_doc_change(&mut self) {
+        self.rebuild();
+        let _ = hayate_format::autosave(&self.pres, DOC_PATH);
+    }
+
+    /// Export the current slide to an SVG file next to the app.
+    fn export_svg(&self) {
+        let svg = hayate_render::export_svg(&self.scene);
+        match std::fs::write("hayate-slide.svg", svg) {
+            Ok(()) => eprintln!("exported hayate-slide.svg"),
+            Err(e) => eprintln!("svg export error: {e}"),
         }
     }
 
@@ -462,7 +579,7 @@ impl HayateApp {
             frame,
             Fill::Solid(Color::theme(ThemeColorToken::Accent5)),
         );
-        self.history.commit(&mut self.pres.world, tx);
+        self.commit_tx(tx);
         self.selection = Some(e);
     }
 
@@ -470,7 +587,7 @@ impl HayateApp {
     fn delete_selection(&mut self) {
         if let Some(e) = self.selection.take() {
             let tx = Transaction::new("delete shape", vec![Operation::Despawn { entity: e }]);
-            self.history.commit(&mut self.pres.world, tx);
+            self.commit_tx(tx);
         }
     }
 
@@ -491,12 +608,53 @@ impl HayateApp {
         }
     }
 
+    /// Duplicate the current slide (copying its shapes) and switch to the copy.
+    fn duplicate_slide(&mut self) {
+        let Some(layout) = self.pres.world.slide_info.get(&self.slide).map(|s| s.layout) else {
+            return;
+        };
+        let children = self.pres.children(self.slide);
+        let new_slide = self.pres.add_slide(layout);
+        for c in children {
+            let comps = self.pres.world.components_of(c);
+            let ne = self.pres.world.reserve_id();
+            self.pres.world.spawn_at(ne);
+            for comp in comps {
+                let comp = match comp {
+                    CompValue::Parent(_) => CompValue::Parent(new_slide),
+                    other => other,
+                };
+                self.pres.world.set(ne, comp);
+            }
+        }
+        self.slide = new_slide;
+        self.selection = None;
+        self.rebuild();
+        let _ = hayate_format::autosave(&self.pres, DOC_PATH);
+    }
+
+    /// Delete the current slide (keeps at least one slide).
+    fn delete_slide(&mut self) {
+        if self.pres.slides().len() <= 1 {
+            return;
+        }
+        for c in self.pres.children(self.slide) {
+            self.pres.world.despawn(c);
+        }
+        self.pres.world.despawn(self.slide);
+        self.slide = self.pres.slides().first().copied().unwrap_or(self.slide);
+        self.selection = None;
+        self.rebuild();
+        let _ = hayate_format::autosave(&self.pres, DOC_PATH);
+    }
+
     // --- inspector (Format pane) actions ---
 
     fn commit_tx(&mut self, tx: Transaction) {
         if !tx.ops.is_empty() {
             self.history.commit(&mut self.pres.world, tx);
             self.rebuild();
+            let _ = hayate_format::autosave(&self.pres, DOC_PATH);
         }
     }
 
@@ -562,6 +720,7 @@ impl HayateApp {
                 self.slide = self.pres.slides().first().copied().unwrap_or(self.slide);
                 self.history = History::new();
                 self.selection = None;
+                self.rebuild();
                 eprintln!("opened {DOC_PATH}");
             }
             Err(e) => eprintln!("open error: {e}"),
@@ -735,6 +894,7 @@ impl Render for HayateApp {
         let scene = self.scene.clone();
         let selection = self.selection;
         let guides = self.guides.clone();
+        let show_grid = self.show_grid;
         let origin_cell = self.canvas_origin.clone();
         let (sw, sh) = (scene.size.w, scene.size.h);
         let title: SharedString = format!(
@@ -774,6 +934,31 @@ impl Render for HayateApp {
                 origin_cell.set(o);
 
                 paint_scene(&scene, o, window, cx);
+
+                if show_grid {
+                    let g = grid_lines(scene.size, scene.size.w / 16.0);
+                    let gc = rgb(0xD0D0D0);
+                    for x in g.vertical {
+                        window.paint_quad(quad(
+                            Bounds { origin: point(o.x + px(x), o.y), size: size(px(1.0), px(scene.size.h)) },
+                            px(0.),
+                            Background::from(gc),
+                            px(0.),
+                            gpui::transparent_black(),
+                            Default::default(),
+                        ));
+                    }
+                    for y in g.horizontal {
+                        window.paint_quad(quad(
+                            Bounds { origin: point(o.x, o.y + px(y)), size: size(px(scene.size.w), px(1.0)) },
+                            px(0.),
+                            Background::from(gc),
+                            px(0.),
+                            gpui::transparent_black(),
+                            Default::default(),
+                        ));
+                    }
+                }
 
                 // Selection outline (drawn on top), rotated to match the shape.
                 if let Some(sel) = selection {
@@ -865,6 +1050,20 @@ impl Render for HayateApp {
             this.add_slide();
             cx.notify();
         }));
+        sidebar = sidebar.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_2()
+                .child(tool_button("dup_slide", "Dup", cx, |t, _w, cx| {
+                    t.duplicate_slide();
+                    cx.notify();
+                }))
+                .child(tool_button("del_slide", "Del", cx, |t, _w, cx| {
+                    t.delete_slide();
+                    cx.notify();
+                })),
+        );
         for (i, &s) in slides.iter().enumerate() {
             let tscene = build_slide_scene(&self.pres, s, PxSize { w: 176.0, h: 99.0 });
             let is_cur = s == current;
@@ -900,21 +1099,7 @@ impl Render for HayateApp {
             ThemeColorToken::Accent6,
         ];
         let theme = self.pres.theme_of(self.slide).cloned().unwrap_or_default();
-        let inspector = self.selection.map(|e| {
-            let rot = self.sel_rotation();
-            let frame = self.pres.world.frames.get(&e).copied();
-            let pt = |v: i64| v as f64 / 12_700.0; // EMU -> points
-            let pos_str = frame
-                .map(|f| format!("X {:.0} pt   Y {:.0} pt", pt(f.origin.x), pt(f.origin.y)))
-                .unwrap_or_default();
-            let size_str = frame
-                .map(|f| format!("W {:.0} pt   H {:.0} pt", pt(f.size.w), pt(f.size.h)))
-                .unwrap_or_default();
-            let editing = self.rot_edit.is_some();
-            let rot_display = match &self.rot_edit {
-                Some(b) => format!("{b}|"),
-                None => format!("{}", rot.round() as i32),
-            };
+        let inspector = self.selection.map(|_e| {
             let mut swatches = div().flex().flex_row().gap_1();
             for (i, t) in accents.into_iter().enumerate() {
                 let cu = rgb_u32(theme.color_for(t));
@@ -939,20 +1124,8 @@ impl Render for HayateApp {
                 .p_2()
                 .bg(rgb(0x252525))
                 .child(div().text_xl().child("Format"))
-                .child(div().child("Rotation (0-360)"))
-                .child(
-                    div()
-                        .id("rot_field")
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(if editing { rgb(0x1f3a5f) } else { rgb(0x3a3a3a) })
-                        .child(format!("{rot_display}\u{00B0}  (click & type, Enter)"))
-                        .on_click(cx.listener(|this, _ev: &ClickEvent, _w, cx| {
-                            this.rot_edit = Some(format!("{}", this.sel_rotation().round() as i32));
-                            cx.notify();
-                        })),
-                )
+                .child(div().child("Rotation (click to type 0-360)"))
+                .child(self.num_field("f_rot", FieldKind::Rotation, cx))
                 .child(
                     div()
                         .flex()
@@ -971,8 +1144,15 @@ impl Render for HayateApp {
                             cx.notify();
                         })),
                 )
-                .child(div().child("Position"))
-                .child(div().child(pos_str))
+                .child(div().child("Position (pt)"))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(self.num_field("f_x", FieldKind::PosX, cx))
+                        .child(self.num_field("f_y", FieldKind::PosY, cx)),
+                )
                 .child(
                     div()
                         .flex()
@@ -983,8 +1163,15 @@ impl Render for HayateApp {
                         .child(tool_button("y_m", "Y-", cx, |t, _w, cx| { t.nudge(0, -91_440); cx.notify(); }))
                         .child(tool_button("y_p", "Y+", cx, |t, _w, cx| { t.nudge(0, 91_440); cx.notify(); })),
                 )
-                .child(div().child("Size"))
-                .child(div().child(size_str))
+                .child(div().child("Size (pt)"))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(self.num_field("f_w", FieldKind::SizeW, cx))
+                        .child(self.num_field("f_h", FieldKind::SizeH, cx)),
+                )
                 .child(
                     div()
                         .flex()
@@ -997,6 +1184,8 @@ impl Render for HayateApp {
                 )
                 .child(div().child("Fill"))
                 .child(swatches)
+                .child(div().child("Opacity (%)"))
+                .child(self.num_field("f_op", FieldKind::Opacity, cx))
                 .child(
                     div()
                         .flex()
