@@ -12,10 +12,12 @@
 //! a deliberate placeholder for that.
 
 use hayate_ir::color::{Color, Rgba, ThemeColorToken};
+use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::{PointEmu, RectEmu, SizeEmu};
 use hayate_ir::paint::Fill;
-use hayate_ir::units::EMU_PER_PT;
+use hayate_ir::text::{Paragraph, Run, TextBody};
+use hayate_ir::units::{pt, EMU_PER_PT};
 use hayate_ir::world::{CompKind, CompValue, Entity, World};
 use hayate_model::edit;
 use hayate_model::{Operation, Transaction};
@@ -193,6 +195,25 @@ fn arg_i64(args: &Value, key: &str) -> Option<i64> {
 /// Read an `f64` from `args[key]`, accepting integer or float JSON numbers.
 fn arg_f64(args: &Value, key: &str) -> Option<f64> {
     args.get(key)?.as_f64()
+}
+
+/// Read a string from `args[key]`.
+fn arg_str(args: &Value, key: &str) -> Option<String> {
+    args.get(key)?.as_str().map(str::to_owned)
+}
+
+/// A plain text run with the MVP default formatting: body (minor) theme font, 18pt, the
+/// theme's primary dark text color (Dk1). Used to seed a new text body or paragraph/run.
+fn default_run(text: impl Into<String>) -> Run {
+    Run {
+        text: text.into(),
+        font: FontRef::Theme(ThemeFontSlot::Minor),
+        size: pt(18),
+        color: Color::theme(ThemeColorToken::Dk1),
+        bold: false,
+        italic: false,
+        underline: false,
+    }
 }
 
 /// Convert a measurement in points to EMU (rounding to the nearest EMU).
@@ -476,6 +497,66 @@ pub fn builtins() -> CommandRegistry {
                 Some(entity) => vec![Operation::SetComponent {
                     entity,
                     value: CompValue::Fill(Fill::Solid(Color::theme(token))),
+                }],
+                None => vec![],
+            },
+        );
+    }
+
+    // shape.set_text — set the entity's text to a single string, preserving the existing
+    // first run's formatting where possible. If the entity already has a TextBody, clone it
+    // and overwrite the first paragraph's first run text (creating a default paragraph/run if
+    // either is missing). If there is no TextBody yet, create one with a single default run.
+    reg.register(
+        CommandMeta::new("shape.set_text", "Set Text", "Text"),
+        vec![
+            ParamSpec::new("entity", ParamType::Entity),
+            ParamSpec::new("text", ParamType::String),
+        ],
+        |world, args| match (arg_entity(args, "entity"), arg_str(args, "text")) {
+            (Some(entity), Some(text)) => {
+                let body = match world.texts.get(&entity) {
+                    Some(existing) => {
+                        // Preserve existing formatting; only replace the leading run's text.
+                        let mut body = existing.clone();
+                        match body.paragraphs.first_mut() {
+                            Some(para) => match para.runs.first_mut() {
+                                Some(run) => run.text = text,
+                                None => para.runs.push(default_run(text)),
+                            },
+                            None => body
+                                .paragraphs
+                                .push(Paragraph::new(vec![default_run(text)])),
+                        }
+                        body
+                    }
+                    None => TextBody {
+                        paragraphs: vec![Paragraph::new(vec![default_run(text)])],
+                        autofit: false,
+                    },
+                };
+                vec![Operation::SetComponent {
+                    entity,
+                    value: CompValue::Text(body),
+                }]
+            }
+            _ => vec![],
+        },
+    );
+
+    // shape.fill_black / shape.fill_white — set the shape fill to a literal black/white. Unlike
+    // the accent fills these use literals (not theme tokens), so they stay fixed across themes.
+    for (id, title, rgba) in [
+        ("shape.fill_black", "Fill: Black", Rgba::BLACK),
+        ("shape.fill_white", "Fill: White", Rgba::WHITE),
+    ] {
+        reg.register(
+            CommandMeta::new(id, title, "Style"),
+            vec![ParamSpec::new("entity", ParamType::Entity)],
+            move |_world, args| match arg_entity(args, "entity") {
+                Some(entity) => vec![Operation::SetComponent {
+                    entity,
+                    value: CompValue::Fill(Fill::Solid(Color::Literal(rgba))),
                 }],
                 None => vec![],
             },
@@ -1063,5 +1144,64 @@ mod tests {
             .collect();
         assert!(ids.contains(&"shape.set_position"));
         assert!(ids.contains(&"shape.set_size"));
+    }
+
+    #[test]
+    fn set_text_command_creates_body_with_run_text() {
+        let (mut w, e) = world_with_framed_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build(
+                "shape.set_text",
+                &json!({ "entity": e.0, "text": "Hello" }),
+                &w,
+            )
+            .expect("shape.set_text is registered");
+        assert_eq!(tx.label, "Set Text");
+        h.commit(&mut w, tx);
+
+        match w.get(e, CompKind::Text) {
+            Some(CompValue::Text(body)) => {
+                assert_eq!(body.paragraphs[0].runs[0].text, "Hello");
+                assert!(!body.autofit);
+            }
+            other => panic!("expected a Text component, got {other:?}"),
+        }
+
+        // Undoable as one step (the text was previously absent).
+        assert!(h.undo(&mut w));
+        assert_eq!(w.get(e, CompKind::Text), None);
+    }
+
+    #[test]
+    fn fill_black_command_sets_literal_black() {
+        let (mut w, e) = world_with_framed_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build("shape.fill_black", &json!({ "entity": e.0 }), &w)
+            .expect("shape.fill_black is registered");
+        h.commit(&mut w, tx);
+
+        assert_eq!(
+            w.get(e, CompKind::Fill),
+            Some(CompValue::Fill(Fill::Solid(Color::Literal(Rgba::BLACK))))
+        );
+    }
+
+    #[test]
+    fn manifest_includes_text_and_fill_commands() {
+        let reg = builtins();
+        let manifest = reg.manifest();
+        let ids: Vec<&str> = manifest
+            .iter()
+            .filter_map(|c| c["id"].as_str())
+            .collect();
+        assert!(ids.contains(&"shape.set_text"));
+        assert!(ids.contains(&"shape.fill_black"));
+        assert!(ids.contains(&"shape.fill_white"));
     }
 }
