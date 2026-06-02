@@ -3,7 +3,7 @@
 
 use gpui::{Context, MouseDownEvent, MouseMoveEvent, MouseUpEvent};
 
-use hayate_ir::geom::{PointEmu, RectEmu};
+use hayate_ir::geom::{PointEmu, RectEmu, SizeEmu};
 use hayate_ir::world::{CompValue, Entity};
 use hayate_model::{edit, Operation, Transaction};
 use hayate_render::{alignment_guides, hit_test, resize_handles};
@@ -186,27 +186,31 @@ impl HayateApp {
             cx.notify();
             return;
         }
-        if let Some(rd) = &self.resize {
+        if let Some(rd) = self.resize.clone() {
             let scale = self.scale();
             if scale <= 0.0 {
                 return;
             }
+            let Some(e) = self.selection else { return };
             let dx = (f32::from(ev.position.x - rd.start_cursor.x) as f64 / scale) as i64;
             let dy = (f32::from(ev.position.y - rd.start_cursor.y) as f64 / scale) as i64;
             let mut nf = resize_frame(rd.handle, rd.start_frame, dx, dy);
-            // Shift preserves the original aspect ratio (height follows width).
             if ev.modifiers.shift {
+                // Shift preserves the original aspect ratio (height follows width); skip snapping
+                // so the locked ratio is not broken by an edge snap.
                 let sf = rd.start_frame;
                 if sf.size.h > 0 {
                     let ar = sf.size.w as f64 / sf.size.h as f64;
                     nf.size.h = ((nf.size.w as f64 / ar).round() as i64).max(12_700);
                 }
+            } else {
+                // Snap the moving edge(s) to the same alignment lines used while dragging.
+                nf = self.snap_resize(rd.handle, e, nf);
             }
-            if let Some(e) = self.selection {
-                self.pres.world.frames.insert(e, nf);
-                self.rebuild();
-                cx.notify();
-            }
+            self.pres.world.frames.insert(e, nf);
+            self.rebuild();
+            self.update_guides(e);
+            cx.notify();
             return;
         }
         let Some(d) = self.drag.clone() else { return };
@@ -243,13 +247,9 @@ impl HayateApp {
 
     /// Snap `nf` so the moving shape's edges/center align to nearby guide lines: the slide
     /// edges & center and every other shape's edges & center, within a small pixel radius.
-    pub(crate) fn snap_frame(&self, moving: Entity, nf: RectEmu) -> RectEmu {
-        let scale = self.scale();
-        if scale <= 0.0 {
-            return nf;
-        }
-        // Snap radius (~8 device px) expressed in EMU.
-        let thr = (8.0 / scale) as i64;
+    /// Candidate alignment lines (in EMU) the moving shape can snap to: the slide edges & center
+    /// on each axis, plus every other shape's edges & center. Shared by move- and resize-snapping.
+    fn snap_candidates(&self, moving: Entity) -> (Vec<i64>, Vec<i64>) {
         let (sw, sh) = (self.pres.slide_size.w, self.pres.slide_size.h);
         let mut xs = vec![0, sw / 2, sw];
         let mut ys = vec![0, sh / 2, sh];
@@ -262,6 +262,73 @@ impl HayateApp {
                 ys.extend([f.origin.y, f.origin.y + f.size.h / 2, f.origin.y + f.size.h]);
             }
         }
+        (xs, ys)
+    }
+
+    /// Snap a resized frame so the edge(s) the grabbed handle moves align to nearby guide lines.
+    /// Only the moving edges are adjusted (the anchored edges stay put), and a minimum size is
+    /// preserved. `handle` follows the [`resize_handles`] ordering (TL, T, TR, R, BR, B, BL, L).
+    pub(crate) fn snap_resize(&self, handle: usize, moving: Entity, nf: RectEmu) -> RectEmu {
+        let scale = self.scale();
+        if scale <= 0.0 {
+            return nf;
+        }
+        let thr = (8.0 / scale) as i64;
+        let min = 12_700; // 1pt, matching resize_frame
+        let (xs, ys) = self.snap_candidates(moving);
+        // Smallest delta moving `v` onto a candidate within the snap radius.
+        let nearest = |v: i64, cands: &[i64]| -> Option<i64> {
+            let mut best: Option<i64> = None;
+            for &c in cands {
+                let d = c - v;
+                if d.abs() <= thr && best.map_or(true, |b: i64| d.abs() < b.abs()) {
+                    best = Some(d);
+                }
+            }
+            best
+        };
+        let (mut x, mut w) = (nf.origin.x, nf.size.w);
+        let (mut y, mut h) = (nf.origin.y, nf.size.h);
+        if matches!(handle, 2 | 3 | 4) {
+            // Right edge moves: snap it, keeping the left edge fixed.
+            if let Some(d) = nearest(x + w, &xs) {
+                w = (w + d).max(min);
+            }
+        } else if matches!(handle, 0 | 6 | 7) {
+            // Left edge moves: snap it, keeping the right edge fixed.
+            if let Some(d) = nearest(x, &xs) {
+                let right = x + w;
+                x = (x + d).min(right - min);
+                w = right - x;
+            }
+        }
+        if matches!(handle, 4 | 5 | 6) {
+            // Bottom edge moves: snap it, keeping the top edge fixed.
+            if let Some(d) = nearest(y + h, &ys) {
+                h = (h + d).max(min);
+            }
+        } else if matches!(handle, 0 | 1 | 2) {
+            // Top edge moves: snap it, keeping the bottom edge fixed.
+            if let Some(d) = nearest(y, &ys) {
+                let bottom = y + h;
+                y = (y + d).min(bottom - min);
+                h = bottom - y;
+            }
+        }
+        RectEmu {
+            origin: PointEmu::new(x, y),
+            size: SizeEmu::new(w, h),
+        }
+    }
+
+    pub(crate) fn snap_frame(&self, moving: Entity, nf: RectEmu) -> RectEmu {
+        let scale = self.scale();
+        if scale <= 0.0 {
+            return nf;
+        }
+        // Snap radius (~8 device px) expressed in EMU.
+        let thr = (8.0 / scale) as i64;
+        let (xs, ys) = self.snap_candidates(moving);
         // Best (smallest) delta aligning any of [start, center, end] to a candidate line.
         let best = |start: i64, size: i64, cands: &[i64]| -> Option<i64> {
             let anchors = [start, start + size / 2, start + size];
@@ -344,6 +411,7 @@ impl HayateApp {
             return;
         }
         if let Some(rd) = self.resize.take() {
+            self.guides.clear();
             if let Some(e) = self.selection {
                 if let Some(final_f) = self.pres.world.frames.get(&e).copied() {
                     if final_f != rd.start_frame {

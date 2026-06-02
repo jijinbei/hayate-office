@@ -240,6 +240,7 @@ struct TextEdit {
     marked: Option<Range<usize>>,
 }
 
+#[derive(Clone, Copy)]
 struct ResizeDrag {
     handle: usize,
     start_frame: RectEmu,

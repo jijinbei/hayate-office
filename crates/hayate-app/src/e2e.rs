@@ -674,3 +674,23 @@ fn pasted_image_keeps_aspect_ratio(cx: &mut TestAppContext) {
         "frame aspect should be 4:3, got {ratio}"
     );
 }
+
+#[gpui::test]
+fn resize_snaps_moving_edge_to_slide_center(cx: &mut TestAppContext) {
+    use hayate_ir::geom::RectEmu;
+    use hayate_ir::units::inch_f;
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let (sw, e) = app.read_with(cx, |s, _| {
+        (s.pres.slide_size.w, s.pres.children(s.slide)[1])
+    });
+    // A frame whose right edge sits a hair left of the slide's horizontal centre.
+    let nf = RectEmu::new(0, inch_f(1.0), sw / 2 - 5000, inch_f(1.0));
+    // Handle 3 is the right-middle handle: only the right edge moves.
+    let snapped = app.read_with(cx, |s, _| s.snap_resize(3, e, nf));
+    assert_eq!(snapped.origin.x, 0, "anchored left edge stays put");
+    assert_eq!(
+        snapped.origin.x + snapped.size.w,
+        sw / 2,
+        "moving right edge snaps onto the slide centre line"
+    );
+}
