@@ -18,9 +18,13 @@ impl HayateApp {
     }
 
     pub(crate) fn on_mouse_down(&mut self, ev: &MouseDownEvent, cx: &mut Context<Self>) {
-        // Any left click dismisses an open context menu.
+        // This low-level handler fires even when the click lands on the context-menu overlay
+        // (which sits above the canvas). If a menu is open, just dismiss it and do nothing else
+        // — otherwise a click on a menu item below the shapes would start a marquee and clear
+        // the selection before the menu action (e.g. Group) runs.
         if self.context_menu.take().is_some() {
             cx.notify();
+            return;
         }
         let o = self.canvas_origin.get();
         let x = f32::from(ev.position.x - o.x);

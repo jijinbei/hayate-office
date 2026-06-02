@@ -323,3 +323,90 @@ fn marquee_selects_intersecting_shapes(cx: &mut TestAppContext) {
         "marquee should select both rects: {selected:?}"
     );
 }
+
+#[gpui::test]
+fn full_group_flow_via_marquee_and_menu(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let (a, b, rect) = app.read_with(cx, |s, _| {
+        let kids = s.pres.children(s.slide);
+        let (a, b) = (kids[1], kids[2]);
+        let nb = |e| {
+            let n = s.scene.nodes.iter().find(|n| n.source == Some(e)).unwrap();
+            prim_bounds(&n.prim)
+        };
+        let (ba, bb) = (nb(a), nb(b));
+        let x0 = ba.x.min(bb.x) - 4.0;
+        let y0 = ba.y.min(bb.y) - 4.0;
+        let x1 = (ba.x + ba.w).max(bb.x + bb.w) + 4.0;
+        let y1 = (ba.y + ba.h).max(bb.y + bb.h) + 4.0;
+        (a, b, (x0, y0, x1, y1))
+    });
+    // Marquee-select both rects.
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, rect.0, rect.1), cx)
+    });
+    app.update(cx, |s, cx| s.on_mouse_move(&mouse_move(rect.2, rect.3), cx));
+    app.update(cx, |s, cx| s.on_mouse_up(&mouse_up(rect.2, rect.3), cx));
+    let n_sel = app.read_with(cx, |s, _| s.selected_all().len());
+    assert_eq!(n_sel, 2, "marquee should select both rects, got {n_sel}");
+    // Right-click one of them (over its center), then run the menu's Group action.
+    let (cx_, cy_) = app.read_with(cx, |s, _| {
+        let n = s.scene.nodes.iter().find(|n| n.source == Some(a)).unwrap();
+        let r = prim_bounds(&n.prim);
+        (r.x + r.w * 0.5, r.y + r.h * 0.5)
+    });
+    app.update(cx, |s, cx| {
+        s.on_right_down(&mouse(MouseButton::Right, cx_, cy_), cx)
+    });
+    let after_rc = app.read_with(cx, |s, _| s.selected_all().len());
+    assert_eq!(
+        after_rc, 2,
+        "right-click within the selection must keep both, got {after_rc}"
+    );
+    app.update(cx, |s, _| s.group_selection());
+    let grouped = app.read_with(cx, |s, _| {
+        let ga = s.pres.world.groups.get(&a).copied();
+        let gb = s.pres.world.groups.get(&b).copied();
+        ga.is_some() && ga == gb
+    });
+    assert!(
+        grouped,
+        "menu Group should put both rects in the same group"
+    );
+}
+
+#[gpui::test]
+fn menu_open_click_keeps_selection(cx: &mut TestAppContext) {
+    // Regression: a left mouse-down that dismisses an open context menu must NOT also start a
+    // marquee / clear the selection, so a menu action (Group) still sees the selection.
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let (a, b) = app.read_with(cx, |s, _| {
+        let k = s.pres.children(s.slide);
+        (k[1], k[2])
+    });
+    app.update(cx, |s, _| {
+        s.selection = Some(a);
+        s.also = vec![b];
+    });
+    // Open a context menu, then click on empty canvas (as clicking a menu item below the shapes
+    // would): the menu closes but the selection stays.
+    app.update(cx, |s, cx| {
+        s.open_menu(10.0, 10.0, crate::MenuTarget::Shape)
+    });
+    let (ex, ey) = app.read_with(cx, |s, _| (s.scene.size.w * 0.97, s.scene.size.h * 0.97));
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, ex, ey), cx)
+    });
+    let (n, menu_open) = app.read_with(cx, |s, _| {
+        (s.selected_all().len(), s.context_menu.is_some())
+    });
+    assert_eq!(n, 2, "selection must survive dismissing the menu");
+    assert!(!menu_open, "the click should have closed the menu");
+    // The menu's Group action then groups both.
+    app.update(cx, |s, _| s.group_selection());
+    let grouped = app.read_with(cx, |s, _| {
+        s.pres.world.groups.get(&a).is_some()
+            && s.pres.world.groups.get(&a) == s.pres.world.groups.get(&b)
+    });
+    assert!(grouped, "Group should succeed after the menu-dismiss click");
+}
