@@ -1,19 +1,18 @@
 //! HayateOffice presentation editor (gpui app).
 //!
-//! First milestone: open a window and prove the IR -> render(Scene) -> gpui pipeline links
-//! end to end. It builds a sample presentation, resolves a Scene, and shows the slide
-//! background plus a swatch per filled shape (theme-resolved colors). Drawing the Scene
-//! faithfully (shapes/text on a canvas) comes next.
+//! Renders a sample presentation's resolved Scene onto a gpui canvas: the slide background
+//! plus each shape painted at its pixel position with theme-resolved colors. Vector shapes
+//! are drawn now; text and ellipse fidelity, then editing, come next.
 
 #![cfg_attr(target_family = "wasm", no_main)]
 
 use gpui::{
-    App, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, div, prelude::*, px,
-    rgb, size,
+    App, Background, Bounds, Context, SharedString, Window, WindowBounds, WindowOptions, canvas,
+    div, point, prelude::*, px, quad, rgb, size,
 };
 use gpui_platform::application;
 
-use hayate_ir::color::{Color, ThemeColorToken};
+use hayate_ir::color::{Color, Rgba, ThemeColorToken};
 use hayate_ir::geom::RectEmu;
 use hayate_ir::paint::Fill;
 use hayate_ir::presentation::Presentation;
@@ -21,7 +20,7 @@ use hayate_ir::shape::Geometry;
 use hayate_ir::theme::Theme;
 use hayate_ir::units::inch_f;
 use hayate_render::build_slide_scene;
-use hayate_render::scene::{Paint, Primitive, PxSize};
+use hayate_render::scene::{Paint, Primitive, PxSize, Scene};
 
 /// Build a small sample deck: one slide with three accent-colored rectangles.
 fn sample_presentation() -> Presentation {
@@ -47,14 +46,13 @@ fn sample_presentation() -> Presentation {
     p
 }
 
-fn rgb_u32(c: hayate_ir::color::Rgba) -> u32 {
+fn rgb_u32(c: Rgba) -> u32 {
     ((c.r as u32) << 16) | ((c.g as u32) << 8) | (c.b as u32)
 }
 
 struct HayateApp {
     title: SharedString,
-    background: u32,
-    swatches: Vec<u32>,
+    scene: Scene,
 }
 
 impl HayateApp {
@@ -62,32 +60,64 @@ impl HayateApp {
         let p = sample_presentation();
         let slide = p.slides()[0];
         let scene = build_slide_scene(&p, slide, PxSize { w: 960.0, h: 540.0 });
-
-        let mut swatches = Vec::new();
-        for node in &scene.nodes {
-            if let Primitive::Quad {
-                fill: Some(Paint::Solid(c)),
-                ..
-            } = &node.prim
-            {
-                swatches.push(rgb_u32(*c));
-            }
-        }
-
         HayateApp {
             title: format!("HayateOffice — slide 1: {} shapes", scene.nodes.len()).into(),
-            background: rgb_u32(scene.background),
-            swatches,
+            scene,
         }
     }
 }
 
 impl Render for HayateApp {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
-        let mut swatch_row = div().flex().gap_2();
-        for c in &self.swatches {
-            swatch_row = swatch_row.child(div().w(px(64.)).h(px(64.)).rounded_md().bg(rgb(*c)));
-        }
+        let scene = self.scene.clone();
+        let (sw, sh) = (scene.size.w, scene.size.h);
+
+        let slide_canvas = canvas(
+            |_, _, _| {},
+            move |bounds, _, window, _| {
+                let o = bounds.origin;
+
+                // Slide background.
+                let bg: Background = rgb(rgb_u32(scene.background)).into();
+                window.paint_quad(quad(
+                    Bounds {
+                        origin: o,
+                        size: size(px(sw), px(sh)),
+                    },
+                    px(0.),
+                    bg,
+                    px(0.),
+                    gpui::transparent_black(),
+                    Default::default(),
+                ));
+
+                // Shapes (quads for now).
+                for node in &scene.nodes {
+                    if let Primitive::Quad {
+                        bounds: r,
+                        corner_radius,
+                        fill: Some(Paint::Solid(c)),
+                        ..
+                    } = &node.prim
+                    {
+                        let b = Bounds {
+                            origin: point(o.x + px(r.x), o.y + px(r.y)),
+                            size: size(px(r.w), px(r.h)),
+                        };
+                        let f: Background = rgb(rgb_u32(*c)).into();
+                        window.paint_quad(quad(
+                            b,
+                            px(*corner_radius),
+                            f,
+                            px(0.),
+                            gpui::transparent_black(),
+                            Default::default(),
+                        ));
+                    }
+                }
+            },
+        )
+        .size_full();
 
         div()
             .flex()
@@ -98,21 +128,19 @@ impl Render for HayateApp {
             .text_color(rgb(0xffffff))
             .child(div().text_xl().child(self.title.clone()))
             .child(
-                // The resolved slide background, drawn as a 16:9 panel.
                 div()
-                    .w(px(480.))
-                    .h(px(270.))
+                    .w(px(sw))
+                    .h(px(sh))
                     .border_1()
                     .border_color(rgb(0x555555))
-                    .bg(rgb(self.background)),
+                    .child(slide_canvas),
             )
-            .child(swatch_row)
     }
 }
 
 fn run() {
     application().run(|cx: &mut App| {
-        let bounds = Bounds::centered(None, size(px(1000.), px(640.)), cx);
+        let bounds = Bounds::centered(None, size(px(1100.), px(720.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
