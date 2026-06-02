@@ -19,7 +19,12 @@ pub(crate) fn tool_button(
         .rounded_md()
         .hover(|s| s.bg(rgb(0x4a4a4a)))
         .child(label.into())
-        .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| action(this, window, cx)))
+        .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+            // Keep keyboard focus on the editor so shortcuts (Ctrl+Z, etc.) keep working
+            // after clicking a toolbar / Format-pane button.
+            window.focus(&this.focus, cx);
+            action(this, window, cx);
+        }))
 }
 
 /// A thin horizontal separator between context-menu groups.

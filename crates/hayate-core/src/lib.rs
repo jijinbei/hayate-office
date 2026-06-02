@@ -627,6 +627,36 @@ pub fn builtins() -> CommandRegistry {
         },
     );
 
+    // shape.set_font — set every run's font family to the given name.
+    reg.register(
+        CommandMeta::new("shape.set_font", "Set Font", "Text"),
+        vec![
+            ParamSpec::new("entity", ParamType::Entity),
+            ParamSpec::new("family", ParamType::String),
+        ],
+        |world, args| {
+            let family = args.get("family").and_then(Value::as_str);
+            match (arg_entity(args, "entity"), family) {
+                (Some(entity), Some(family)) => match world.texts.get(&entity) {
+                    Some(existing) => {
+                        let mut body = existing.clone();
+                        for para in &mut body.paragraphs {
+                            for run in &mut para.runs {
+                                run.font = FontRef::Family(family.to_string());
+                            }
+                        }
+                        vec![Operation::SetComponent {
+                            entity,
+                            value: CompValue::Text(body),
+                        }]
+                    }
+                    None => vec![],
+                },
+                _ => vec![],
+            }
+        },
+    );
+
     // shape.toggle_bold / shape.toggle_italic / shape.toggle_underline — flip the named run
     // attribute across the whole text box. To keep the box consistent, the new value is the
     // negation of the FIRST run's current value, then applied to every run. Reads the current

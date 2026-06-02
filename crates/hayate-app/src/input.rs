@@ -291,7 +291,8 @@ impl HayateApp {
                 rgb(0x3a3a3a)
             })
             .child(shown)
-            .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+            .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                window.focus(&this.focus, cx);
                 this.begin_field_edit(kind);
                 cx.notify();
             }))

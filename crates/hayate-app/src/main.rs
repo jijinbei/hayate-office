@@ -162,6 +162,8 @@ struct HayateApp {
     present_t: u32,
     /// Open right-click context menu, if any.
     context_menu: Option<ContextMenu>,
+    /// Whether the font picker overlay is open.
+    font_picker: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -261,6 +263,7 @@ impl HayateApp {
             present: false,
             present_t: 0,
             context_menu: None,
+            font_picker: false,
         }
     }
 }

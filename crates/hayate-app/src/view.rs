@@ -456,7 +456,8 @@ impl Render for HayateApp {
                         .h(px(22.))
                         .rounded_md()
                         .bg(rgb(cu))
-                        .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+                        .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                            window.focus(&this.focus, cx);
                             this.set_fill_accent(t);
                             cx.notify();
                         })),
@@ -586,7 +587,11 @@ impl Render for HayateApp {
                                 t.run_on_selection("shape.align_text_right");
                                 cx.notify();
                             })),
-                    );
+                    )
+                    .child(tool_button("txt_font", "Font \u{25BE}", cx, |t, _w, cx| {
+                        t.font_picker = !t.font_picker;
+                        cx.notify();
+                    }));
             }
             pane
         });
@@ -684,6 +689,62 @@ impl Render for HayateApp {
                     .children(inspector),
             )
             .children(self.menu_overlay(cx))
+            .children(self.font_overlay(window, cx))
             .into_any_element()
+    }
+}
+
+impl HayateApp {
+    /// The font-picker overlay: a scrollable list of available font families. Clicking one sets
+    /// the selected text shape's font via the `shape.set_font` command.
+    fn font_overlay(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Option<gpui::AnyElement> {
+        if !self.font_picker {
+            return None;
+        }
+        let mut names = window.text_system().all_font_names();
+        names.sort();
+        names.dedup();
+        let mut list = div()
+            .id("font_list")
+            .absolute()
+            .right(px(244.))
+            .top(px(60.))
+            .flex()
+            .flex_col()
+            .w(px(240.))
+            .max_h(px(440.))
+            .overflow_y_scroll()
+            .bg(rgb(0x2b2b2b))
+            .border_1()
+            .border_color(rgb(0x555555))
+            .rounded_md()
+            .shadow_lg()
+            .text_color(rgb(0xffffff));
+        for (i, name) in names.into_iter().enumerate() {
+            let fam = name.clone();
+            list = list.child(
+                div()
+                    .id(("font", i))
+                    .px_3()
+                    .py_1()
+                    .text_sm()
+                    .hover(|s| s.bg(rgb(0x094771)))
+                    .child(name)
+                    .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                        window.focus(&this.focus, cx);
+                        this.run_on_selection_with(
+                            "shape.set_font",
+                            serde_json::json!({ "family": fam.clone() }),
+                        );
+                        this.font_picker = false;
+                        cx.notify();
+                    })),
+            );
+        }
+        Some(list.into_any_element())
     }
 }
