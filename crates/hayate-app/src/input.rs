@@ -13,9 +13,7 @@ use hayate_model::edit;
 use crate::util::{
     next_char_boundary, prev_char_boundary, range_from_utf16, range_to_utf16, utf16_to_byte,
 };
-use crate::{
-    pt_to_emu, FieldEdit, FieldKind, HayateApp, PaletteState, TextEdit,
-};
+use crate::{pt_to_emu, FieldEdit, FieldKind, HayateApp, PaletteState, TextEdit};
 
 use hayate_ir::geom::RectEmu;
 use hayate_ir::world::{CompValue, Entity};
@@ -59,6 +57,16 @@ impl HayateApp {
         // Character input (including the space key and IME composition) is delivered through the
         // platform text-input handler (replace_text_in_range); handling it here too would double
         // it. text_key only covers control keys (commit/cancel/erase/caret motion).
+        // Ctrl/Cmd+A selects all text in the box.
+        let mods = ev.keystroke.modifiers;
+        if (mods.control || mods.platform) && key == "a" {
+            if let Some(te) = self.text_edit.as_mut() {
+                te.selected = 0..te.buf.len();
+                te.marked = None;
+            }
+            cx.notify();
+            return;
+        }
         let mut live: Option<(Entity, String)> = None;
         match key.as_str() {
             "escape" => {
@@ -84,6 +92,21 @@ impl HayateApp {
                         let p = prev_char_boundary(&te.buf, te.selected.start);
                         te.buf.replace_range(p..te.selected.start, "");
                         te.selected = p..p;
+                    }
+                    te.marked = None;
+                    live = Some((te.entity, te.buf.clone()));
+                }
+            }
+            "delete" => {
+                if let Some(te) = self.text_edit.as_mut() {
+                    if te.selected.start != te.selected.end {
+                        te.buf.replace_range(te.selected.clone(), "");
+                        let c = te.selected.start;
+                        te.selected = c..c;
+                    } else if te.selected.end < te.buf.len() {
+                        let n = next_char_boundary(&te.buf, te.selected.end);
+                        te.buf.replace_range(te.selected.end..n, "");
+                        // Caret stays at the deletion point.
                     }
                     te.marked = None;
                     live = Some((te.entity, te.buf.clone()));
@@ -116,7 +139,12 @@ impl HayateApp {
     /// Splice `new_text` into the edit buffer, replacing `range_utf16` (or the marked range, or
     /// the current selection), then move the caret to the end of the inserted text. When `mark`
     /// is set the inserted text becomes the IME composing (marked) region.
-    pub(crate) fn apply_ime(&mut self, range_utf16: Option<Range<usize>>, new_text: &str, mark: bool) {
+    pub(crate) fn apply_ime(
+        &mut self,
+        range_utf16: Option<Range<usize>>,
+        new_text: &str,
+        mark: bool,
+    ) {
         let (e, buf) = {
             let te = match self.text_edit.as_mut() {
                 Some(t) => t,
@@ -380,6 +408,23 @@ impl HayateApp {
             }
             "delete" | "backspace" if !cmd => {
                 self.delete_selection();
+                cx.notify();
+            }
+            // Arrow keys nudge the selected shape (0.1in step).
+            "left" if !cmd => {
+                self.nudge(-91_440, 0);
+                cx.notify();
+            }
+            "right" if !cmd => {
+                self.nudge(91_440, 0);
+                cx.notify();
+            }
+            "up" if !cmd => {
+                self.nudge(0, -91_440);
+                cx.notify();
+            }
+            "down" if !cmd => {
+                self.nudge(0, 91_440);
                 cx.notify();
             }
             _ => {}

@@ -55,6 +55,10 @@ impl HayateApp {
 
         match cm.target {
             MenuTarget::Shape => {
+                // Text-formatting items only make sense when the shape carries text.
+                let has_text = self
+                    .selection
+                    .map_or(false, |e| self.pres.world.texts.contains_key(&e));
                 menu = menu
                     .child(menu_item("m_edit_text", "Edit Text", cx, |t, _w, cx| {
                         if let Some(e) = t.selection {
@@ -73,32 +77,36 @@ impl HayateApp {
                     .child(menu_item("m_dup", "Duplicate", cx, |t, _w, cx| {
                         t.duplicate_selection();
                         cx.notify();
-                    }))
-                    .child(menu_divider())
-                    .child(menu_item("m_bold", "Bold", cx, |t, _w, cx| {
-                        t.run_on_selection("shape.toggle_bold");
-                        cx.notify();
-                    }))
-                    .child(menu_item("m_italic", "Italic", cx, |t, _w, cx| {
-                        t.run_on_selection("shape.toggle_italic");
-                        cx.notify();
-                    }))
-                    .child(menu_item("m_underline", "Underline", cx, |t, _w, cx| {
-                        t.run_on_selection("shape.toggle_underline");
-                        cx.notify();
-                    }))
-                    .child(menu_item("m_align_l", "Align Left", cx, |t, _w, cx| {
-                        t.run_on_selection("shape.align_text_left");
-                        cx.notify();
-                    }))
-                    .child(menu_item("m_align_c", "Align Center", cx, |t, _w, cx| {
-                        t.run_on_selection("shape.align_text_center");
-                        cx.notify();
-                    }))
-                    .child(menu_item("m_align_r", "Align Right", cx, |t, _w, cx| {
-                        t.run_on_selection("shape.align_text_right");
-                        cx.notify();
-                    }))
+                    }));
+                if has_text {
+                    menu = menu
+                        .child(menu_divider())
+                        .child(menu_item("m_bold", "Bold", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.toggle_bold");
+                            cx.notify();
+                        }))
+                        .child(menu_item("m_italic", "Italic", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.toggle_italic");
+                            cx.notify();
+                        }))
+                        .child(menu_item("m_underline", "Underline", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.toggle_underline");
+                            cx.notify();
+                        }))
+                        .child(menu_item("m_align_l", "Align Left", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.align_text_left");
+                            cx.notify();
+                        }))
+                        .child(menu_item("m_align_c", "Align Center", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.align_text_center");
+                            cx.notify();
+                        }))
+                        .child(menu_item("m_align_r", "Align Right", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.align_text_right");
+                            cx.notify();
+                        }));
+                }
+                menu = menu
                     .child(menu_divider())
                     .child(menu_item("m_group", "Group", cx, |t, _w, cx| {
                         t.group_selection();
@@ -125,6 +133,15 @@ impl HayateApp {
                         t.run_on_selection("shape.send_to_back");
                         cx.notify();
                     }))
+                    .child(menu_item(
+                        "m_anim_fade",
+                        "Animate: Fade In",
+                        cx,
+                        |t, _w, cx| {
+                            t.add_fade_in();
+                            cx.notify();
+                        },
+                    ))
                     .child(menu_divider())
                     .child(menu_item("m_delete", "Delete", cx, |t, _w, cx| {
                         t.delete_selection();

@@ -9,7 +9,9 @@ use gpui::{
 
 use hayate_ir::color::ThemeColorToken;
 use hayate_render::scene::{Primitive, PxSize};
-use hayate_render::{build_slide_scene, build_slide_scene_at, grid_lines, resize_handles, GuideKind};
+use hayate_render::{
+    build_slide_scene, build_slide_scene_at, grid_lines, resize_handles, GuideKind,
+};
 
 use crate::paint::paint_scene;
 use crate::util::{hsla_of, prim_bounds, rotate_pt, run_font};
@@ -58,11 +60,11 @@ impl Render for HayateApp {
         let also = self.also.clone();
         let guides = self.guides.clone();
         let show_grid = self.show_grid;
-        // Caret (editing entity + byte offset) for drawing the text-insertion cursor.
+        // Caret/selection (editing entity + byte range) for drawing the cursor and highlight.
         let caret = self
             .text_edit
             .as_ref()
-            .map(|te| (te.entity, te.selected.start));
+            .map(|te| (te.entity, te.selected.clone()));
         let origin_cell = self.canvas_origin.clone();
         let input_entity = cx.entity();
         let input_focus = self.focus.clone();
@@ -111,9 +113,9 @@ impl Render for HayateApp {
 
                 paint_scene(&scene, o, &media, window, cx);
 
-                // Text-edit caret: a thin vertical bar at the insertion point.
-                if let Some((ent, caret_byte)) = caret {
-                    if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(ent)) {
+                // Text-edit caret + selection highlight.
+                if let Some((ent, sel)) = &caret {
+                    if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(*ent)) {
                         if let Primitive::Text(tb) = &node.prim {
                             if let Some((para, run0)) = tb
                                 .paragraphs
@@ -123,11 +125,13 @@ impl Render for HayateApp {
                                 let font_size =
                                     px(para.runs.iter().map(|r| r.size_px).fold(0.0, f32::max));
                                 let line_height = font_size * 1.3;
-                                let upto = caret_byte.min(run0.text.len());
-                                let prefix = &run0.text[..upto];
-                                let caret_x = if prefix.is_empty() {
-                                    0.0
-                                } else {
+                                // Pixel x of a byte offset into the first run (shaped prefix width).
+                                let x_at = |upto_byte: usize, window: &mut Window| -> f32 {
+                                    let upto = upto_byte.min(run0.text.len());
+                                    if upto == 0 {
+                                        return 0.0;
+                                    }
+                                    let prefix = &run0.text[..upto];
                                     let trun = TextRun {
                                         len: prefix.len(),
                                         font: run_font(run0),
@@ -144,11 +148,27 @@ impl Render for HayateApp {
                                     );
                                     f32::from(shaped.width)
                                 };
-                                let left = o.x + px(tb.bounds.x + caret_x);
+                                let x0 = x_at(sel.start, window);
+                                let x1 = x_at(sel.end, window);
                                 let top = o.y + px(tb.bounds.y);
+                                // Selection highlight when the range is non-empty.
+                                if (x1 - x0).abs() > 0.5 {
+                                    window.paint_quad(quad(
+                                        Bounds {
+                                            origin: point(o.x + px(tb.bounds.x + x0.min(x1)), top),
+                                            size: size(px((x1 - x0).abs()), line_height),
+                                        },
+                                        px(0.),
+                                        Background::from(gpui::rgba(0x1166DD55)),
+                                        px(0.),
+                                        gpui::transparent_black(),
+                                        Default::default(),
+                                    ));
+                                }
+                                // Caret bar at the selection end (the insertion point).
                                 window.paint_quad(quad(
                                     Bounds {
-                                        origin: point(left, top),
+                                        origin: point(o.x + px(tb.bounds.x + x1), top),
                                         size: size(px(2.0), line_height),
                                     },
                                     px(0.),
@@ -392,15 +412,18 @@ impl Render for HayateApp {
             ThemeColorToken::Accent6,
         ];
         let theme = self.pres.theme_of(self.slide).cloned().unwrap_or_default();
-        let inspector = self.selection.map(|_e| {
+        let inspector = self.selection.map(|e| {
+            let has_text = self.pres.world.texts.contains_key(&e);
+            // A muted section label (Figma-style).
+            let label = |s: &'static str| div().pt_1().text_sm().text_color(rgb(0x8a8a8a)).child(s);
             let mut swatches = div().flex().flex_row().gap_1();
             for (i, t) in accents.into_iter().enumerate() {
                 let cu = crate::util::rgb_u32(theme.color_for(t));
                 swatches = swatches.child(
                     div()
                         .id(("acc", i))
-                        .w(px(28.))
-                        .h(px(28.))
+                        .w(px(22.))
+                        .h(px(22.))
                         .rounded_md()
                         .bg(rgb(cu))
                         .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
@@ -409,105 +432,50 @@ impl Render for HayateApp {
                         })),
                 );
             }
-            div()
+            let mut pane = div()
                 .flex()
                 .flex_col()
-                .gap_2()
+                .gap_1()
                 .w(px(228.))
                 .p_2()
                 .bg(rgb(0x252525))
-                .child(div().text_xl().child("Format"))
-                .child(div().child("Rotation (click to type 0-360)"))
-                .child(self.num_field("f_rot", FieldKind::Rotation, cx))
+                .child(div().text_lg().pb_1().child("Format"))
+                // Position / Size: editable numeric fields (click to type), no stepper buttons.
+                .child(label("Position (pt)"))
                 .child(
                     div()
                         .flex()
                         .flex_row()
-                        .gap_2()
-                        .child(tool_button("rot_m", "\u{27F2}-15", cx, |t, _w, cx| {
-                            t.rotate_by(-15.0);
-                            cx.notify();
-                        }))
-                        .child(tool_button("rot_p", "\u{27F3}+15", cx, |t, _w, cx| {
-                            t.rotate_by(15.0);
-                            cx.notify();
-                        }))
-                        .child(tool_button("rot_0", "0\u{00B0}", cx, |t, _w, cx| {
-                            t.set_rotation_abs(0.0);
-                            cx.notify();
-                        })),
-                )
-                .child(div().child("Position (pt)"))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_2()
+                        .gap_1()
                         .child(self.num_field("f_x", FieldKind::PosX, cx))
                         .child(self.num_field("f_y", FieldKind::PosY, cx)),
                 )
+                .child(label("Size (pt)"))
                 .child(
                     div()
                         .flex()
                         .flex_row()
-                        .gap_2()
-                        .child(tool_button("x_m", "X-", cx, |t, _w, cx| {
-                            t.nudge(-91_440, 0);
-                            cx.notify();
-                        }))
-                        .child(tool_button("x_p", "X+", cx, |t, _w, cx| {
-                            t.nudge(91_440, 0);
-                            cx.notify();
-                        }))
-                        .child(tool_button("y_m", "Y-", cx, |t, _w, cx| {
-                            t.nudge(0, -91_440);
-                            cx.notify();
-                        }))
-                        .child(tool_button("y_p", "Y+", cx, |t, _w, cx| {
-                            t.nudge(0, 91_440);
-                            cx.notify();
-                        })),
-                )
-                .child(div().child("Size (pt)"))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_2()
+                        .gap_1()
                         .child(self.num_field("f_w", FieldKind::SizeW, cx))
                         .child(self.num_field("f_h", FieldKind::SizeH, cx)),
                 )
+                .child(label("Rotation / Opacity"))
                 .child(
                     div()
                         .flex()
                         .flex_row()
-                        .gap_2()
-                        .child(tool_button("w_m", "W-", cx, |t, _w, cx| {
-                            t.resize_by(-182_880, 0);
-                            cx.notify();
-                        }))
-                        .child(tool_button("w_p", "W+", cx, |t, _w, cx| {
-                            t.resize_by(182_880, 0);
-                            cx.notify();
-                        }))
-                        .child(tool_button("h_m", "H-", cx, |t, _w, cx| {
-                            t.resize_by(0, -182_880);
-                            cx.notify();
-                        }))
-                        .child(tool_button("h_p", "H+", cx, |t, _w, cx| {
-                            t.resize_by(0, 182_880);
-                            cx.notify();
-                        })),
+                        .gap_1()
+                        .child(self.num_field("f_rot", FieldKind::Rotation, cx))
+                        .child(self.num_field("f_op", FieldKind::Opacity, cx)),
                 )
-                .child(div().child("Fill"))
+                .child(label("Fill"))
                 .child(swatches)
-                .child(div().child("Opacity (%)"))
-                .child(self.num_field("f_op", FieldKind::Opacity, cx))
+                .child(label("Arrange"))
                 .child(
                     div()
                         .flex()
                         .flex_row()
-                        .gap_2()
+                        .gap_1()
                         .child(tool_button("front", "Front", cx, |t, _w, cx| {
                             t.run_on_selection("shape.bring_to_front");
                             cx.notify();
@@ -515,14 +483,7 @@ impl Render for HayateApp {
                         .child(tool_button("back", "Back", cx, |t, _w, cx| {
                             t.run_on_selection("shape.send_to_back");
                             cx.notify();
-                        })),
-                )
-                .child(div().child("Align (Shift-click for multi)"))
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_1()
+                        }))
                         .child(tool_button("al_l", "L", cx, |t, _w, cx| {
                             t.align("shapes.align_left");
                             cx.notify();
@@ -547,79 +508,57 @@ impl Render for HayateApp {
                             t.align("shapes.align_bottom");
                             cx.notify();
                         })),
-                )
-                .child(div().child("Text"))
-                .child(
-                    // Character styling. These build registry commands by string id; they
-                    // simply no-op until the text-formatting commands are registered.
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_1()
-                        .child(tool_button("txt_bold", "B", cx, |t, _w, cx| {
-                            t.run_on_selection("shape.toggle_bold");
-                            cx.notify();
-                        }))
-                        .child(tool_button("txt_italic", "I", cx, |t, _w, cx| {
-                            t.run_on_selection("shape.toggle_italic");
-                            cx.notify();
-                        }))
-                        .child(tool_button("txt_underline", "U", cx, |t, _w, cx| {
-                            t.run_on_selection("shape.toggle_underline");
-                            cx.notify();
-                        }))
-                        .child(tool_button("txt_aminus", "A-", cx, |t, _w, cx| {
-                            t.change_font_size(-4);
-                            cx.notify();
-                        }))
-                        .child(tool_button("txt_aplus", "A+", cx, |t, _w, cx| {
-                            t.change_font_size(4);
-                            cx.notify();
-                        })),
-                )
-                .child(
-                    div()
-                        .flex()
-                        .flex_row()
-                        .gap_1()
-                        .child(tool_button("txt_al_l", "Left", cx, |t, _w, cx| {
-                            t.run_on_selection("shape.align_text_left");
-                            cx.notify();
-                        }))
-                        .child(tool_button("txt_al_c", "Center", cx, |t, _w, cx| {
-                            t.run_on_selection("shape.align_text_center");
-                            cx.notify();
-                        }))
-                        .child(tool_button("txt_al_r", "Right", cx, |t, _w, cx| {
-                            t.run_on_selection("shape.align_text_right");
-                            cx.notify();
-                        })),
-                )
-                .child(tool_button(
-                    "anim_fade",
-                    "Animate: Fade In",
-                    cx,
-                    |t, _w, cx| {
-                        t.add_fade_in();
-                        cx.notify();
-                    },
-                ))
-                .child(tool_button(
-                    "edit_text",
-                    "Edit Text (F2)",
-                    cx,
-                    |t, _w, cx| {
-                        if let Some(e) = t.selection {
-                            t.begin_text_edit(e);
-                        }
-                        cx.notify();
-                    },
-                ))
-                .child(tool_button("del", "Delete", cx, |t, _w, cx| {
-                    t.delete_selection();
-                    t.rebuild();
-                    cx.notify();
-                }))
+                );
+            // Text controls only when the selected shape carries text.
+            if has_text {
+                pane = pane
+                    .child(label("Text"))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_1()
+                            .child(tool_button("txt_bold", "B", cx, |t, _w, cx| {
+                                t.run_on_selection("shape.toggle_bold");
+                                cx.notify();
+                            }))
+                            .child(tool_button("txt_italic", "I", cx, |t, _w, cx| {
+                                t.run_on_selection("shape.toggle_italic");
+                                cx.notify();
+                            }))
+                            .child(tool_button("txt_underline", "U", cx, |t, _w, cx| {
+                                t.run_on_selection("shape.toggle_underline");
+                                cx.notify();
+                            }))
+                            .child(tool_button("txt_aminus", "A-", cx, |t, _w, cx| {
+                                t.change_font_size(-4);
+                                cx.notify();
+                            }))
+                            .child(tool_button("txt_aplus", "A+", cx, |t, _w, cx| {
+                                t.change_font_size(4);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_1()
+                            .child(tool_button("txt_al_l", "L", cx, |t, _w, cx| {
+                                t.run_on_selection("shape.align_text_left");
+                                cx.notify();
+                            }))
+                            .child(tool_button("txt_al_c", "C", cx, |t, _w, cx| {
+                                t.run_on_selection("shape.align_text_center");
+                                cx.notify();
+                            }))
+                            .child(tool_button("txt_al_r", "R", cx, |t, _w, cx| {
+                                t.run_on_selection("shape.align_text_right");
+                                cx.notify();
+                            })),
+                    );
+            }
+            pane
         });
 
         div()

@@ -258,14 +258,6 @@ impl HayateApp {
             .unwrap_or(0.0)
     }
 
-    pub(crate) fn rotate_by(&mut self, delta: f32) {
-        if let Some(e) = self.selection {
-            let cur = self.pres.world.rotations.get(&e).copied().unwrap_or(0.0);
-            let tx = edit::set_rotation(e, cur + delta);
-            self.commit_tx(tx);
-        }
-    }
-
     pub(crate) fn set_rotation_abs(&mut self, deg: f32) {
         if let Some(e) = self.selection {
             let tx = edit::set_rotation(e, deg);
@@ -277,17 +269,6 @@ impl HayateApp {
         if let Some(e) = self.selection {
             let tx = edit::translate(&self.pres.world, e, dx, dy);
             self.commit_tx(tx);
-        }
-    }
-
-    pub(crate) fn resize_by(&mut self, dw: i64, dh: i64) {
-        if let Some(e) = self.selection {
-            if let Some(f) = self.pres.world.frames.get(&e).copied() {
-                let nw = (f.size.w + dw).max(91_440);
-                let nh = (f.size.h + dh).max(91_440);
-                let tx = edit::resize(&self.pres.world, e, nw, nh);
-                self.commit_tx(tx);
-            }
         }
     }
 

@@ -42,7 +42,13 @@ pub(crate) fn paint_bg(p: &Paint, opacity: f32) -> Background {
     }
 }
 
-pub(crate) fn paint_text(tb: &TextBlock, ox: Pixels, oy: Pixels, window: &mut Window, cx: &mut App) {
+pub(crate) fn paint_text(
+    tb: &TextBlock,
+    ox: Pixels,
+    oy: Pixels,
+    window: &mut Window,
+    cx: &mut App,
+) {
     use hayate_ir::text::HAlign;
     let left = ox + px(tb.bounds.x);
     let mut top = oy + px(tb.bounds.y);
@@ -78,11 +84,22 @@ pub(crate) fn paint_text(tb: &TextBlock, ox: Pixels, oy: Pixels, window: &mut Wi
         if runs.is_empty() {
             continue;
         }
-        let shaped =
-            window
-                .text_system()
-                .shape_line(SharedString::from(text), font_size, &runs, None);
-        let _ = shaped.paint(point(left, top), line_height, align, None, window, cx);
+        // Pass the text box width so Center/Right alignment has a box to align within.
+        let wrap_width = px(tb.bounds.w);
+        let shaped = window.text_system().shape_line(
+            SharedString::from(text),
+            font_size,
+            &runs,
+            Some(wrap_width),
+        );
+        let _ = shaped.paint(
+            point(left, top),
+            line_height,
+            align,
+            Some(wrap_width),
+            window,
+            cx,
+        );
         top += line_height;
     }
 }
