@@ -2,6 +2,91 @@
 
 use super::*;
 use crate::color::{Color, Rgba, ThemeColorToken};
+use crate::doc::{PlaceholderRef, PlaceholderType};
+use crate::text::{Paragraph, Run, TextBody};
+use crate::world::CompValue;
+
+fn title_ref() -> PlaceholderRef {
+    PlaceholderRef {
+        ph_type: PlaceholderType::Title,
+        idx: 0,
+    }
+}
+
+fn simple_text(s: &str) -> TextBody {
+    let run = Run {
+        text: s.to_string(),
+        font: crate::font::FontRef::Theme(crate::font::ThemeFontSlot::Major),
+        size: crate::units::pt(44),
+        color: Color::theme(ThemeColorToken::Dk1),
+        bold: false,
+        italic: false,
+        underline: false,
+    };
+    TextBody {
+        paragraphs: vec![Paragraph::new(vec![run])],
+        autofit: false,
+    }
+}
+
+/// Add a placeholder shape under `container` with the given ref, optional frame, optional text.
+fn add_placeholder(
+    p: &mut Presentation,
+    container: Entity,
+    ph: PlaceholderRef,
+    frame: Option<crate::geom::RectEmu>,
+    text: Option<TextBody>,
+) -> Entity {
+    let e = p.add_shape(container);
+    p.world.set(e, CompValue::Placeholder(ph));
+    if let Some(f) = frame {
+        p.world.set(e, CompValue::Frame(f));
+    }
+    if let Some(t) = text {
+        p.world.set(e, CompValue::Text(t));
+    }
+    e
+}
+
+#[test]
+fn placeholder_inheritance_resolves_frame_and_text_separately() {
+    let (mut p, s1, _) = small_deck();
+    let layout = p.layout_of(s1).unwrap();
+    let ph = title_ref();
+
+    // Title placeholder WITH a frame on the LAYOUT (no text).
+    let layout_frame = crate::geom::RectEmu::new(10, 20, 300, 100);
+    add_placeholder(&mut p, layout, ph, Some(layout_frame), None);
+    // Title placeholder WITH text but NO frame on the SLIDE.
+    add_placeholder(&mut p, s1, ph, None, Some(simple_text("Hello")));
+
+    // Frame comes from the layout; text comes from the slide.
+    assert_eq!(p.ph_frame(s1, ph), Some(layout_frame));
+    let text = p.ph_text(s1, ph).expect("text resolved");
+    assert_eq!(text.paragraphs[0].runs[0].text, "Hello");
+}
+
+#[test]
+fn effective_placeholders_dedupes_title() {
+    let (mut p, s1, _) = small_deck();
+    let layout = p.layout_of(s1).unwrap();
+    let ph = title_ref();
+    add_placeholder(
+        &mut p,
+        layout,
+        ph,
+        Some(crate::geom::RectEmu::new(0, 0, 1, 1)),
+        None,
+    );
+    add_placeholder(&mut p, s1, ph, None, Some(simple_text("Hi")));
+
+    let effective = p.effective_placeholders(s1);
+    let titles = effective
+        .iter()
+        .filter(|r| r.ph_type == PlaceholderType::Title && r.idx == 0)
+        .count();
+    assert_eq!(titles, 1);
+}
 
 fn small_deck() -> (Presentation, Entity, Entity) {
     let mut p = Presentation::new();

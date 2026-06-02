@@ -485,6 +485,87 @@ fn move_backward_on_first_is_noop() {
     assert!(tx.ops.is_empty());
 }
 
+use hayate_ir::doc::{PlaceholderRef, PlaceholderType};
+use hayate_ir::presentation::Presentation;
+use hayate_ir::theme::Theme;
+
+fn title_ref() -> PlaceholderRef {
+    PlaceholderRef {
+        ph_type: PlaceholderType::Title,
+        idx: 0,
+    }
+}
+
+#[test]
+fn set_slide_layout_changes_layout_of() {
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let l1 = p.add_layout(master, "A");
+    let l2 = p.add_layout(master, "B");
+    let slide = p.add_slide(l1);
+    assert_eq!(p.layout_of(slide), Some(l1));
+
+    let mut h = History::new();
+    h.commit(&mut p.world, set_slide_layout(slide, l2));
+    assert_eq!(p.layout_of(slide), Some(l2));
+
+    // Undo restores the prior layout.
+    assert!(h.undo(&mut p.world));
+    assert_eq!(p.layout_of(slide), Some(l1));
+}
+
+#[test]
+fn promote_placeholder_materializes_slide_override() {
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Title and Content");
+    let slide = p.add_slide(layout);
+    let ph = title_ref();
+
+    // Inherited frame defined on the layout.
+    let layout_frame = RectEmu::new(10, 20, 300, 100);
+    let lp = p.add_shape(layout);
+    p.world.set(lp, CompValue::Placeholder(ph));
+    p.world.set(lp, CompValue::Frame(layout_frame));
+
+    // Before promotion the slide has no placeholder shape of its own.
+    assert!(p.find_placeholder(slide, ph).is_none());
+
+    let reserved = p.world.reserve_id();
+    let order = FracIndex::after(None);
+    let tx = promote_placeholder(&p, slide, ph, reserved, order).expect("inherited frame exists");
+
+    let mut h = History::new();
+    h.commit(&mut p.world, tx);
+
+    // A new slide child now carries the matching ref and the inherited frame.
+    let child = p
+        .find_placeholder(slide, ph)
+        .expect("slide override exists");
+    assert_eq!(child, reserved);
+    assert_eq!(
+        p.world.get(child, CompKind::Frame),
+        Some(CompValue::Frame(layout_frame))
+    );
+    assert_eq!(p.world.parent.get(&child).copied(), Some(slide));
+
+    // Undo removes the override entirely.
+    assert!(h.undo(&mut p.world));
+    assert!(p.find_placeholder(slide, ph).is_none());
+}
+
+#[test]
+fn promote_placeholder_without_inherited_frame_is_none() {
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Blank");
+    let slide = p.add_slide(layout);
+    let reserved = p.world.reserve_id();
+    assert!(
+        promote_placeholder(&p, slide, title_ref(), reserved, FracIndex::after(None)).is_none()
+    );
+}
+
 #[test]
 fn add_entrance_creates_step_appends_second_and_undoes() {
     let mut w = World::new();

@@ -28,7 +28,7 @@ pub struct MasterInfo {
 
 /// Placeholder kinds. Slide placeholders inherit geometry/style from the matching
 /// (type, idx) placeholder in the layout, then the master.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum PlaceholderType {
     Title,
     CenteredTitle,

@@ -1,10 +1,12 @@
 //! The `Presentation` document: a `World` plus top-level metadata, with helpers for
 //! ordered traversal and master/layout/slide inheritance resolution (DESIGN 6.8/6.10).
 
-use crate::doc::{LayoutInfo, MasterInfo, SlideInfo};
+use crate::doc::{LayoutInfo, MasterInfo, PlaceholderRef, SlideInfo};
 use crate::frac::FracIndex;
-use crate::geom::SizeEmu;
+use crate::geom::{RectEmu, SizeEmu};
 use crate::paint::Fill;
+use crate::shape::Geometry;
+use crate::text::TextBody;
 use crate::theme::Theme;
 use crate::units::inch_f;
 use crate::world::{Entity, World};
@@ -139,6 +141,102 @@ impl Presentation {
         }
         let master = self.world.layout_info.get(&layout)?.master;
         self.world.backgrounds.get(&master).copied()
+    }
+
+    /// The layout a slide is based on.
+    pub fn layout_of(&self, slide: Entity) -> Option<Entity> {
+        Some(self.world.slide_info.get(&slide)?.layout)
+    }
+
+    /// Direct children of `container` that carry a `Placeholder` component, in order.
+    pub fn placeholder_shapes(&self, container: Entity) -> Vec<Entity> {
+        self.children(container)
+            .into_iter()
+            .filter(|e| self.world.placeholders.contains_key(e))
+            .collect()
+    }
+
+    /// The child of `container` whose `PlaceholderRef` matches `ph` (both type and idx).
+    pub fn find_placeholder(&self, container: Entity, ph: PlaceholderRef) -> Option<Entity> {
+        self.placeholder_shapes(container)
+            .into_iter()
+            .find(|e| self.world.placeholders.get(e) == Some(&ph))
+    }
+
+    /// Matching placeholder entities along the inheritance chain, MOST-DERIVED FIRST:
+    /// `[slide_match?, layout_match?, master_match?]`, skipping levels with no match.
+    pub fn placeholder_chain(&self, slide: Entity, ph: PlaceholderRef) -> Vec<Entity> {
+        let mut out = Vec::new();
+        if let Some(e) = self.find_placeholder(slide, ph) {
+            out.push(e);
+        }
+        if let Some(layout) = self.layout_of(slide) {
+            if let Some(e) = self.find_placeholder(layout, ph) {
+                out.push(e);
+            }
+        }
+        if let Some(master) = self.master_of(slide) {
+            if let Some(e) = self.find_placeholder(master, ph) {
+                out.push(e);
+            }
+        }
+        out
+    }
+
+    /// Resolve a placeholder's frame, walking the chain and returning the first present.
+    pub fn ph_frame(&self, slide: Entity, ph: PlaceholderRef) -> Option<RectEmu> {
+        self.placeholder_chain(slide, ph)
+            .into_iter()
+            .find_map(|e| self.world.frames.get(&e).copied())
+    }
+
+    /// Resolve a placeholder's text body, walking the chain and returning the first present.
+    pub fn ph_text(&self, slide: Entity, ph: PlaceholderRef) -> Option<&TextBody> {
+        self.placeholder_chain(slide, ph)
+            .into_iter()
+            .find_map(|e| self.world.texts.get(&e))
+    }
+
+    /// Resolve a placeholder's fill, walking the chain and returning the first present.
+    pub fn ph_fill(&self, slide: Entity, ph: PlaceholderRef) -> Option<Fill> {
+        self.placeholder_chain(slide, ph)
+            .into_iter()
+            .find_map(|e| self.world.fills.get(&e).copied())
+    }
+
+    /// Resolve a placeholder's geometry, walking the chain and returning the first present.
+    pub fn ph_geometry(&self, slide: Entity, ph: PlaceholderRef) -> Option<Geometry> {
+        self.placeholder_chain(slide, ph)
+            .into_iter()
+            .find_map(|e| self.world.geometries.get(&e).cloned())
+    }
+
+    /// All placeholder refs in effect for a slide: the deduped (by type+idx) union of
+    /// placeholders defined on the slide, its layout, and its master, sorted by
+    /// `ph_type` then `idx` for a stable order.
+    pub fn effective_placeholders(&self, slide: Entity) -> Vec<PlaceholderRef> {
+        let mut containers = vec![slide];
+        if let Some(layout) = self.layout_of(slide) {
+            containers.push(layout);
+        }
+        if let Some(master) = self.master_of(slide) {
+            containers.push(master);
+        }
+        let mut refs: Vec<PlaceholderRef> = Vec::new();
+        for c in containers {
+            for e in self.placeholder_shapes(c) {
+                if let Some(ph) = self.world.placeholders.get(&e) {
+                    if !refs
+                        .iter()
+                        .any(|r| r.ph_type == ph.ph_type && r.idx == ph.idx)
+                    {
+                        refs.push(*ph);
+                    }
+                }
+            }
+        }
+        refs.sort_by(|a, b| a.ph_type.cmp(&b.ph_type).then(a.idx.cmp(&b.idx)));
+        refs
     }
 }
 

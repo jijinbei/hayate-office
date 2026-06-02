@@ -8,10 +8,12 @@ use crate::op::Operation;
 use hayate_ir::anim::{Anim, AnimKind, AnimStep, Easing, Effect, SlideTimeline, Trigger};
 use hayate_ir::color::Color;
 use hayate_ir::color::ThemeColorToken;
+use hayate_ir::doc::{PlaceholderRef, SlideInfo};
 use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::RectEmu;
 use hayate_ir::paint::{Fill, Stroke};
+use hayate_ir::presentation::Presentation;
 use hayate_ir::shape::{ArrowHead, Geometry};
 use hayate_ir::text::{HAlign, Paragraph, Run, TextBody};
 use hayate_ir::units::pt;
@@ -151,6 +153,76 @@ pub fn create_line(
             },
         ],
     )
+}
+
+/// Create a placeholder shape on a reserved id: spawn it, then attach parent, sibling
+/// order, frame and its `PlaceholderRef`, plus a `Text` body when `text` is provided. This
+/// is the editable, slide/layout/master-level definition of a placeholder; resolution of
+/// inherited fields is done by `Presentation::ph_*`. `reserved` should come from
+/// [`World::reserve_id`] so the spawn is fully captured by this (undoable) transaction.
+pub fn create_placeholder(
+    reserved: Entity,
+    parent: Entity,
+    order: FracIndex,
+    ph: PlaceholderRef,
+    frame: RectEmu,
+    text: Option<TextBody>,
+) -> Transaction {
+    let mut ops = vec![
+        Operation::Spawn { entity: reserved },
+        Operation::SetComponent {
+            entity: reserved,
+            value: CompValue::Parent(parent),
+        },
+        Operation::SetComponent {
+            entity: reserved,
+            value: CompValue::Order(order),
+        },
+        Operation::SetComponent {
+            entity: reserved,
+            value: CompValue::Frame(frame),
+        },
+        Operation::SetComponent {
+            entity: reserved,
+            value: CompValue::Placeholder(ph),
+        },
+    ];
+    if let Some(body) = text {
+        ops.push(Operation::SetComponent {
+            entity: reserved,
+            value: CompValue::Text(body),
+        });
+    }
+    Transaction::new("create placeholder", ops)
+}
+
+/// Rebase `slide` onto a different `layout` by setting its `SlideInfo`.
+pub fn set_slide_layout(slide: Entity, layout: Entity) -> Transaction {
+    Transaction::new(
+        "set slide layout",
+        vec![Operation::SetComponent {
+            entity: slide,
+            value: CompValue::Slide(SlideInfo { layout }),
+        }],
+    )
+}
+
+/// Materialize an editable slide-level override of an inherited placeholder: spawn a NEW
+/// shape `reserved` parented to `slide` at `order`, carrying the same `PlaceholderRef` and
+/// copying the inherited resolved frame (via [`Presentation::ph_frame`]) and text (via
+/// [`Presentation::ph_text`]). This new shape overrides the inherited placeholder because it
+/// lives most-derived (on the slide) in the resolution chain. Returns `None` when there is no
+/// inherited frame to copy. `reserved` should come from [`World::reserve_id`].
+pub fn promote_placeholder(
+    p: &Presentation,
+    slide: Entity,
+    ph: PlaceholderRef,
+    reserved: Entity,
+    order: FracIndex,
+) -> Option<Transaction> {
+    let frame = p.ph_frame(slide, ph)?;
+    let text = p.ph_text(slide, ph).cloned();
+    Some(create_placeholder(reserved, slide, order, ph, frame, text))
 }
 
 /// EMU per inch (914400) times 0.2, the offset applied to a duplicate's frame so it does
