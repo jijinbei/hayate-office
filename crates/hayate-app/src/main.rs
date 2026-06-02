@@ -455,7 +455,7 @@ fn tool_button(
     id: &'static str,
     label: impl Into<SharedString>,
     cx: &mut Context<HayateApp>,
-    action: impl Fn(&mut HayateApp, &mut Context<HayateApp>) + 'static,
+    action: impl Fn(&mut HayateApp, &mut Window, &mut Context<HayateApp>) + 'static,
 ) -> impl IntoElement {
     div()
         .id(id)
@@ -465,7 +465,7 @@ fn tool_button(
         .rounded_md()
         .hover(|s| s.bg(rgb(0x4a4a4a)))
         .child(label.into())
-        .on_click(cx.listener(move |this, _ev: &ClickEvent, _window, cx| action(this, cx)))
+        .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| action(this, window, cx)))
 }
 
 impl Render for HayateApp {
@@ -612,15 +612,14 @@ impl Render for HayateApp {
                             .flex_row()
                             .gap_2()
                             .items_center()
-                            .child(tool_button("add", "Add (R)", cx, |this, cx| {
-                                this.add_rect();
-                                this.rebuild();
-                                cx.notify();
+                            .child(tool_button("min", "\u{2013}", cx, |_this, window, _cx| {
+                                window.minimize_window();
                             }))
-                            .child(tool_button("delete", "Delete", cx, |this, cx| {
-                                this.delete_selection();
-                                this.rebuild();
-                                cx.notify();
+                            .child(tool_button("max", "\u{25A1}", cx, |_this, window, _cx| {
+                                window.zoom_window();
+                            }))
+                            .child(tool_button("close", "\u{00D7}", cx, |_this, window, _cx| {
+                                window.remove_window();
                             })),
                     ),
             )
@@ -656,6 +655,7 @@ fn run() {
             |_, cx| cx.new(|cx| HayateApp::new(cx)),
         )
         .unwrap();
+        cx.on_window_closed(|cx, _| cx.quit()).detach();
         cx.activate(true);
     });
 }
