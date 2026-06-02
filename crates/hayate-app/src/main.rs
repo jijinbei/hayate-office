@@ -29,6 +29,7 @@ use hayate_ir::theme::Theme;
 use hayate_ir::units::{inch_f, pt};
 use hayate_ir::world::Entity;
 use hayate_model::{edit, History, Operation, Transaction};
+use hayate_core::CommandRegistry;
 use hayate_render::scene::{Paint, Primitive, PxRect, PxSize, ResolvedRun, Scene, TextBlock};
 use hayate_render::{build_slide_scene, hit_test};
 
@@ -135,6 +136,15 @@ struct HayateApp {
     /// Keyboard focus for the editor (so Ctrl/Cmd+Z reaches us).
     focus: gpui::FocusHandle,
     focused_once: bool,
+    /// Command registry (palette / scripts / AI surface).
+    registry: CommandRegistry,
+    /// Command palette state when open.
+    palette: Option<PaletteState>,
+}
+
+struct PaletteState {
+    query: String,
+    sel: usize,
 }
 
 impl HayateApp {
@@ -152,7 +162,97 @@ impl HayateApp {
             canvas_origin: Rc::new(Cell::new(point(px(0.), px(0.)))),
             focus: cx.focus_handle(),
             focused_once: false,
+            registry: hayate_core::builtins(),
+            palette: None,
         }
+    }
+
+    /// Commands matching the palette query, as (id, title).
+    fn palette_commands(&self) -> Vec<(String, String)> {
+        let q = self
+            .palette
+            .as_ref()
+            .map(|p| p.query.to_lowercase())
+            .unwrap_or_default();
+        self.registry
+            .manifest()
+            .into_iter()
+            .filter_map(|v| {
+                let id = v.get("id")?.as_str()?.to_string();
+                let title = v
+                    .get("title")
+                    .and_then(|t| t.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_else(|| id.clone());
+                if q.is_empty() || id.to_lowercase().contains(&q) || title.to_lowercase().contains(&q) {
+                    Some((id, title))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// Run a registered command, supplying the current selection + sensible defaults as args.
+    fn run_command(&mut self, id: &str) {
+        let args = serde_json::json!({
+            "entity": self.selection.map(|e| e.0),
+            "dx": 200,
+            "dy": 0,
+            "color": "#e11d48",
+        });
+        if let Some(tx) = self.registry.build(id, &args, &self.pres.world) {
+            self.history.commit(&mut self.pres.world, tx);
+        }
+    }
+
+    fn palette_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        let key = ev.keystroke.key.clone();
+        match key.as_str() {
+            "escape" => self.palette = None,
+            "enter" => {
+                let sel = self.palette.as_ref().map(|p| p.sel).unwrap_or(0);
+                let chosen = self.palette_commands().get(sel).map(|(id, _)| id.clone());
+                self.palette = None;
+                if let Some(id) = chosen {
+                    self.run_command(&id);
+                    self.rebuild();
+                }
+            }
+            "backspace" => {
+                if let Some(p) = self.palette.as_mut() {
+                    p.query.pop();
+                    p.sel = 0;
+                }
+            }
+            "up" => {
+                if let Some(p) = self.palette.as_mut() {
+                    p.sel = p.sel.saturating_sub(1);
+                }
+            }
+            "down" => {
+                let n = self.palette_commands().len();
+                if let Some(p) = self.palette.as_mut() {
+                    if p.sel + 1 < n {
+                        p.sel += 1;
+                    }
+                }
+            }
+            "space" => {
+                if let Some(p) = self.palette.as_mut() {
+                    p.query.push(' ');
+                    p.sel = 0;
+                }
+            }
+            s if s.chars().count() == 1 => {
+                if let Some(p) = self.palette.as_mut() {
+                    p.query.push_str(s);
+                    p.sel = 0;
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 
     fn rebuild(&mut self) {
@@ -213,10 +313,19 @@ impl HayateApp {
     }
 
     fn on_key_down(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        if self.palette.is_some() {
+            self.palette_key(ev, cx);
+            return;
+        }
         let k = &ev.keystroke;
         let cmd = k.modifiers.platform || k.modifiers.control;
         let mut dirty = true;
         match k.key.as_str() {
+            "p" if cmd => {
+                self.palette = Some(PaletteState { query: String::new(), sel: 0 });
+                dirty = false;
+                cx.notify();
+            }
             "z" if cmd && k.modifiers.shift => {
                 self.history.redo(&mut self.pres.world);
             }
@@ -347,8 +456,35 @@ impl Render for HayateApp {
         let selection = self.selection;
         let origin_cell = self.canvas_origin.clone();
         let (sw, sh) = (scene.size.w, scene.size.h);
-        let title: SharedString =
-            format!("HayateOffice — click to select, drag to move ({} shapes)", scene.nodes.len()).into();
+        let title: SharedString = format!(
+            "HayateOffice — Ctrl+P palette · R add · Del delete · Ctrl+Z undo · Ctrl+S/O save/open ({} shapes)",
+            scene.nodes.len()
+        )
+        .into();
+
+        let palette_panel = self.palette.as_ref().map(|p| {
+            let list = self.palette_commands();
+            let sel = p.sel;
+            let mut col = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .w(px(560.))
+                .bg(rgb(0x2a2a2a))
+                .border_1()
+                .border_color(rgb(SELECTION));
+            col = col.child(div().bg(rgb(0x111111)).child(format!("\u{203a} {}", p.query)));
+            for (i, (_id, t)) in list.iter().enumerate() {
+                let row = div().child(t.clone());
+                let row = if i == sel {
+                    row.bg(rgb(SELECTION)).text_color(rgb(0xffffff))
+                } else {
+                    row
+                };
+                col = col.child(row);
+            }
+            col
+        });
 
         let slide_canvas = canvas(
             |_, _, _| {},
@@ -433,6 +569,7 @@ impl Render for HayateApp {
             .bg(rgb(0x1e1e1e))
             .text_color(rgb(0xffffff))
             .child(div().text_xl().child(title))
+            .children(palette_panel)
             .child(
                 div()
                     .w(px(sw))
