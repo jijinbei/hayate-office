@@ -728,22 +728,48 @@ impl Render for HayateApp {
 
                 paint_scene(&scene, o, window, cx);
 
-                // Selection outline (drawn on top).
+                // Selection outline (drawn on top), rotated to match the shape.
                 if let Some(sel) = selection {
                     if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(sel)) {
                         let r = prim_bounds(&node.prim);
-                        let b = Bounds {
-                            origin: point(o.x + px(r.x - 2.0), o.y + px(r.y - 2.0)),
-                            size: size(px(r.w + 4.0), px(r.h + 4.0)),
-                        };
-                        window.paint_quad(quad(
-                            b,
-                            px(0.),
-                            gpui::transparent_black(),
-                            px(2.),
-                            rgb(SELECTION),
-                            Default::default(),
-                        ));
+                        let angle = node.rotation_deg.to_radians();
+                        let pad = 2.0;
+                        if angle.abs() < 1e-3 {
+                            let b = Bounds {
+                                origin: point(o.x + px(r.x - pad), o.y + px(r.y - pad)),
+                                size: size(px(r.w + 2.0 * pad), px(r.h + 2.0 * pad)),
+                            };
+                            window.paint_quad(quad(
+                                b,
+                                px(0.),
+                                gpui::transparent_black(),
+                                px(2.),
+                                rgb(SELECTION),
+                                Default::default(),
+                            ));
+                        } else {
+                            let (cx_, cy_) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+                            let corners = [
+                                (r.x - pad, r.y - pad),
+                                (r.x + r.w + pad, r.y - pad),
+                                (r.x + r.w + pad, r.y + r.h + pad),
+                                (r.x - pad, r.y + r.h + pad),
+                                (r.x - pad, r.y - pad), // close the loop for the stroke
+                            ];
+                            let mut sb = PathBuilder::stroke(px(2.));
+                            for (i, (xx, yy)) in corners.iter().enumerate() {
+                                let (gx, gy) = rotate_pt(*xx, *yy, cx_, cy_, angle);
+                                let p = point(o.x + px(gx), o.y + px(gy));
+                                if i == 0 {
+                                    sb.move_to(p);
+                                } else {
+                                    sb.line_to(p);
+                                }
+                            }
+                            if let Ok(path) = sb.build() {
+                                window.paint_path(path, rgb(SELECTION));
+                            }
+                        }
                     }
                 }
             },
