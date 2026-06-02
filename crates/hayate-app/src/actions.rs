@@ -14,7 +14,7 @@ use hayate_ir::world::{CompValue, Entity};
 use hayate_model::{edit, Operation, Transaction};
 use hayate_render::build_slide_scene;
 
-use crate::{view_px, HayateApp};
+use crate::{view_px, EditScope, HayateApp};
 
 impl HayateApp {
     /// All currently-selected entities (primary + additional).
@@ -73,7 +73,7 @@ impl HayateApp {
     pub(crate) fn insert_image_bytes(&mut self, bytes: Vec<u8>) {
         let key = self.pres.add_media(bytes);
         let order = {
-            let kids = self.pres.children(self.slide);
+            let kids = self.pres.children(self.container());
             let last = kids.last().and_then(|e| self.pres.world.order.get(e));
             FracIndex::after(last)
         };
@@ -112,7 +112,7 @@ impl HayateApp {
                 Operation::Spawn { entity: e },
                 Operation::SetComponent {
                     entity: e,
-                    value: CompValue::Parent(self.slide),
+                    value: CompValue::Parent(self.container()),
                 },
                 Operation::SetComponent {
                     entity: e,
@@ -277,7 +277,7 @@ impl HayateApp {
     /// Add a new text box on the current slide and start editing it.
     pub(crate) fn add_text_box(&mut self) {
         let order = {
-            let kids = self.pres.children(self.slide);
+            let kids = self.pres.children(self.container());
             let last = kids.last().and_then(|e| self.pres.world.order.get(e));
             FracIndex::after(last)
         };
@@ -301,7 +301,7 @@ impl HayateApp {
                 Operation::Spawn { entity: e },
                 Operation::SetComponent {
                     entity: e,
-                    value: CompValue::Parent(self.slide),
+                    value: CompValue::Parent(self.container()),
                 },
                 Operation::SetComponent {
                     entity: e,
@@ -341,9 +341,53 @@ impl HayateApp {
         self.zoom = z;
     }
 
+    /// The container the canvas currently edits (the slide, or a layout/master in master mode).
+    pub(crate) fn container(&self) -> Entity {
+        self.scope.container()
+    }
+
     pub(crate) fn rebuild(&mut self) {
         let target = view_px(&self.pres, self.zoom);
-        self.scene = build_slide_scene(&self.pres, self.slide, target);
+        let c = self.container();
+        self.scene = match self.scope {
+            EditScope::Slide(_) => build_slide_scene(&self.pres, c, target),
+            EditScope::Layout(_) => {
+                let theme = self.pres.container_theme(c).cloned().unwrap_or_default();
+                let bg = self.pres.container_background(c);
+                let context: Vec<Entity> = self.pres.owning_master(c).into_iter().collect();
+                hayate_render::build_container_scene(&self.pres, c, &theme, bg, &context, target)
+            }
+            EditScope::Master(_) => {
+                let theme = self.pres.container_theme(c).cloned().unwrap_or_default();
+                let bg = self.pres.container_background(c);
+                hayate_render::build_container_scene(&self.pres, c, &theme, bg, &[], target)
+            }
+        };
+    }
+
+    /// Enter master edit mode for a layout (its master renders as dimmed context).
+    pub(crate) fn enter_layout_scope(&mut self, layout: Entity) {
+        self.scope = EditScope::Layout(layout);
+        self.master_layout = Some(layout);
+        self.selection = None;
+        self.also.clear();
+        self.rebuild();
+    }
+
+    /// Enter master edit mode for a master.
+    pub(crate) fn enter_master_scope(&mut self, master: Entity) {
+        self.scope = EditScope::Master(master);
+        self.selection = None;
+        self.also.clear();
+        self.rebuild();
+    }
+
+    /// Leave master edit mode, returning to the current slide.
+    pub(crate) fn exit_scope(&mut self) {
+        self.scope = EditScope::Slide(self.slide);
+        self.selection = None;
+        self.also.clear();
+        self.rebuild();
     }
 
     /// Rebuild + autosave after a document change (undo/redo, etc.).
@@ -355,7 +399,7 @@ impl HayateApp {
     /// Add a rectangle at the slide center as one undoable transaction, and select it.
     pub(crate) fn add_rect(&mut self) {
         let order = {
-            let kids = self.pres.children(self.slide);
+            let kids = self.pres.children(self.container());
             let last = kids.last().and_then(|e| self.pres.world.order.get(e));
             FracIndex::after(last)
         };
@@ -363,7 +407,7 @@ impl HayateApp {
         let frame = RectEmu::new(inch_f(4.0), inch_f(3.5), inch_f(1.6), inch_f(1.6));
         let tx = edit::create_rect(
             e,
-            self.slide,
+            self.container(),
             order,
             frame,
             Fill::Solid(Color::theme(ThemeColorToken::Accent5)),
@@ -374,7 +418,7 @@ impl HayateApp {
 
     /// Sibling order key that appends after the current shapes on the slide.
     fn append_order(&self) -> FracIndex {
-        let kids = self.pres.children(self.slide);
+        let kids = self.pres.children(self.container());
         let last = kids.last().and_then(|e| self.pres.world.order.get(e));
         FracIndex::after(last)
     }
@@ -390,7 +434,7 @@ impl HayateApp {
                 Operation::Spawn { entity: e },
                 Operation::SetComponent {
                     entity: e,
-                    value: CompValue::Parent(self.slide),
+                    value: CompValue::Parent(self.container()),
                 },
                 Operation::SetComponent {
                     entity: e,
@@ -426,7 +470,7 @@ impl HayateApp {
         } else {
             ArrowHead::None
         };
-        let tx = edit::create_line(e, self.slide, order, frame, ArrowHead::None, end);
+        let tx = edit::create_line(e, self.container(), order, frame, ArrowHead::None, end);
         self.commit_tx(tx);
         self.selection = Some(e);
     }
@@ -693,18 +737,18 @@ impl HayateApp {
                     }
                     ClipboardEntry::ExternalPaths(paths) => {
                         if let Some(p) = paths.paths().first() {
-                            let before = self.pres.children(self.slide).len();
+                            let before = self.pres.children(self.container()).len();
                             self.insert_image_file(p.clone());
-                            if self.pres.children(self.slide).len() > before {
+                            if self.pres.children(self.container()).len() > before {
                                 return true;
                             }
                         }
                     }
                     ClipboardEntry::String(s) => {
                         if let Some(path) = clipboard_text_image_path(s.text()) {
-                            let before = self.pres.children(self.slide).len();
+                            let before = self.pres.children(self.container()).len();
                             self.insert_image_file(path);
-                            if self.pres.children(self.slide).len() > before {
+                            if self.pres.children(self.container()).len() > before {
                                 return true;
                             }
                         }
@@ -726,7 +770,7 @@ impl HayateApp {
             return;
         };
         let order = {
-            let kids = self.pres.children(self.slide);
+            let kids = self.pres.children(self.container());
             let last = kids.last().and_then(|e| self.pres.world.order.get(e));
             FracIndex::after(last)
         };
@@ -745,10 +789,10 @@ impl HayateApp {
                 value: comp,
             });
         }
-        // Ensure it lands on the current slide, appended in order.
+        // Ensure it lands on the current container, appended in order.
         ops.push(Operation::SetComponent {
             entity: ne,
-            value: CompValue::Parent(self.slide),
+            value: CompValue::Parent(self.container()),
         });
         ops.push(Operation::SetComponent {
             entity: ne,

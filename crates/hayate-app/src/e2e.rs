@@ -757,3 +757,46 @@ fn new_layout_switches_current_slide(cx: &mut TestAppContext) {
         "the slide now uses the new layout"
     );
 }
+
+#[gpui::test]
+fn master_edit_scope_parents_shapes_to_layout(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let layout = app.read_with(cx, |s, _| s.pres.layout_of(s.slide).unwrap());
+    app.update(cx, |s, _| s.enter_layout_scope(layout));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.container()),
+        layout,
+        "canvas edits the layout"
+    );
+    let before = app.read_with(cx, |s, _| s.pres.children(layout).len());
+    app.update(cx, |s, _| s.add_rect());
+    let after = app.read_with(cx, |s, _| s.pres.children(layout).len());
+    assert_eq!(
+        after,
+        before + 1,
+        "a new shape is parented to the layout, not the slide"
+    );
+    // Exiting returns the canvas to the slide.
+    app.update(cx, |s, _| s.exit_scope());
+    let slide = app.read_with(cx, |s, _| s.slide);
+    assert_eq!(
+        app.read_with(cx, |s, _| s.container()),
+        slide,
+        "exit returns to the slide"
+    );
+}
+
+#[gpui::test]
+fn slide_nav_disabled_in_master_scope(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| s.add_slide()); // now two slides
+    let cur = app.read_with(cx, |s, _| s.slide);
+    let layout = app.read_with(cx, |s, _| s.pres.layout_of(s.slide).unwrap());
+    app.update(cx, |s, _| s.enter_layout_scope(layout));
+    app.update(cx, |s, _| s.next_slide(1));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.slide),
+        cur,
+        "next_slide is a no-op in master mode"
+    );
+}

@@ -445,7 +445,9 @@ impl Render for HayateApp {
                     })
                     .child(tcanvas)
                     .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+                        // Selecting a slide leaves any master/layout edit mode.
                         this.slide = s;
+                        this.scope = crate::EditScope::Slide(s);
                         this.selection = None;
                         this.rebuild();
                         cx.notify();
@@ -454,6 +456,7 @@ impl Render for HayateApp {
                         MouseButton::Right,
                         cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
                             this.slide = s;
+                            this.scope = crate::EditScope::Slide(s);
                             this.selection = None;
                             this.also.clear();
                             this.rebuild();
@@ -562,7 +565,11 @@ impl Render for HayateApp {
             ThemeColorToken::Accent5,
             ThemeColorToken::Accent6,
         ];
-        let theme = self.pres.theme_of(self.slide).cloned().unwrap_or_default();
+        let theme = self
+            .pres
+            .container_theme(self.container())
+            .cloned()
+            .unwrap_or_default();
         let inspector = self.selection.map(|e| {
             let has_text = self.pres.world.texts.contains_key(&e);
             // A muted section label (Figma-style).
@@ -870,6 +877,7 @@ impl Render for HayateApp {
                     ),
             )
             .children(palette_panel)
+            .children(self.scope_banner(cx))
             .child(
                 div()
                     .flex()
@@ -1046,32 +1054,69 @@ impl HayateApp {
             let label = format!("{}{}", if is_slide { "● " } else { "○ " }, name);
             col = col.child(
                 div()
-                    .id(("layout", layout.0 as usize))
-                    .px_2()
-                    .py_1()
-                    .rounded_md()
-                    .text_sm()
-                    .bg(if is_active {
-                        rgb(0x1f3a5f)
-                    } else {
-                        rgb(0x2f2f2f)
-                    })
-                    .hover(|s| s.bg(rgb(0x094771)))
-                    .child(label)
-                    .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
-                        window.focus(&this.focus, cx);
-                        this.master_layout = Some(layout);
-                        this.set_current_slide_layout(layout);
-                        cx.notify();
-                    })),
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        // Click the name to apply this layout to the current slide.
+                        div()
+                            .id(("layout", layout.0 as usize))
+                            .flex_1()
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_sm()
+                            .bg(if is_active {
+                                rgb(0x1f3a5f)
+                            } else {
+                                rgb(0x2f2f2f)
+                            })
+                            .hover(|s| s.bg(rgb(0x094771)))
+                            .child(label)
+                            .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                                window.focus(&this.focus, cx);
+                                this.master_layout = Some(layout);
+                                this.set_current_slide_layout(layout);
+                                cx.notify();
+                            })),
+                    )
+                    .child(
+                        // Edit opens the layout on the canvas (master edit mode).
+                        div()
+                            .id(("layout_edit", layout.0 as usize))
+                            .px_2()
+                            .py_1()
+                            .rounded_md()
+                            .text_sm()
+                            .bg(rgb(0x3a3a3a))
+                            .hover(|s| s.bg(rgb(0x4a4a4a)))
+                            .child("Edit")
+                            .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                                window.focus(&this.focus, cx);
+                                this.enter_layout_scope(layout);
+                                cx.notify();
+                            })),
+                    ),
             );
         }
-        col = col.child(btn(
-            "new_layout",
-            "+ New Layout".to_string(),
-            cx,
-            HayateApp::add_layout,
-        ));
+        col = col.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .child(btn(
+                    "new_layout",
+                    "+ New Layout".to_string(),
+                    cx,
+                    HayateApp::add_layout,
+                ))
+                .child(btn("edit_master", "Edit Master".to_string(), cx, |a| {
+                    if let Some(m) = a.pres.master_of(a.slide) {
+                        a.enter_master_scope(m);
+                    }
+                })),
+        );
 
         // Placeholders on the active layout, plus add buttons.
         col = col.child(
@@ -1111,6 +1156,53 @@ impl HayateApp {
                 })),
         );
         col.into_any_element()
+    }
+
+    /// A mode banner shown while editing a layout/master in place, with a Close button to return
+    /// to the current slide. Returns None in normal slide editing.
+    fn scope_banner(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let label = match self.scope {
+            crate::EditScope::Slide(_) => return None,
+            crate::EditScope::Layout(l) => format!(
+                "Editing Layout: {}",
+                self.pres
+                    .world
+                    .layout_info
+                    .get(&l)
+                    .map(|li| li.name.clone())
+                    .unwrap_or_else(|| "Layout".to_string())
+            ),
+            crate::EditScope::Master(_) => "Editing Master".to_string(),
+        };
+        Some(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .px_3()
+                .py_1()
+                .bg(rgb(0x1f3a5f))
+                .text_color(rgb(0xffffff))
+                .text_sm()
+                .child(label)
+                .child(
+                    div()
+                        .id("close_master")
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(rgb(0x3a3a3a))
+                        .hover(|s| s.bg(rgb(0x4a4a4a)))
+                        .child("Close ✕")
+                        .on_click(cx.listener(|this, _ev: &ClickEvent, window, cx| {
+                            window.focus(&this.focus, cx);
+                            this.exit_scope();
+                            cx.notify();
+                        })),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The "Save As" dialog: a centered modal over a dimmed backdrop with an editable filename.

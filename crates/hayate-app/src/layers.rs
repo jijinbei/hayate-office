@@ -16,7 +16,7 @@ impl HayateApp {
     /// grouped and indented, each row clickable to select that object.
     pub(crate) fn layers_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
         // Children come back in document order (BACK-to-FRONT); the panel shows FRONT first.
-        let children: Vec<Entity> = self.pres.children(self.slide);
+        let children: Vec<Entity> = self.pres.children(self.container());
         let front_to_back: Vec<Entity> = children.iter().rev().copied().collect();
         // Distinguishing labels: number each kind in creation order (Rectangle 1, Ellipse 1, ...).
         let labels = self.numbered_labels(&children);

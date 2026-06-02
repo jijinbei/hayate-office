@@ -253,7 +253,7 @@ impl HayateApp {
         let (sw, sh) = (self.pres.slide_size.w, self.pres.slide_size.h);
         let mut xs = vec![0, sw / 2, sw];
         let mut ys = vec![0, sh / 2, sh];
-        for other in self.pres.children(self.slide) {
+        for other in self.pres.children(self.container()) {
             if other == moving {
                 continue;
             }

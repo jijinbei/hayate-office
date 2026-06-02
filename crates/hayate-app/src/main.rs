@@ -192,6 +192,8 @@ struct HayateApp {
     /// Layout currently being edited in the Master tab (its placeholders apply to every slide
     /// that uses it). `None` = no layout selected for editing.
     master_layout: Option<Entity>,
+    /// What the canvas edits: the current slide, or a layout/master in master edit mode.
+    scope: EditScope,
     /// Active marquee (rubber-band) selection rect in scene px: (start_x, start_y, cur_x, cur_y).
     marquee: Option<(f32, f32, f32, f32)>,
     /// Last window viewport size; used to refit the slide when the window is resized.
@@ -211,6 +213,27 @@ enum LeftTab {
     Slides,
     Layers,
     Master,
+}
+
+/// What the canvas is currently editing. Slides are the normal case; a layout or master is
+/// edited in place ("master edit mode"), so the same shape tools operate on its children.
+#[derive(Clone, Copy, PartialEq)]
+enum EditScope {
+    Slide(Entity),
+    Layout(Entity),
+    Master(Entity),
+}
+
+impl EditScope {
+    /// The container entity whose children are edited/rendered.
+    fn container(self) -> Entity {
+        match self {
+            EditScope::Slide(e) | EditScope::Layout(e) | EditScope::Master(e) => e,
+        }
+    }
+    fn is_slide(self) -> bool {
+        matches!(self, EditScope::Slide(_))
+    }
 }
 
 struct ContextMenu {
@@ -312,6 +335,7 @@ impl HayateApp {
             doc_path: DOC_PATH.to_string(),
             save_modal: None,
             master_layout: None,
+            scope: EditScope::Slide(slide),
             marquee: None,
             last_viewport: None,
         }

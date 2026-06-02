@@ -8,6 +8,10 @@ use crate::HayateApp;
 
 impl HayateApp {
     pub(crate) fn next_slide(&mut self, delta: i64) {
+        // Slide navigation is disabled while editing a layout/master in place.
+        if !self.scope.is_slide() {
+            return;
+        }
         let slides = self.pres.slides();
         if let Some(i) = slides.iter().position(|&s| s == self.slide) {
             let n = slides.len() as i64;
@@ -21,6 +25,9 @@ impl HayateApp {
 
     /// Add a new slide based on the current slide's layout and switch to it.
     pub(crate) fn add_slide(&mut self) {
+        if !self.scope.is_slide() {
+            return;
+        }
         if let Some(layout) = self
             .pres
             .world
