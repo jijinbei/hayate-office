@@ -129,3 +129,103 @@ pub struct Scene {
     /// Back-to-front paint order.
     pub nodes: Vec<SceneNode>,
 }
+
+/// Read the pixel bounds of a primitive (Quad/Ellipse carry `bounds`; Text uses its block bounds).
+pub fn prim_bounds(prim: &Primitive) -> PxRect {
+    match prim {
+        Primitive::Quad { bounds, .. } => *bounds,
+        Primitive::Ellipse { bounds, .. } => *bounds,
+        Primitive::Text(block) => block.bounds,
+    }
+}
+
+/// Smallest rect covering both inputs.
+fn rect_union(a: PxRect, b: PxRect) -> PxRect {
+    let min_x = a.x.min(b.x);
+    let min_y = a.y.min(b.y);
+    let max_x = (a.x + a.w).max(b.x + b.w);
+    let max_y = (a.y + a.h).max(b.y + b.h);
+    PxRect {
+        x: min_x,
+        y: min_y,
+        w: max_x - min_x,
+        h: max_y - min_y,
+    }
+}
+
+impl Scene {
+    /// Union of every node's primitive bounds, or `None` if the scene has no nodes.
+    /// Useful for fit-to-content and select-all bounds.
+    pub fn content_bounds(&self) -> Option<PxRect> {
+        let mut iter = self.nodes.iter();
+        let first = iter.next()?;
+        let mut acc = prim_bounds(&first.prim);
+        for node in iter {
+            acc = rect_union(acc, prim_bounds(&node.prim));
+        }
+        Some(acc)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn quad_node(x: f32, y: f32, w: f32, h: f32) -> SceneNode {
+        SceneNode {
+            source: None,
+            rotation_deg: 0.0,
+            opacity: 1.0,
+            prim: Primitive::Quad {
+                bounds: PxRect { x, y, w, h },
+                corner_radius: 0.0,
+                fill: None,
+                stroke: None,
+            },
+        }
+    }
+
+    fn scene_with(nodes: Vec<SceneNode>) -> Scene {
+        Scene {
+            size: PxSize { w: 100.0, h: 100.0 },
+            background: Rgba::rgb(0, 0, 0),
+            nodes,
+        }
+    }
+
+    #[test]
+    fn content_bounds_unions_two_quads() {
+        let scene = scene_with(vec![
+            quad_node(10.0, 10.0, 20.0, 20.0),
+            quad_node(50.0, 40.0, 30.0, 10.0),
+        ]);
+        // Union spans x:10..80, y:10..50.
+        assert_eq!(
+            scene.content_bounds(),
+            Some(PxRect {
+                x: 10.0,
+                y: 10.0,
+                w: 70.0,
+                h: 40.0,
+            })
+        );
+    }
+
+    #[test]
+    fn content_bounds_empty_is_none() {
+        let scene = scene_with(vec![]);
+        assert_eq!(scene.content_bounds(), None);
+    }
+
+    #[test]
+    fn content_bounds_single_node_is_its_own_bounds() {
+        let bounds = PxRect {
+            x: 5.0,
+            y: 7.0,
+            w: 12.0,
+            h: 9.0,
+        };
+        let scene = scene_with(vec![quad_node(bounds.x, bounds.y, bounds.w, bounds.h)]);
+        assert_eq!(scene.content_bounds(), Some(bounds));
+    }
+}
