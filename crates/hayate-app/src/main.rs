@@ -392,6 +392,16 @@ impl HayateApp {
         }
     }
 
+    /// Add a new slide based on the current slide's layout and switch to it.
+    fn add_slide(&mut self) {
+        if let Some(layout) = self.pres.world.slide_info.get(&self.slide).map(|s| s.layout) {
+            let s = self.pres.add_slide(layout);
+            self.slide = s;
+            self.selection = None;
+            self.rebuild();
+        }
+    }
+
     fn open(&mut self) {
         match hayate_format::load(DOC_PATH) {
             Ok(p) => {
@@ -451,6 +461,58 @@ fn paint_text(tb: &TextBlock, ox: Pixels, oy: Pixels, window: &mut Window, cx: &
 }
 
 /// A small clickable toolbar button.
+/// Paint a Scene's background and shapes at `o` (window coords). Shared by the main view and
+/// the slide-list thumbnails.
+fn paint_scene(scene: &Scene, o: Point<Pixels>, window: &mut Window, cx: &mut App) {
+    let bg: Background = rgb(rgb_u32(scene.background)).into();
+    window.paint_quad(quad(
+        Bounds {
+            origin: o,
+            size: size(px(scene.size.w), px(scene.size.h)),
+        },
+        px(0.),
+        bg,
+        px(0.),
+        gpui::transparent_black(),
+        Default::default(),
+    ));
+
+    for node in &scene.nodes {
+        match &node.prim {
+            Primitive::Quad { bounds: r, corner_radius, fill: Some(Paint::Solid(c)), .. } => {
+                let b = Bounds {
+                    origin: point(o.x + px(r.x), o.y + px(r.y)),
+                    size: size(px(r.w), px(r.h)),
+                };
+                window.paint_quad(quad(
+                    b,
+                    px(*corner_radius),
+                    Background::from(rgb(rgb_u32(*c))),
+                    px(0.),
+                    gpui::transparent_black(),
+                    Default::default(),
+                ));
+            }
+            Primitive::Ellipse { bounds: r, fill: Some(Paint::Solid(c)), .. } => {
+                let cx_ = o.x + px(r.x + r.w / 2.0);
+                let cy_ = o.y + px(r.y + r.h / 2.0);
+                let rx = px(r.w / 2.0);
+                let ry = px(r.h / 2.0);
+                let mut b = PathBuilder::fill();
+                b.move_to(point(cx_ + rx, cy_));
+                b.arc_to(point(rx, ry), px(0.), false, false, point(cx_ - rx, cy_));
+                b.arc_to(point(rx, ry), px(0.), false, false, point(cx_ + rx, cy_));
+                b.close();
+                if let Ok(path) = b.build() {
+                    window.paint_path(path, rgb(rgb_u32(*c)));
+                }
+            }
+            Primitive::Text(tb) => paint_text(tb, o.x, o.y, window, cx),
+            _ => {}
+        }
+    }
+}
+
 fn tool_button(
     id: &'static str,
     label: impl Into<SharedString>,
@@ -478,8 +540,8 @@ impl Render for HayateApp {
         // Fit the slide into the current window area: content scales as the window grows.
         let vp = window.viewport_size();
         self.view_size = PxSize {
-            w: (f32::from(vp.width) - 24.0).max(64.0),
-            h: (f32::from(vp.height) - 80.0).max(64.0),
+            w: (f32::from(vp.width) - 240.0).max(64.0), // minus slide-list sidebar
+            h: (f32::from(vp.height) - 88.0).max(64.0), // minus top bar
         };
         self.rebuild();
 
@@ -523,50 +585,7 @@ impl Render for HayateApp {
                 let o = bounds.origin;
                 origin_cell.set(o);
 
-                let bg: Background = rgb(rgb_u32(scene.background)).into();
-                window.paint_quad(quad(
-                    Bounds { origin: o, size: size(px(sw), px(sh)) },
-                    px(0.),
-                    bg,
-                    px(0.),
-                    gpui::transparent_black(),
-                    Default::default(),
-                ));
-
-                for node in &scene.nodes {
-                    match &node.prim {
-                        Primitive::Quad { bounds: r, corner_radius, fill: Some(Paint::Solid(c)), .. } => {
-                            let b = Bounds {
-                                origin: point(o.x + px(r.x), o.y + px(r.y)),
-                                size: size(px(r.w), px(r.h)),
-                            };
-                            window.paint_quad(quad(
-                                b,
-                                px(*corner_radius),
-                                Background::from(rgb(rgb_u32(*c))),
-                                px(0.),
-                                gpui::transparent_black(),
-                                Default::default(),
-                            ));
-                        }
-                        Primitive::Ellipse { bounds: r, fill: Some(Paint::Solid(c)), .. } => {
-                            let cx_ = o.x + px(r.x + r.w / 2.0);
-                            let cy_ = o.y + px(r.y + r.h / 2.0);
-                            let rx = px(r.w / 2.0);
-                            let ry = px(r.h / 2.0);
-                            let mut b = PathBuilder::fill();
-                            b.move_to(point(cx_ + rx, cy_));
-                            b.arc_to(point(rx, ry), px(0.), false, false, point(cx_ - rx, cy_));
-                            b.arc_to(point(rx, ry), px(0.), false, false, point(cx_ + rx, cy_));
-                            b.close();
-                            if let Ok(path) = b.build() {
-                                window.paint_path(path, rgb(rgb_u32(*c)));
-                            }
-                        }
-                        Primitive::Text(tb) => paint_text(tb, o.x, o.y, window, cx),
-                        _ => {}
-                    }
-                }
+                paint_scene(&scene, o, window, cx);
 
                 // Selection outline (drawn on top).
                 if let Some(sel) = selection {
@@ -589,6 +608,45 @@ impl Render for HayateApp {
             },
         )
         .size_full();
+
+        // Slide-list sidebar: a clickable thumbnail per slide + an "add slide" button.
+        let slides = self.pres.slides();
+        let current = self.slide;
+        let mut sidebar = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .w(px(208.))
+            .p_2()
+            .bg(rgb(0x252525));
+        sidebar = sidebar.child(tool_button("add_slide", "+ Slide", cx, |this, _w, cx| {
+            this.add_slide();
+            cx.notify();
+        }));
+        for (i, &s) in slides.iter().enumerate() {
+            let tscene = build_slide_scene(&self.pres, s, PxSize { w: 176.0, h: 99.0 });
+            let is_cur = s == current;
+            let tcanvas = canvas(
+                |_, _, _| {},
+                move |b, _, window, cx| paint_scene(&tscene, b.origin, window, cx),
+            )
+            .size_full();
+            sidebar = sidebar.child(
+                div()
+                    .id(("slide", i))
+                    .w(px(176.))
+                    .h(px(99.))
+                    .border_2()
+                    .border_color(if is_cur { rgb(SELECTION) } else { rgb(0x444444) })
+                    .child(tcanvas)
+                    .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+                        this.slide = s;
+                        this.selection = None;
+                        this.rebuild();
+                        cx.notify();
+                    })),
+            );
+        }
 
         div()
             .track_focus(&self.focus)
@@ -626,20 +684,32 @@ impl Render for HayateApp {
             .children(palette_panel)
             .child(
                 div()
-                    .w(px(sw))
-                    .h(px(sh))
-                    .border_1()
-                    .border_color(rgb(0x555555))
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, ev: &MouseDownEvent, window, cx| {
-                            window.focus(&this.focus, cx);
-                            this.on_mouse_down(ev, cx);
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| this.on_mouse_move(ev, cx)))
-                    .on_mouse_up(MouseButton::Left, cx.listener(|this, ev: &MouseUpEvent, _, cx| this.on_mouse_up(ev, cx)))
-                    .child(slide_canvas),
+                    .flex()
+                    .flex_row()
+                    .gap_3()
+                    .child(sidebar)
+                    .child(
+                        div()
+                            .w(px(sw))
+                            .h(px(sh))
+                            .border_1()
+                            .border_color(rgb(0x555555))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                                    window.focus(&this.focus, cx);
+                                    this.on_mouse_down(ev, cx);
+                                }),
+                            )
+                            .on_mouse_move(
+                                cx.listener(|this, ev: &MouseMoveEvent, _, cx| this.on_mouse_move(ev, cx)),
+                            )
+                            .on_mouse_up(
+                                MouseButton::Left,
+                                cx.listener(|this, ev: &MouseUpEvent, _, cx| this.on_mouse_up(ev, cx)),
+                            )
+                            .child(slide_canvas),
+                    ),
             )
     }
 }
