@@ -122,7 +122,9 @@ pub fn export_pptx(
     pxml.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     pxml.push_str(r#"<p:presentation xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">"#);
     // The slide master relationship is rId1 in presentation rels; slides start at rId2.
-    pxml.push_str(r#"<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>"#);
+    pxml.push_str(
+        r#"<p:sldMasterIdLst><p:sldMasterId id="2147483648" r:id="rId1"/></p:sldMasterIdLst>"#,
+    );
     pxml.push_str("<p:sldIdLst>");
     for (idx, _slide) in slides.iter().enumerate() {
         let rid = idx + 2; // rId2.. for slides
@@ -130,10 +132,7 @@ pub fn export_pptx(
         pxml.push_str(&format!(r#"<p:sldId id="{id}" r:id="rId{rid}"/>"#));
     }
     pxml.push_str("</p:sldIdLst>");
-    pxml.push_str(&format!(
-        r#"<p:sldSz cx="{}" cy="{}"/>"#,
-        sz.w, sz.h
-    ));
+    pxml.push_str(&format!(r#"<p:sldSz cx="{}" cy="{}"/>"#, sz.w, sz.h));
     pxml.push_str(&format!(r#"<p:notesSz cx="{}" cy="{}"/>"#, sz.h, sz.w));
     pxml.push_str("</p:presentation>");
     write_part(&mut zip, opts, "ppt/presentation.xml", &pxml)?;
@@ -141,7 +140,9 @@ pub fn export_pptx(
     // --- ppt/_rels/presentation.xml.rels ---
     let mut prels = String::new();
     prels.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
-    prels.push_str(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+    prels.push_str(
+        r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#,
+    );
     prels.push_str(r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideMaster" Target="slideMasters/slideMaster1.xml"/>"#);
     for (idx, _slide) in slides.iter().enumerate() {
         let rid = idx + 2;
@@ -265,8 +266,8 @@ pub fn import_pptx(
     };
 
     // --- presentation.xml: slide size + ordered slide relationship ids ---
-    let pres_xml = read_entry(&mut zip, "ppt/presentation.xml")
-        .ok_or("missing ppt/presentation.xml")?;
+    let pres_xml =
+        read_entry(&mut zip, "ppt/presentation.xml").ok_or("missing ppt/presentation.xml")?;
     let (slide_size, slide_rids) = parse_presentation(&pres_xml);
 
     // --- presentation.xml.rels: map relationship id -> slide part path ---
@@ -594,9 +595,7 @@ fn parse_slide_into(
                 }
                 s.pending.bold = attr_str(e, b"b").as_deref() == Some("1");
                 s.pending.italic = attr_str(e, b"i").as_deref() == Some("1");
-                s.pending.underline = attr_str(e, b"u")
-                    .map(|u| u != "none")
-                    .unwrap_or(false);
+                s.pending.underline = attr_str(e, b"u").map(|u| u != "none").unwrap_or(false);
             }
             "srgbClr" if solidfill_depth > 0 => {
                 if let Some(rgba) = attr_str(e, b"val").as_deref().and_then(parse_hex_rgb) {
@@ -667,15 +666,26 @@ fn parse_slide_into(
                     "sp" => {
                         if let Some(s) = state.take() {
                             // Resolve geometry now that both the preset and frame are known.
-                            let geometry = s.preset.as_deref().and_then(|prst| {
-                                preset_to_geometry(prst, s.adj, s.off.zip(s.ext))
-                            });
-                            commit_shape(pres, slide, s.off, s.ext, s.rotation, geometry, s.fill, s.paras);
+                            let geometry = s
+                                .preset
+                                .as_deref()
+                                .and_then(|prst| preset_to_geometry(prst, s.adj, s.off.zip(s.ext)));
+                            commit_shape(
+                                pres, slide, s.off, s.ext, s.rotation, geometry, s.fill, s.paras,
+                            );
                         }
                     }
                     "pic" => {
                         if let Some(p) = pic.take() {
-                            commit_picture(pres, slide, p.off, p.ext, p.rotation, p.embed.as_deref(), media_by_rid);
+                            commit_picture(
+                                pres,
+                                slide,
+                                p.off,
+                                p.ext,
+                                p.rotation,
+                                p.embed.as_deref(),
+                                media_by_rid,
+                            );
                         }
                     }
                     _ => {}
@@ -967,8 +977,11 @@ fn slide_xml(
         if let Some(pic) = pres.world.pictures.get(&child) {
             if let Some(mp) = media_plan.get(&pic.media_key) {
                 let rid = format!("rId{}", image_rels.len() + 2); // rId1 is the layout
-                // The slide-relative target: ppt/media/imageN.ext -> ../media/imageN.ext.
-                let target = mp.part.strip_prefix("ppt/").map(|t| format!("../{t}"))
+                                                                  // The slide-relative target: ppt/media/imageN.ext -> ../media/imageN.ext.
+                let target = mp
+                    .part
+                    .strip_prefix("ppt/")
+                    .map(|t| format!("../{t}"))
                     .unwrap_or_else(|| mp.part.clone());
                 image_rels.push((rid.clone(), target));
                 let name = pres
@@ -1124,9 +1137,7 @@ fn xfrm_xml(frame: RectEmu, rotation_deg: f32) -> String {
     } else {
         String::new()
     };
-    format!(
-        r#"<a:xfrm{rot_attr}><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>"#
-    )
+    format!(r#"<a:xfrm{rot_attr}><a:off x="{x}" y="{y}"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm>"#)
 }
 
 /// `<a:solidFill><a:srgbClr val="RRGGBB"/></a:solidFill>`, color resolved via the theme.
@@ -1223,7 +1234,9 @@ fn slide_master_xml() -> String {
     s.push_str("</p:spTree>");
     s.push_str("</p:cSld>");
     s.push_str(r#"<p:clrMap bg1="lt1" tx1="dk1" bg2="lt2" tx2="dk2" accent1="accent1" accent2="accent2" accent3="accent3" accent4="accent4" accent5="accent5" accent6="accent6" hlink="hlink" folHlink="folHlink"/>"#);
-    s.push_str(r#"<p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>"#);
+    s.push_str(
+        r#"<p:sldLayoutIdLst><p:sldLayoutId id="2147483649" r:id="rId1"/></p:sldLayoutIdLst>"#,
+    );
     s.push_str("</p:sldMaster>");
     s
 }
@@ -1378,7 +1391,8 @@ mod tests {
         );
 
         // Unique temp path via process id.
-        let path = std::env::temp_dir().join(format!("hayate_pptx_test_{}.pptx", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("hayate_pptx_test_{}.pptx", std::process::id()));
         let _ = std::fs::remove_file(&path);
 
         export_pptx(&p, &path).expect("export should succeed");
@@ -1429,10 +1443,7 @@ mod tests {
         use std::sync::atomic::{AtomicU64, Ordering};
         static COUNTER: AtomicU64 = AtomicU64::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!(
-            "hayate_pptx_{tag}_{}_{n}.pptx",
-            std::process::id()
-        ))
+        std::env::temp_dir().join(format!("hayate_pptx_{tag}_{}_{n}.pptx", std::process::id()))
     }
 
     #[test]
@@ -1489,7 +1500,10 @@ mod tests {
         );
 
         // The slide size round-trips.
-        assert_eq!(imported.slide_size, p.slide_size, "slide size should round-trip");
+        assert_eq!(
+            imported.slide_size, p.slide_size,
+            "slide size should round-trip"
+        );
 
         // At least one shape on the first imported slide has the rect's frame.
         let first = imported.slides()[0];

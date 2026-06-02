@@ -134,6 +134,9 @@ mod tests {
             .iter()
             .filter(|g| g.kind == GuideKind::Vertical && (g.pos - 100.0).abs() < 0.001)
             .count();
-        assert_eq!(vert_at_100, 1, "expected exactly one guide at x=100, got {guides:?}");
+        assert_eq!(
+            vert_at_100, 1,
+            "expected exactly one guide at x=100, got {guides:?}"
+        );
     }
 }

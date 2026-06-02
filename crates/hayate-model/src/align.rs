@@ -221,7 +221,7 @@ mod tests {
         assert_eq!(frame_of(&w, a).origin.x, 70 - 100 / 2); // 20
         assert_eq!(frame_of(&w, b).origin.x, 70 - 40 / 2); // 50
         assert_eq!(frame_of(&w, c).origin.x, 70 - 60 / 2); // 40
-        // y and size untouched.
+                                                           // y and size untouched.
         assert_eq!(frame_of(&w, a).origin.y, 0);
         assert_eq!(frame_of(&w, c).size.w, 60);
 

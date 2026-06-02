@@ -98,12 +98,22 @@ mod tests {
         let frame = CompValue::Frame(RectEmu::new(0, 0, 100, 100));
         h.commit(
             &mut w,
-            Transaction::new("set frame", vec![Operation::SetComponent { entity: e, value: frame.clone() }]),
+            Transaction::new(
+                "set frame",
+                vec![Operation::SetComponent {
+                    entity: e,
+                    value: frame.clone(),
+                }],
+            ),
         );
         assert_eq!(w.get(e, CompKind::Frame), Some(frame.clone()));
 
         assert!(h.undo(&mut w));
-        assert_eq!(w.get(e, CompKind::Frame), None, "undo of first set removes it");
+        assert_eq!(
+            w.get(e, CompKind::Frame),
+            None,
+            "undo of first set removes it"
+        );
 
         assert!(h.redo(&mut w));
         assert_eq!(w.get(e, CompKind::Frame), Some(frame));
@@ -120,11 +130,21 @@ mod tests {
 
         h.commit(
             &mut w,
-            Transaction::new("move", vec![Operation::SetComponent { entity: e, value: b.clone() }]),
+            Transaction::new(
+                "move",
+                vec![Operation::SetComponent {
+                    entity: e,
+                    value: b.clone(),
+                }],
+            ),
         );
         assert_eq!(w.get(e, CompKind::Frame), Some(b));
         assert!(h.undo(&mut w));
-        assert_eq!(w.get(e, CompKind::Frame), Some(a), "undo restores prior frame");
+        assert_eq!(
+            w.get(e, CompKind::Frame),
+            Some(a),
+            "undo restores prior frame"
+        );
     }
 
     #[test]
@@ -141,7 +161,10 @@ mod tests {
                 "add shape",
                 vec![
                     Operation::Spawn { entity: e },
-                    Operation::SetComponent { entity: e, value: frame.clone() },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: frame.clone(),
+                    },
                 ],
             ),
         );

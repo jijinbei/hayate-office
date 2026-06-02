@@ -32,7 +32,10 @@ pub fn save(pres: &Presentation, path: impl AsRef<Path>) -> Result<()> {
         {
             let mut meta = wtx.open_table(META)?;
             meta.insert("format_version", FORMAT_VERSION.as_bytes())?;
-            meta.insert("slide_size", serde_json::to_vec(&pres.slide_size)?.as_slice())?;
+            meta.insert(
+                "slide_size",
+                serde_json::to_vec(&pres.slide_size)?.as_slice(),
+            )?;
             meta.insert(
                 "default_master",
                 serde_json::to_vec(&pres.default_master)?.as_slice(),
@@ -177,7 +180,10 @@ mod tests {
     fn temp_path(tag: &str) -> std::path::PathBuf {
         static N: AtomicU64 = AtomicU64::new(0);
         let n = N.fetch_add(1, Ordering::Relaxed);
-        std::env::temp_dir().join(format!("hayate-test-{tag}-{}-{n}.hayate", std::process::id()))
+        std::env::temp_dir().join(format!(
+            "hayate-test-{tag}-{}-{n}.hayate",
+            std::process::id()
+        ))
     }
 
     #[test]
@@ -203,7 +209,10 @@ mod tests {
         let s = loaded.slides()[0];
         let shapes = loaded.children(s);
         assert_eq!(shapes.len(), 1);
-        assert_eq!(loaded.world.get(shapes[0], CompKind::Frame), Some(CompValue::Frame(frame)));
+        assert_eq!(
+            loaded.world.get(shapes[0], CompKind::Frame),
+            Some(CompValue::Frame(frame))
+        );
         // Inheritance still resolves (theme via master).
         assert!(loaded.theme_of(s).is_some());
 
@@ -225,7 +234,10 @@ mod tests {
     #[test]
     fn autosave_path_appends_extension() {
         let p = std::path::Path::new("deck.hayate");
-        assert_eq!(autosave_path(p), std::path::PathBuf::from("deck.hayate.autosave"));
+        assert_eq!(
+            autosave_path(p),
+            std::path::PathBuf::from("deck.hayate.autosave")
+        );
     }
 
     #[test]

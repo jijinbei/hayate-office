@@ -114,7 +114,10 @@ mod tests {
     #[test]
     fn resolve_literal() {
         let t = Theme::default();
-        assert_eq!(t.resolve_color(&Color::literal(Rgba::rgb(1, 2, 3))), Rgba::rgb(1, 2, 3));
+        assert_eq!(
+            t.resolve_color(&Color::literal(Rgba::rgb(1, 2, 3))),
+            Rgba::rgb(1, 2, 3)
+        );
     }
 
     #[test]
@@ -143,6 +146,9 @@ mod tests {
         let body = FontRef::Theme(ThemeFontSlot::Minor);
         assert_eq!(t.font_family(&body, Script::Latin), "Arial");
         assert_eq!(t.font_family(&body, Script::Ea), "Noto Sans JP");
-        assert_eq!(t.font_family(&FontRef::Family("Mincho".into()), Script::Latin), "Mincho");
+        assert_eq!(
+            t.font_family(&FontRef::Family("Mincho".into()), Script::Latin),
+            "Mincho"
+        );
     }
 }

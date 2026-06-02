@@ -102,7 +102,12 @@ fn stroke_px(stroke: &Option<StrokePx>, opacity: f32, scale: f32) -> Option<(Rgb
 
 /// Scale a color's alpha by `opacity` (0..=1).
 fn apply_opacity(c: Rgba, opacity: f32) -> Rgba {
-    Rgba::rgba(c.r, c.g, c.b, (c.a as f32 * opacity).round().clamp(0.0, 255.0) as u8)
+    Rgba::rgba(
+        c.r,
+        c.g,
+        c.b,
+        (c.a as f32 * opacity).round().clamp(0.0, 255.0) as u8,
+    )
 }
 
 /// Drawing style for a rect/ellipse primitive in output-pixel space.
@@ -261,7 +266,16 @@ fn draw_image_box(buf: &mut [u8], w: usize, h: usize, bounds: &PxRect, sx: f32, 
     let y = bounds.y * sy;
     let bw = bounds.w * sx;
     let bh = bounds.h * sy;
-    fill_px_rect(buf, w, h, x, y, bw, bh, apply_opacity(Rgba::rgb(220, 220, 220), op));
+    fill_px_rect(
+        buf,
+        w,
+        h,
+        x,
+        y,
+        bw,
+        bh,
+        apply_opacity(Rgba::rgb(220, 220, 220), op),
+    );
     let border = apply_opacity(Rgba::rgb(150, 150, 150), op);
     // Border (1px frame).
     fill_px_rect(buf, w, h, x, y, bw, 1.0, border);
@@ -275,7 +289,15 @@ fn draw_image_box(buf: &mut [u8], w: usize, h: usize, bounds: &PxRect, sx: f32, 
 
 /// Draw a text block: one line per paragraph, ASCII via the 5x7 bitmap font, with horizontal
 /// alignment within the block bounds. Rotation is not applied to text (acceptable for debug).
-fn draw_text_block(buf: &mut [u8], w: usize, h: usize, block: &TextBlock, sx: f32, sy: f32, op: f32) {
+fn draw_text_block(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    block: &TextBlock,
+    sx: f32,
+    sy: f32,
+    op: f32,
+) {
     let bx = block.bounds.x * sx;
     let by = block.bounds.y * sy;
     let bw = block.bounds.w * sx;
@@ -283,11 +305,7 @@ fn draw_text_block(buf: &mut [u8], w: usize, h: usize, block: &TextBlock, sx: f3
     let mut line_top = by;
     for para in &block.paragraphs {
         // Glyph cell height from the first run's size (fallback to a readable minimum).
-        let size_px = para
-            .runs
-            .first()
-            .map(|r| r.size_px)
-            .unwrap_or(16.0);
+        let size_px = para.runs.first().map(|r| r.size_px).unwrap_or(16.0);
         let gh = (size_px * sy).max(7.0);
         let scale = gh / 7.0;
         let cell_w = 6.0 * scale; // 5px glyph + 1px advance
@@ -334,7 +352,16 @@ fn draw_run(
                         fill_px_rect(buf, w, h, gx, gy, scale.max(1.0), scale.max(1.0), color);
                         if run.bold {
                             // Pseudo-bold: a second pass shifted by one device pixel.
-                            fill_px_rect(buf, w, h, gx + 1.0, gy, scale.max(1.0), scale.max(1.0), color);
+                            fill_px_rect(
+                                buf,
+                                w,
+                                h,
+                                gx + 1.0,
+                                gy,
+                                scale.max(1.0),
+                                scale.max(1.0),
+                                color,
+                            );
                         }
                     }
                 }
@@ -402,7 +429,12 @@ mod tests {
             size: PxSize { w: 100.0, h: 100.0 },
             background: Rgba::WHITE,
             nodes: vec![quad(
-                PxRect { x: 0.0, y: 0.0, w: 50.0, h: 100.0 },
+                PxRect {
+                    x: 0.0,
+                    y: 0.0,
+                    w: 50.0,
+                    h: 100.0,
+                },
                 Some(Paint::Solid(red)),
             )],
         };
@@ -431,7 +463,12 @@ mod tests {
             size: PxSize { w: 100.0, h: 100.0 },
             background: Rgba::WHITE,
             nodes: vec![ellipse(
-                PxRect { x: 10.0, y: 10.0, w: 80.0, h: 80.0 },
+                PxRect {
+                    x: 10.0,
+                    y: 10.0,
+                    w: 80.0,
+                    h: 80.0,
+                },
                 Some(Paint::Solid(fill)),
             )],
         };
@@ -445,7 +482,12 @@ mod tests {
     fn opacity_halves_alpha_blend() {
         // A half-opaque red over white should land around (255,128,128).
         let mut node = quad(
-            PxRect { x: 0.0, y: 0.0, w: 100.0, h: 100.0 },
+            PxRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 100.0,
+            },
             Some(Paint::Solid(Rgba::rgb(255, 0, 0))),
         );
         node.opacity = 0.5;
@@ -465,7 +507,12 @@ mod tests {
     fn rotated_90_quad_fills_rotated_bounds() {
         // A 80x20 bar rotated 90deg about its center should cover a vertical strip.
         let mut node = quad(
-            PxRect { x: 10.0, y: 40.0, w: 80.0, h: 20.0 },
+            PxRect {
+                x: 10.0,
+                y: 40.0,
+                w: 80.0,
+                h: 20.0,
+            },
             Some(Paint::Solid(Rgba::rgb(0, 128, 0))),
         );
         node.rotation_deg = 90.0;
@@ -485,7 +532,12 @@ mod tests {
     #[test]
     fn text_draws_some_foreground_pixels() {
         let block = TextBlock {
-            bounds: PxRect { x: 0.0, y: 0.0, w: 100.0, h: 30.0 },
+            bounds: PxRect {
+                x: 0.0,
+                y: 0.0,
+                w: 100.0,
+                h: 30.0,
+            },
             paragraphs: vec![ResolvedParagraph {
                 runs: vec![ResolvedRun {
                     text: "AB".to_string(),

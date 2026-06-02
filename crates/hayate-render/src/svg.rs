@@ -172,11 +172,7 @@ fn emit_text(out: &mut String, node: &SceneNode, block: &crate::scene::TextBlock
     let mut baseline = bounds.y;
     for para in &block.paragraphs {
         // Determine the line's font size from the first run (fallback to a default).
-        let size = para
-            .runs
-            .first()
-            .map(|r| r.size_px)
-            .unwrap_or(16.0);
+        let size = para.runs.first().map(|r| r.size_px).unwrap_or(16.0);
         baseline += size;
 
         // Concatenate run text for this paragraph line.
@@ -329,7 +325,10 @@ mod tests {
         let svg = export_svg(&scene);
         assert!(svg.contains("<ellipse"), "should contain <ellipse");
         assert!(svg.contains("fill=\"none\""), "fill-less should be none");
-        assert!(svg.contains("stroke-width=\"2\""), "should carry stroke width");
+        assert!(
+            svg.contains("stroke-width=\"2\""),
+            "should carry stroke width"
+        );
     }
 
     #[test]

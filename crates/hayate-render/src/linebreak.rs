@@ -20,8 +20,8 @@ pub trait LineBreaker {
 /// Characters prohibited at the start of a line (gyoutou kinsoku): closing punctuation,
 /// closing brackets, small kana, prolonged sound mark, iteration mark, etc.
 const LINE_START_PROHIBITED: &[char] = &[
-    '。', '、', '，', '．', '）', '」', '』', '】', '〕', '｝', '！', '？', '・', 'ー', 'ぁ',
-    'ぃ', 'ぅ', 'ぇ', 'ぉ', 'っ', 'ゃ', 'ゅ', 'ょ', '々',
+    '。', '、', '，', '．', '）', '」', '』', '】', '〕', '｝', '！', '？', '・', 'ー', 'ぁ', 'ぃ',
+    'ぅ', 'ぇ', 'ぉ', 'っ', 'ゃ', 'ゅ', 'ょ', '々',
 ];
 
 /// Characters prohibited at the end of a line (gyoumatsu kinsoku): opening brackets that must

@@ -80,7 +80,11 @@ pub struct CommandMeta {
 }
 
 impl CommandMeta {
-    pub fn new(id: impl Into<String>, title: impl Into<String>, category: impl Into<String>) -> Self {
+    pub fn new(
+        id: impl Into<String>,
+        title: impl Into<String>,
+        category: impl Into<String>,
+    ) -> Self {
         Self {
             id: id.into(),
             title: title.into(),
@@ -299,15 +303,13 @@ pub fn builtins() -> CommandRegistry {
             ParamSpec::new("dx", ParamType::Int),
             ParamSpec::new("dy", ParamType::Int),
         ],
-        |world, args| {
-            match (
-                arg_entity(args, "entity"),
-                arg_i64(args, "dx"),
-                arg_i64(args, "dy"),
-            ) {
-                (Some(entity), Some(dx), Some(dy)) => edit::translate(world, entity, dx, dy).ops,
-                _ => vec![],
-            }
+        |world, args| match (
+            arg_entity(args, "entity"),
+            arg_i64(args, "dx"),
+            arg_i64(args, "dy"),
+        ) {
+            (Some(entity), Some(dx), Some(dy)) => edit::translate(world, entity, dx, dy).ops,
+            _ => vec![],
         },
     );
 
@@ -594,7 +596,11 @@ pub fn builtins() -> CommandRegistry {
     for (id, title, attr) in [
         ("shape.toggle_bold", "Toggle Bold", RunAttr::Bold),
         ("shape.toggle_italic", "Toggle Italic", RunAttr::Italic),
-        ("shape.toggle_underline", "Toggle Underline", RunAttr::Underline),
+        (
+            "shape.toggle_underline",
+            "Toggle Underline",
+            RunAttr::Underline,
+        ),
     ] {
         reg.register(
             CommandMeta::new(id, title, "Text"),
@@ -633,7 +639,11 @@ pub fn builtins() -> CommandRegistry {
     // Reads the current TextBody from the World; an entity with no text yields no ops.
     for (id, title, halign) in [
         ("shape.align_text_left", "Align Text Left", HAlign::Left),
-        ("shape.align_text_center", "Align Text Center", HAlign::Center),
+        (
+            "shape.align_text_center",
+            "Align Text Center",
+            HAlign::Center,
+        ),
         ("shape.align_text_right", "Align Text Right", HAlign::Right),
     ] {
         reg.register(
@@ -683,10 +693,18 @@ pub fn builtins() -> CommandRegistry {
     // `hayate_model::align::align`, returning its frame-setting ops (empty for < 2 framed ids).
     for (id, title, how) in [
         ("shapes.align_left", "Align Left", Align::Left),
-        ("shapes.align_hcenter", "Align Center (Horizontal)", Align::HCenter),
+        (
+            "shapes.align_hcenter",
+            "Align Center (Horizontal)",
+            Align::HCenter,
+        ),
         ("shapes.align_right", "Align Right", Align::Right),
         ("shapes.align_top", "Align Top", Align::Top),
-        ("shapes.align_vcenter", "Align Middle (Vertical)", Align::VCenter),
+        (
+            "shapes.align_vcenter",
+            "Align Middle (Vertical)",
+            Align::VCenter,
+        ),
         ("shapes.align_bottom", "Align Bottom", Align::Bottom),
     ] {
         reg.register(
@@ -703,8 +721,16 @@ pub fn builtins() -> CommandRegistry {
     // selection is passed as `entities` (a JSON array of u64 ids). Each delegates to
     // `hayate_model::align::distribute`, returning its ops (empty for < 3 framed ids).
     for (id, title, axis) in [
-        ("shapes.distribute_h", "Distribute Horizontally", Axis::Horizontal),
-        ("shapes.distribute_v", "Distribute Vertically", Axis::Vertical),
+        (
+            "shapes.distribute_h",
+            "Distribute Horizontally",
+            Axis::Horizontal,
+        ),
+        (
+            "shapes.distribute_v",
+            "Distribute Vertically",
+            Axis::Vertical,
+        ),
     ] {
         reg.register(
             CommandMeta::new(id, title, "Arrange"),
@@ -769,9 +795,10 @@ fn reorder_to_edge(world: &World, e: Entity, edge: Edge) -> Vec<Operation> {
     let parent = world.parent.get(&e).copied();
 
     // Collect siblings' order keys (live entities with the same parent, excluding e).
-    let sibling_orders = world.iter().filter(|&s| s != e).filter(|&s| {
-        world.parent.get(&s).copied() == parent
-    });
+    let sibling_orders = world
+        .iter()
+        .filter(|&s| s != e)
+        .filter(|&s| world.parent.get(&s).copied() == parent);
 
     let new_order = match edge {
         Edge::Front => {
@@ -815,7 +842,11 @@ mod tests {
         let mut h = History::new();
 
         let tx = reg
-            .build("shape.move", &json!({ "entity": e.0, "dx": 100, "dy": 0 }), &w)
+            .build(
+                "shape.move",
+                &json!({ "entity": e.0, "dx": 100, "dy": 0 }),
+                &w,
+            )
             .expect("shape.move is registered");
         assert_eq!(tx.label, "Move Shape");
         h.commit(&mut w, tx);
@@ -873,7 +904,9 @@ mod tests {
         h.commit(&mut w, tx);
         assert_eq!(
             w.get(e, CompKind::Fill),
-            Some(CompValue::Fill(Fill::Solid(Color::Literal(Rgba::rgb(255, 0, 0)))))
+            Some(CompValue::Fill(Fill::Solid(Color::Literal(Rgba::rgb(
+                255, 0, 0
+            )))))
         );
 
         // Hex string form.
@@ -887,7 +920,9 @@ mod tests {
         h.commit(&mut w, tx);
         assert_eq!(
             w.get(e, CompKind::Fill),
-            Some(CompValue::Fill(Fill::Solid(Color::Literal(Rgba::rgb(0, 255, 0)))))
+            Some(CompValue::Fill(Fill::Solid(Color::Literal(Rgba::rgb(
+                0, 255, 0
+            )))))
         );
     }
 
@@ -1007,19 +1042,13 @@ mod tests {
     fn manifest_lists_builtin_commands() {
         let reg = builtins();
         let manifest = reg.manifest();
-        let ids: Vec<&str> = manifest
-            .iter()
-            .filter_map(|c| c["id"].as_str())
-            .collect();
+        let ids: Vec<&str> = manifest.iter().filter_map(|c| c["id"].as_str()).collect();
         assert!(ids.contains(&"shape.delete"));
         assert!(ids.contains(&"shape.set_fill"));
         assert!(ids.contains(&"shape.move"));
 
         // Each entry carries the documented shape.
-        let mv = manifest
-            .iter()
-            .find(|c| c["id"] == "shape.move")
-            .unwrap();
+        let mv = manifest.iter().find(|c| c["id"] == "shape.move").unwrap();
         assert_eq!(mv["title"], "Move Shape");
         assert_eq!(mv["category"], "Shape");
         let params = mv["params"].as_array().unwrap();
@@ -1085,9 +1114,7 @@ mod tests {
             assert!(ids.contains(&id.as_str()), "missing {id}");
         }
         // Titles come through alongside ids.
-        assert!(hits
-            .iter()
-            .any(|(_, title)| title == "Fill: Accent 1"));
+        assert!(hits.iter().any(|(_, title)| title == "Fill: Accent 1"));
     }
 
     #[test]
@@ -1140,7 +1167,10 @@ mod tests {
 
         // Undoable as one step (back to the prior rotation).
         assert!(h.undo(&mut w));
-        assert_eq!(w.get(e, CompKind::Rotation), Some(CompValue::Rotation(33.0)));
+        assert_eq!(
+            w.get(e, CompKind::Rotation),
+            Some(CompValue::Rotation(33.0))
+        );
     }
 
     #[test]
@@ -1159,21 +1189,24 @@ mod tests {
             .expect("shape.rotate_by is registered");
         assert_eq!(tx.label, "Rotate By");
         h.commit(&mut w, tx);
-        assert_eq!(w.get(e, CompKind::Rotation), Some(CompValue::Rotation(45.0)));
+        assert_eq!(
+            w.get(e, CompKind::Rotation),
+            Some(CompValue::Rotation(45.0))
+        );
 
         // Undoable as one step (back to 10.0).
         assert!(h.undo(&mut w));
-        assert_eq!(w.get(e, CompKind::Rotation), Some(CompValue::Rotation(10.0)));
+        assert_eq!(
+            w.get(e, CompKind::Rotation),
+            Some(CompValue::Rotation(10.0))
+        );
     }
 
     #[test]
     fn manifest_includes_new_style_and_shape_commands() {
         let reg = builtins();
         let manifest = reg.manifest();
-        let ids: Vec<&str> = manifest
-            .iter()
-            .filter_map(|c| c["id"].as_str())
-            .collect();
+        let ids: Vec<&str> = manifest.iter().filter_map(|c| c["id"].as_str()).collect();
         assert!(ids.contains(&"shape.set_opacity"));
         assert!(ids.contains(&"shape.reset_rotation"));
         assert!(ids.contains(&"shape.rotate_by"));
@@ -1183,10 +1216,7 @@ mod tests {
     fn manifest_includes_set_rotation() {
         let reg = builtins();
         let manifest = reg.manifest();
-        let ids: Vec<&str> = manifest
-            .iter()
-            .filter_map(|c| c["id"].as_str())
-            .collect();
+        let ids: Vec<&str> = manifest.iter().filter_map(|c| c["id"].as_str()).collect();
         assert!(ids.contains(&"shape.set_rotation"));
     }
 
@@ -1320,10 +1350,7 @@ mod tests {
     fn manifest_includes_set_position_and_set_size() {
         let reg = builtins();
         let manifest = reg.manifest();
-        let ids: Vec<&str> = manifest
-            .iter()
-            .filter_map(|c| c["id"].as_str())
-            .collect();
+        let ids: Vec<&str> = manifest.iter().filter_map(|c| c["id"].as_str()).collect();
         assert!(ids.contains(&"shape.set_position"));
         assert!(ids.contains(&"shape.set_size"));
     }
@@ -1378,10 +1405,7 @@ mod tests {
     fn manifest_includes_text_and_fill_commands() {
         let reg = builtins();
         let manifest = reg.manifest();
-        let ids: Vec<&str> = manifest
-            .iter()
-            .filter_map(|c| c["id"].as_str())
-            .collect();
+        let ids: Vec<&str> = manifest.iter().filter_map(|c| c["id"].as_str()).collect();
         assert!(ids.contains(&"shape.set_text"));
         assert!(ids.contains(&"shape.fill_black"));
         assert!(ids.contains(&"shape.fill_white"));
@@ -1485,10 +1509,7 @@ mod tests {
     fn manifest_includes_arrange_commands() {
         let reg = builtins();
         let manifest = reg.manifest();
-        let ids: Vec<&str> = manifest
-            .iter()
-            .filter_map(|c| c["id"].as_str())
-            .collect();
+        let ids: Vec<&str> = manifest.iter().filter_map(|c| c["id"].as_str()).collect();
         for id in [
             "shapes.align_left",
             "shapes.align_hcenter",
@@ -1516,7 +1537,10 @@ mod tests {
         use hayate_ir::text::{Paragraph, Run};
         let (mut w, e) = world_with_framed_shape();
         let body = TextBody {
-            paragraphs: vec![Paragraph::new(vec![default_run("Hello"), default_run("World")])],
+            paragraphs: vec![Paragraph::new(vec![
+                default_run("Hello"),
+                default_run("World"),
+            ])],
             autofit: false,
         };
         w.set(e, CompValue::Text(body));
@@ -1565,7 +1589,11 @@ mod tests {
         let mut h = History::new();
 
         let tx = reg
-            .build("shape.set_font_size", &json!({ "entity": e.0, "pt": 0 }), &w)
+            .build(
+                "shape.set_font_size",
+                &json!({ "entity": e.0, "pt": 0 }),
+                &w,
+            )
             .unwrap();
         h.commit(&mut w, tx);
 
@@ -1693,7 +1721,11 @@ mod tests {
             assert!(tx.ops.is_empty(), "{id}: no text => no ops");
         }
         let tx = reg
-            .build("shape.set_font_size", &json!({ "entity": e.0, "pt": 24 }), &w)
+            .build(
+                "shape.set_font_size",
+                &json!({ "entity": e.0, "pt": 24 }),
+                &w,
+            )
             .unwrap();
         assert!(tx.ops.is_empty(), "set_font_size: no text => no ops");
     }
@@ -1702,10 +1734,7 @@ mod tests {
     fn manifest_includes_text_formatting_commands() {
         let reg = builtins();
         let manifest = reg.manifest();
-        let ids: Vec<&str> = manifest
-            .iter()
-            .filter_map(|c| c["id"].as_str())
-            .collect();
+        let ids: Vec<&str> = manifest.iter().filter_map(|c| c["id"].as_str()).collect();
         for id in [
             "shape.set_font_size",
             "shape.toggle_bold",

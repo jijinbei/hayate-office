@@ -46,25 +46,49 @@ fn main() {
     // 01 move: shift the first accent rect.
     let (mut p, slide, mut h) = deck();
     let r1 = shape(&p, slide, 1);
-    apply(&reg, &mut p, &mut h, "shape.set_position", json!({"entity": r1.0, "x": 30.0, "y": 360.0}));
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.set_position",
+        json!({"entity": r1.0, "x": 30.0, "y": 360.0}),
+    );
     save!("move", &p, slide);
 
     // 02 resize: enlarge the second accent rect.
     let (mut p, slide, mut h) = deck();
     let r2 = shape(&p, slide, 2);
-    apply(&reg, &mut p, &mut h, "shape.set_size", json!({"entity": r2.0, "w": 320.0, "h": 90.0}));
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.set_size",
+        json!({"entity": r2.0, "w": 320.0, "h": 90.0}),
+    );
     save!("resize", &p, slide);
 
     // 03 rotate 30deg.
     let (mut p, slide, mut h) = deck();
     let r1 = shape(&p, slide, 1);
-    apply(&reg, &mut p, &mut h, "shape.set_rotation", json!({"entity": r1.0, "degrees": 30.0}));
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.set_rotation",
+        json!({"entity": r1.0, "degrees": 30.0}),
+    );
     save!("rotate_30", &p, slide);
 
     // 04 rotate 90deg (third rect).
     let (mut p, slide, mut h) = deck();
     let r3 = shape(&p, slide, 3);
-    apply(&reg, &mut p, &mut h, "shape.set_rotation", json!({"entity": r3.0, "degrees": 90.0}));
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.set_rotation",
+        json!({"entity": r3.0, "degrees": 90.0}),
+    );
     save!("rotate_90", &p, slide);
 
     // 05 duplicate: copy the first rect (offset is applied by the editor; here just a copy).
@@ -74,7 +98,11 @@ fn main() {
     let tx = edit::duplicate(&p.world, r1, ne);
     h.commit(&mut p.world, tx);
     // Nudge the copy so it is visually distinct.
-    if let Some(tx) = reg.build("shape.move", &json!({"entity": ne.0, "dx": 300000, "dy": 300000}), &p.world) {
+    if let Some(tx) = reg.build(
+        "shape.move",
+        &json!({"entity": ne.0, "dx": 300000, "dy": 300000}),
+        &p.world,
+    ) {
         h.commit(&mut p.world, tx);
     }
     save!("duplicate", &p, slide);
@@ -82,13 +110,25 @@ fn main() {
     // 06 fill: recolor the second rect via an explicit hex color.
     let (mut p, slide, mut h) = deck();
     let r2 = shape(&p, slide, 2);
-    apply(&reg, &mut p, &mut h, "shape.set_fill", json!({"entity": r2.0, "color": "#E91E63"}));
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.set_fill",
+        json!({"entity": r2.0, "color": "#E91E63"}),
+    );
     save!("fill", &p, slide);
 
     // 07 opacity: make the first rect semi-transparent.
     let (mut p, slide, mut h) = deck();
     let r1 = shape(&p, slide, 1);
-    apply(&reg, &mut p, &mut h, "shape.set_opacity", json!({"entity": r1.0, "value": 0.35}));
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.set_opacity",
+        json!({"entity": r1.0, "value": 0.35}),
+    );
     save!("opacity", &p, slide);
 
     // 08/09 z-order: two overlapping rects, then bring the back one to front.
@@ -96,15 +136,29 @@ fn main() {
     let kids = p.children(slide);
     let (back, _front) = (kids[0], kids[1]);
     save!("zorder_before", &p, slide);
-    apply(&reg, &mut p, &mut h, "shape.bring_to_front", json!({"entity": back.0}));
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.bring_to_front",
+        json!({"entity": back.0}),
+    );
     save!("zorder_after", &p, slide);
 
     // 10 align: top-align the three accent rects (which start at the same y; nudge first).
     let (mut p, slide, mut h) = deck();
-    let (a, b, c) = (shape(&p, slide, 1), shape(&p, slide, 2), shape(&p, slide, 3));
+    let (a, b, c) = (
+        shape(&p, slide, 1),
+        shape(&p, slide, 2),
+        shape(&p, slide, 3),
+    );
     // Spread them vertically first so alignment is visible.
     for (e, y) in [(a, 200.0), (b, 320.0), (c, 120.0)] {
-        if let Some(tx) = reg.build("shape.set_position", &json!({"entity": e.0, "x": pt_x(e, &p), "y": y}), &p.world) {
+        if let Some(tx) = reg.build(
+            "shape.set_position",
+            &json!({"entity": e.0, "x": pt_x(e, &p), "y": y}),
+            &p.world,
+        ) {
             h.commit(&mut p.world, tx);
         }
     }
@@ -115,7 +169,11 @@ fn main() {
 
     // 11 distribute horizontally.
     let (mut p, slide, mut h) = deck();
-    let (a, b, c) = (shape(&p, slide, 1), shape(&p, slide, 2), shape(&p, slide, 3));
+    let (a, b, c) = (
+        shape(&p, slide, 1),
+        shape(&p, slide, 2),
+        shape(&p, slide, 3),
+    );
     let tx = hayate_model::align::distribute(&p.world, &[a, b, c], Axis::Horizontal);
     h.commit(&mut p.world, tx);
     save!("distribute_h", &p, slide);
@@ -123,7 +181,13 @@ fn main() {
     // 12 text: set ASCII text on the title to verify the bitmap font.
     let (mut p, slide, mut h) = deck();
     let title = shape(&p, slide, 0);
-    apply(&reg, &mut p, &mut h, "shape.set_text", json!({"entity": title.0, "text": "HELLO WORLD 0123 (slide)"}));
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.set_text",
+        json!({"entity": title.0, "text": "HELLO WORLD 0123 (slide)"}),
+    );
     save!("text_ascii", &p, slide);
 
     // 13 animation: add a fade entrance on the first rect, snapshot at t=0/350/700ms.
@@ -132,7 +196,14 @@ fn main() {
     let tx = edit::add_entrance(&p.world, slide, r1, Effect::Fade, 700);
     h.commit(&mut p.world, tx);
     for t in [0u32, 350, 700] {
-        write_shot(out_dir, &mut idx, &format!("anim_fade_{t}ms"), &p, slide, Some(t));
+        write_shot(
+            out_dir,
+            &mut idx,
+            &format!("anim_fade_{t}ms"),
+            &p,
+            slide,
+            Some(t),
+        );
     }
 
     // 14 round rect + stroke: a rounded rectangle with a thick border, plus a stroked ellipse.
@@ -143,12 +214,16 @@ fn main() {
         let slide = p.add_slide(layout);
 
         let rr = p.add_shape(slide);
-        p.world
-            .frames
-            .insert(rr, RectEmu::new(inch_f(1.0), inch_f(1.5), inch_f(4.0), inch_f(2.5)));
-        p.world
-            .geometries
-            .insert(rr, Geometry::RoundRect { radius: inch_f(0.5) });
+        p.world.frames.insert(
+            rr,
+            RectEmu::new(inch_f(1.0), inch_f(1.5), inch_f(4.0), inch_f(2.5)),
+        );
+        p.world.geometries.insert(
+            rr,
+            Geometry::RoundRect {
+                radius: inch_f(0.5),
+            },
+        );
         p.world
             .fills
             .insert(rr, Fill::Solid(Color::theme(ThemeColorToken::Accent2)));
@@ -158,9 +233,10 @@ fn main() {
         );
 
         let el = p.add_shape(slide);
-        p.world
-            .frames
-            .insert(el, RectEmu::new(inch_f(6.0), inch_f(1.5), inch_f(3.0), inch_f(2.5)));
+        p.world.frames.insert(
+            el,
+            RectEmu::new(inch_f(6.0), inch_f(1.5), inch_f(3.0), inch_f(2.5)),
+        );
         p.world.geometries.insert(el, Geometry::Ellipse);
         // Stroke only (no fill) to verify outline rendering.
         p.world.strokes.insert(
@@ -173,10 +249,34 @@ fn main() {
     // 15 text formatting: bold + larger + centered title via the new core commands.
     let (mut p, slide, mut h) = deck();
     let title = shape(&p, slide, 0);
-    apply(&reg, &mut p, &mut h, "shape.set_text", json!({"entity": title.0, "text": "BIG"}));
-    apply(&reg, &mut p, &mut h, "shape.toggle_bold", json!({"entity": title.0}));
-    apply(&reg, &mut p, &mut h, "shape.set_font_size", json!({"entity": title.0, "pt": 54.0}));
-    apply(&reg, &mut p, &mut h, "shape.align_text_center", json!({"entity": title.0}));
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.set_text",
+        json!({"entity": title.0, "text": "BIG"}),
+    );
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.toggle_bold",
+        json!({"entity": title.0}),
+    );
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.set_font_size",
+        json!({"entity": title.0, "pt": 54.0}),
+    );
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.align_text_center",
+        json!({"entity": title.0}),
+    );
     save!("text_format", &p, slide);
 
     // 16 PPTX round-trip with a round rect (radius) and an embedded image.
@@ -187,12 +287,16 @@ fn main() {
         let slide = p.add_slide(layout);
 
         let rr = p.add_shape(slide);
-        p.world
-            .frames
-            .insert(rr, RectEmu::new(inch_f(0.8), inch_f(1.2), inch_f(4.0), inch_f(2.5)));
-        p.world
-            .geometries
-            .insert(rr, Geometry::RoundRect { radius: inch_f(0.6) });
+        p.world.frames.insert(
+            rr,
+            RectEmu::new(inch_f(0.8), inch_f(1.2), inch_f(4.0), inch_f(2.5)),
+        );
+        p.world.geometries.insert(
+            rr,
+            Geometry::RoundRect {
+                radius: inch_f(0.6),
+            },
+        );
         p.world
             .fills
             .insert(rr, Fill::Solid(Color::theme(ThemeColorToken::Accent3)));
@@ -211,9 +315,10 @@ fn main() {
         let png = hayate_render::encode_png(&rgba, img_w, img_h);
         let key = p.add_media(png);
         let pic = p.add_shape(slide);
-        p.world
-            .frames
-            .insert(pic, RectEmu::new(inch_f(5.5), inch_f(1.2), inch_f(3.0), inch_f(2.25)));
+        p.world.frames.insert(
+            pic,
+            RectEmu::new(inch_f(5.5), inch_f(1.2), inch_f(3.0), inch_f(2.25)),
+        );
         p.world.pictures.insert(
             pic,
             hayate_ir::image::PictureRef {
@@ -227,7 +332,14 @@ fn main() {
         if hayate_format_pptx::export_pptx(&p, &tmp).is_ok() {
             if let Ok(imported) = hayate_format_pptx::import_pptx(&tmp) {
                 let islide = imported.slides().first().copied().unwrap_or(slide);
-                write_shot(out_dir, &mut idx, "roundrect_image_roundtrip", &imported, islide, None);
+                write_shot(
+                    out_dir,
+                    &mut idx,
+                    "roundrect_image_roundtrip",
+                    &imported,
+                    islide,
+                    None,
+                );
             }
         }
         let _ = std::fs::remove_file(&tmp);
@@ -253,7 +365,13 @@ fn main() {
 
 /// Apply a registry command, committing it to history. Logs a no-op if the command is unknown
 /// or produced no operations.
-fn apply(reg: &CommandRegistry, p: &mut Presentation, h: &mut History, id: &str, args: serde_json::Value) {
+fn apply(
+    reg: &CommandRegistry,
+    p: &mut Presentation,
+    h: &mut History,
+    id: &str,
+    args: serde_json::Value,
+) {
     match reg.build(id, &args, &p.world) {
         Some(tx) => h.commit(&mut p.world, tx),
         None => eprintln!("command {id} produced no transaction (args: {args})"),
@@ -261,8 +379,18 @@ fn apply(reg: &CommandRegistry, p: &mut Presentation, h: &mut History, id: &str,
 }
 
 /// Render `slide` of `p` and write the next-numbered PNG. `t` selects an animation time.
-fn write_shot(out: &Path, idx: &mut u32, name: &str, p: &Presentation, slide: Entity, t: Option<u32>) {
-    let target = PxSize { w: OUT_W as f32, h: OUT_H as f32 };
+fn write_shot(
+    out: &Path,
+    idx: &mut u32,
+    name: &str,
+    p: &Presentation,
+    slide: Entity,
+    t: Option<u32>,
+) {
+    let target = PxSize {
+        w: OUT_W as f32,
+        h: OUT_H as f32,
+    };
     let scene = match t {
         Some(ms) => build_slide_scene_at(p, slide, target, ms),
         None => build_slide_scene(p, slide, target),
@@ -298,9 +426,10 @@ fn deck() -> (Presentation, Entity, History) {
     let slide = p.add_slide(layout);
 
     let title = p.add_shape(slide);
-    p.world
-        .frames
-        .insert(title, RectEmu::new(inch_f(0.5), inch_f(0.3), inch_f(9.0), inch_f(1.0)));
+    p.world.frames.insert(
+        title,
+        RectEmu::new(inch_f(0.5), inch_f(0.3), inch_f(9.0), inch_f(1.0)),
+    );
     p.world.texts.insert(
         title,
         TextBody {
@@ -333,9 +462,10 @@ fn deck() -> (Presentation, Entity, History) {
     }
 
     let oval = p.add_shape(slide);
-    p.world
-        .frames
-        .insert(oval, RectEmu::new(inch_f(6.8), inch_f(1.8), inch_f(2.4), inch_f(1.6)));
+    p.world.frames.insert(
+        oval,
+        RectEmu::new(inch_f(6.8), inch_f(1.8), inch_f(2.4), inch_f(1.6)),
+    );
     p.world.geometries.insert(oval, Geometry::Ellipse);
     p.world
         .fills
@@ -352,18 +482,24 @@ fn overlap_deck() -> (Presentation, Entity, History) {
     let slide = p.add_slide(layout);
 
     let back = p.add_shape(slide);
-    p.world
-        .frames
-        .insert(back, RectEmu::new(inch_f(2.0), inch_f(2.0), inch_f(4.0), inch_f(3.0)));
+    p.world.frames.insert(
+        back,
+        RectEmu::new(inch_f(2.0), inch_f(2.0), inch_f(4.0), inch_f(3.0)),
+    );
     p.world.geometries.insert(back, Geometry::Rect);
-    p.world.fills.insert(back, Fill::Solid(Color::theme(ThemeColorToken::Accent1)));
+    p.world
+        .fills
+        .insert(back, Fill::Solid(Color::theme(ThemeColorToken::Accent1)));
 
     let front = p.add_shape(slide);
-    p.world
-        .frames
-        .insert(front, RectEmu::new(inch_f(3.5), inch_f(3.0), inch_f(4.0), inch_f(3.0)));
+    p.world.frames.insert(
+        front,
+        RectEmu::new(inch_f(3.5), inch_f(3.0), inch_f(4.0), inch_f(3.0)),
+    );
     p.world.geometries.insert(front, Geometry::Rect);
-    p.world.fills.insert(front, Fill::Solid(Color::theme(ThemeColorToken::Accent2)));
+    p.world
+        .fills
+        .insert(front, Fill::Solid(Color::theme(ThemeColorToken::Accent2)));
 
     (p, slide, History::new())
 }

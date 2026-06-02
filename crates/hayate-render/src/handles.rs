@@ -31,14 +31,14 @@ pub fn resize_handles(r: PxRect, rotation_deg: f32) -> [(f32, f32); 8] {
     let mid_y = cy;
 
     let unrotated = [
-        (left, top),      // TL
-        (mid_x, top),     // T
-        (right, top),     // TR
-        (right, mid_y),   // R
-        (right, bottom),  // BR
-        (mid_x, bottom),  // B
-        (left, bottom),   // BL
-        (left, mid_y),    // L
+        (left, top),     // TL
+        (mid_x, top),    // T
+        (right, top),    // TR
+        (right, mid_y),  // R
+        (right, bottom), // BR
+        (mid_x, bottom), // B
+        (left, bottom),  // BL
+        (left, mid_y),   // L
     ];
 
     let mut out = [(0.0f32, 0.0f32); 8];
@@ -80,9 +80,17 @@ mod tests {
         assert!(approx_pt(h[0], (r.x, r.y)), "TL = {:?}", h[0]);
         assert!(approx_pt(h[1], (r.x + r.w / 2.0, r.y)), "T = {:?}", h[1]);
         assert!(approx_pt(h[2], (r.x + r.w, r.y)), "TR = {:?}", h[2]);
-        assert!(approx_pt(h[3], (r.x + r.w, r.y + r.h / 2.0)), "R = {:?}", h[3]);
+        assert!(
+            approx_pt(h[3], (r.x + r.w, r.y + r.h / 2.0)),
+            "R = {:?}",
+            h[3]
+        );
         assert!(approx_pt(h[4], (r.x + r.w, r.y + r.h)), "BR = {:?}", h[4]);
-        assert!(approx_pt(h[5], (r.x + r.w / 2.0, r.y + r.h)), "B = {:?}", h[5]);
+        assert!(
+            approx_pt(h[5], (r.x + r.w / 2.0, r.y + r.h)),
+            "B = {:?}",
+            h[5]
+        );
         assert!(approx_pt(h[6], (r.x, r.y + r.h)), "BL = {:?}", h[6]);
         assert!(approx_pt(h[7], (r.x, r.y + r.h / 2.0)), "L = {:?}", h[7]);
     }
@@ -113,10 +121,18 @@ mod tests {
 
         // Clockwise 90 deg in Y-down space: TL (0,0) -> (right, top) = TR position.
         let tr_pos = (r.x + r.w, r.y);
-        assert!(approx_pt(h[0], tr_pos), "rotated TL = {:?}, expected near {:?}", h[0], tr_pos);
+        assert!(
+            approx_pt(h[0], tr_pos),
+            "rotated TL = {:?}, expected near {:?}",
+            h[0],
+            tr_pos
+        );
 
         // It must no longer sit on the original TL corner.
-        assert!(!approx_pt(h[0], (r.x, r.y)), "TL should move under rotation");
+        assert!(
+            !approx_pt(h[0], (r.x, r.y)),
+            "TL should move under rotation"
+        );
 
         // Sanity: still centered.
         assert!(approx(cx, 50.0) && approx(cy, 50.0));

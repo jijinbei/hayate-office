@@ -34,7 +34,11 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
         let bounds = vp.rect(frame);
         let rotation_deg = p.world.rotations.get(&e).copied().unwrap_or(0.0);
         let opacity = p.world.opacity.get(&e).copied().unwrap_or(1.0);
-        let fill = p.world.fills.get(&e).map(|f| Paint::Solid(paint_to_rgba(f, &theme)));
+        let fill = p
+            .world
+            .fills
+            .get(&e)
+            .map(|f| Paint::Solid(paint_to_rgba(f, &theme)));
         let stroke = p.world.strokes.get(&e).map(|s| StrokePx {
             color: theme.resolve_color(&s.color),
             width: vp.len(s.width),
@@ -136,7 +140,11 @@ pub fn build_slide_scene_at(p: &Presentation, slide: Entity, target: PxSize, t_m
 
             if let AnimKind::Entrance(_effect) = anim.kind {
                 let progress = if anim.duration == 0 {
-                    if t_ms >= anim_start { 1.0 } else { 0.0 }
+                    if t_ms >= anim_start {
+                        1.0
+                    } else {
+                        0.0
+                    }
                 } else {
                     let elapsed = t_ms as i64 - anim_start as i64;
                     (elapsed as f32 / anim.duration as f32).clamp(0.0, 1.0)
@@ -170,7 +178,12 @@ fn paint_to_rgba(fill: &Fill, theme: &Theme) -> Rgba {
     }
 }
 
-fn resolve_text(tb: &TextBody, theme: &Theme, vp: &Viewport, bounds: crate::scene::PxRect) -> TextBlock {
+fn resolve_text(
+    tb: &TextBody,
+    theme: &Theme,
+    vp: &Viewport,
+    bounds: crate::scene::PxRect,
+) -> TextBlock {
     let paragraphs = tb
         .paragraphs
         .iter()
@@ -232,7 +245,9 @@ mod tests {
 
         // A rectangle filled with accent1.
         let rect = p.add_shape(slide);
-        p.world.frames.insert(rect, RectEmu::new(0, 0, 914_400, 914_400));
+        p.world
+            .frames
+            .insert(rect, RectEmu::new(0, 0, 914_400, 914_400));
         p.world.geometries.insert(rect, Geometry::Rect);
         p.world
             .fills
@@ -240,7 +255,9 @@ mod tests {
 
         // A text box with a Japanese run.
         let text = p.add_shape(slide);
-        p.world.frames.insert(text, RectEmu::new(0, 914_400, 5_000_000, 914_400));
+        p.world
+            .frames
+            .insert(text, RectEmu::new(0, 914_400, 5_000_000, 914_400));
         p.world.texts.insert(
             text,
             TextBody {
@@ -275,7 +292,10 @@ mod tests {
         let scene = build_slide_scene(&p, slide, PxSize { w: 960.0, h: 540.0 });
         let theme = Theme::default();
         match &scene.nodes[0].prim {
-            Primitive::Quad { fill: Some(Paint::Solid(c)), .. } => {
+            Primitive::Quad {
+                fill: Some(Paint::Solid(c)),
+                ..
+            } => {
                 assert_eq!(*c, theme.color_for(ThemeColorToken::Accent1));
             }
             other => panic!("expected filled quad, got {other:?}"),
@@ -307,11 +327,15 @@ mod tests {
         let slide = p.add_slide(layout);
 
         let animated = p.add_shape(slide);
-        p.world.frames.insert(animated, RectEmu::new(0, 0, 914_400, 914_400));
+        p.world
+            .frames
+            .insert(animated, RectEmu::new(0, 0, 914_400, 914_400));
         p.world.geometries.insert(animated, Geometry::Rect);
 
         let still = p.add_shape(slide);
-        p.world.frames.insert(still, RectEmu::new(914_400, 0, 914_400, 914_400));
+        p.world
+            .frames
+            .insert(still, RectEmu::new(914_400, 0, 914_400, 914_400));
         p.world.geometries.insert(still, Geometry::Rect);
 
         // One entrance fade over [0, 1000ms] targeting `animated`.
@@ -353,10 +377,16 @@ mod tests {
         assert!(opacity_of(&at0, animated) < 0.01, "t=0 should be ~0");
 
         let at500 = build_slide_scene_at(&p, slide, target, 500);
-        assert!((opacity_of(&at500, animated) - 0.5).abs() < 0.01, "t=500 should be ~0.5");
+        assert!(
+            (opacity_of(&at500, animated) - 0.5).abs() < 0.01,
+            "t=500 should be ~0.5"
+        );
 
         let at1000 = build_slide_scene_at(&p, slide, target, 1000);
-        assert!((opacity_of(&at1000, animated) - 1.0).abs() < 0.01, "t=1000 should be ~1");
+        assert!(
+            (opacity_of(&at1000, animated) - 1.0).abs() < 0.01,
+            "t=1000 should be ~1"
+        );
     }
 
     #[test]
@@ -366,7 +396,11 @@ mod tests {
 
         for t in [0, 500, 1000, 5000] {
             let scene = build_slide_scene_at(&p, slide, target, t);
-            assert_eq!(opacity_of(&scene, still), 1.0, "static shape stays opaque at t={t}");
+            assert_eq!(
+                opacity_of(&scene, still),
+                1.0,
+                "static shape stays opaque at t={t}"
+            );
         }
     }
 
@@ -393,7 +427,9 @@ mod tests {
 
         // An entity with both a picture and a (competing) geometry: picture wins.
         let pic = p.add_shape(slide);
-        p.world.frames.insert(pic, RectEmu::new(0, 0, 914_400, 914_400));
+        p.world
+            .frames
+            .insert(pic, RectEmu::new(0, 0, 914_400, 914_400));
         p.world.geometries.insert(pic, Geometry::Rect);
         p.world.pictures.insert(
             pic,

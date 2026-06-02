@@ -11,14 +11,15 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    App, Background, Bounds, ClickEvent, Context, Corners, ElementInputHandler, EntityInputHandler,
-    Font, FontStyle, FontWeight, Hsla, Image, ImageFormat, KeyDownEvent, MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, PathPromptOptions,
-    Pixels, Point, SharedString, TextRun, UTF16Selection, Window, WindowBounds, WindowOptions,
-    canvas, div, point, prelude::*, px, quad, rgb, size,
+    canvas, div, point, prelude::*, px, quad, rgb, size, App, Background, Bounds, ClickEvent,
+    Context, Corners, ElementInputHandler, EntityInputHandler, Font, FontStyle, FontWeight, Hsla,
+    Image, ImageFormat, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    PathBuilder, PathPromptOptions, Pixels, Point, SharedString, TextRun, UTF16Selection, Window,
+    WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 
+use hayate_core::CommandRegistry;
 use hayate_ir::color::{Color, Rgba, ThemeColorToken};
 use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::frac::FracIndex;
@@ -31,7 +32,6 @@ use hayate_ir::theme::Theme;
 use hayate_ir::units::{inch_f, pt};
 use hayate_ir::world::{CompValue, Entity};
 use hayate_model::{edit, History, Operation, Transaction};
-use hayate_core::CommandRegistry;
 use hayate_render::scene::{Paint, Primitive, PxRect, PxSize, ResolvedRun, Scene, TextBlock};
 use hayate_render::{
     alignment_guides, build_slide_scene, build_slide_scene_at, grid_lines, hit_test,
@@ -49,9 +49,10 @@ fn sample_presentation() -> Presentation {
     let slide = p.add_slide(layout);
 
     let title = p.add_shape(slide);
-    p.world
-        .frames
-        .insert(title, RectEmu::new(inch_f(0.5), inch_f(0.3), inch_f(9.0), inch_f(1.0)));
+    p.world.frames.insert(
+        title,
+        RectEmu::new(inch_f(0.5), inch_f(0.3), inch_f(9.0), inch_f(1.0)),
+    );
     p.world.texts.insert(
         title,
         TextBody {
@@ -84,9 +85,10 @@ fn sample_presentation() -> Presentation {
     }
 
     let oval = p.add_shape(slide);
-    p.world
-        .frames
-        .insert(oval, RectEmu::new(inch_f(6.8), inch_f(1.8), inch_f(2.4), inch_f(1.6)));
+    p.world.frames.insert(
+        oval,
+        RectEmu::new(inch_f(6.8), inch_f(1.8), inch_f(2.4), inch_f(1.6)),
+    );
     p.world.geometries.insert(oval, Geometry::Ellipse);
     p.world
         .fills
@@ -255,6 +257,24 @@ struct ContextMenu {
     x: f32,
     y: f32,
     target: MenuTarget,
+}
+
+/// Drag-and-drop payload identifying the slide being reordered in the sidebar.
+#[derive(Clone, Copy)]
+struct DraggedSlide(Entity);
+
+/// A lightweight preview rendered under the cursor while dragging a slide thumbnail.
+struct SlideDragPreview;
+
+impl Render for SlideDragPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        div()
+            .w(px(176.))
+            .h(px(99.))
+            .border_2()
+            .border_color(rgb(SELECTION))
+            .bg(rgb(0x2b2b2b))
+    }
 }
 
 struct TextEdit {
@@ -429,10 +449,15 @@ impl HayateApp {
                         t.add_slide();
                         cx.notify();
                     }))
-                    .child(menu_item("m_dup_slide", "Duplicate Slide", cx, |t, _w, cx| {
-                        t.duplicate_slide();
-                        cx.notify();
-                    }))
+                    .child(menu_item(
+                        "m_dup_slide",
+                        "Duplicate Slide",
+                        cx,
+                        |t, _w, cx| {
+                            t.duplicate_slide();
+                            cx.notify();
+                        },
+                    ))
                     .child(menu_divider())
                     .child(menu_item("m_del_slide", "Delete Slide", cx, |t, _w, cx| {
                         t.delete_slide();
@@ -509,7 +534,9 @@ impl HayateApp {
             if !ok_ext {
                 return;
             }
-            let Ok(bytes) = std::fs::read(&path) else { return };
+            let Ok(bytes) = std::fs::read(&path) else {
+                return;
+            };
             let _ = this.update(cx, |this, cx| {
                 this.insert_image_bytes(bytes);
                 cx.notify();
@@ -536,10 +563,22 @@ impl HayateApp {
             "insert image",
             vec![
                 Operation::Spawn { entity: e },
-                Operation::SetComponent { entity: e, value: CompValue::Parent(self.slide) },
-                Operation::SetComponent { entity: e, value: CompValue::Order(order) },
-                Operation::SetComponent { entity: e, value: CompValue::Frame(frame) },
-                Operation::SetComponent { entity: e, value: CompValue::Picture(pic) },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Parent(self.slide),
+                },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Order(order),
+                },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Frame(frame),
+                },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Picture(pic),
+                },
             ],
         );
         self.commit_tx(tx);
@@ -584,7 +623,13 @@ impl HayateApp {
     /// Add a fade-in entrance animation to the selected shape on the current slide.
     fn add_fade_in(&mut self) {
         if let Some(e) = self.selection {
-            let tx = edit::add_entrance(&self.pres.world, self.slide, e, hayate_ir::anim::Effect::Fade, 600);
+            let tx = edit::add_entrance(
+                &self.pres.world,
+                self.slide,
+                e,
+                hayate_ir::anim::Effect::Fade,
+                600,
+            );
             self.commit_tx(tx);
         }
     }
@@ -679,7 +724,12 @@ impl HayateApp {
 
     /// Core of the IME replace methods: splice `text` into the edit buffer at `range`
     /// (UTF-16), update the marked range, and live-render.
-    fn ime_replace(&mut self, range: Option<Range<usize>>, text: &str, new_marked: Option<Range<usize>>) {
+    fn ime_replace(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        new_marked: Option<Range<usize>>,
+    ) {
         let (e, buf) = {
             let te = match self.text_edit.as_mut() {
                 Some(t) => t,
@@ -723,10 +773,22 @@ impl HayateApp {
             "add text",
             vec![
                 Operation::Spawn { entity: e },
-                Operation::SetComponent { entity: e, value: CompValue::Parent(self.slide) },
-                Operation::SetComponent { entity: e, value: CompValue::Order(order) },
-                Operation::SetComponent { entity: e, value: CompValue::Frame(frame) },
-                Operation::SetComponent { entity: e, value: CompValue::Text(body) },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Parent(self.slide),
+                },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Order(order),
+                },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Frame(frame),
+                },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Text(body),
+                },
             ],
         );
         self.commit_tx(tx);
@@ -765,8 +827,12 @@ impl HayateApp {
                             FieldKind::Rotation => self.set_rotation_abs(v.rem_euclid(360.0)),
                             FieldKind::PosX => self.set_frame_field(|f| f.origin.x = pt_to_emu(v)),
                             FieldKind::PosY => self.set_frame_field(|f| f.origin.y = pt_to_emu(v)),
-                            FieldKind::SizeW => self.set_frame_field(|f| f.size.w = pt_to_emu(v).max(12_700)),
-                            FieldKind::SizeH => self.set_frame_field(|f| f.size.h = pt_to_emu(v).max(12_700)),
+                            FieldKind::SizeW => {
+                                self.set_frame_field(|f| f.size.w = pt_to_emu(v).max(12_700))
+                            }
+                            FieldKind::SizeH => {
+                                self.set_frame_field(|f| f.size.h = pt_to_emu(v).max(12_700))
+                            }
                             FieldKind::Opacity => self.set_opacity_pct(v),
                         }
                     }
@@ -777,7 +843,9 @@ impl HayateApp {
                     fe.buf.pop();
                 }
             }
-            s if s.len() == 1 && (s.chars().all(|c| c.is_ascii_digit()) || s == "." || s == "-") => {
+            s if s.len() == 1
+                && (s.chars().all(|c| c.is_ascii_digit()) || s == "." || s == "-") =>
+            {
                 if let Some(fe) = self.field_edit.as_mut() {
                     if fe.buf.len() < 8 {
                         fe.buf.push_str(s);
@@ -804,14 +872,19 @@ impl HayateApp {
             let v = (pct / 100.0).clamp(0.0, 1.0);
             let tx = Transaction::new(
                 "set opacity",
-                vec![Operation::SetComponent { entity: e, value: CompValue::Opacity(v) }],
+                vec![Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Opacity(v),
+                }],
             );
             self.commit_tx(tx);
         }
     }
 
     fn field_current(&self, kind: FieldKind) -> String {
-        let frame = self.selection.and_then(|e| self.pres.world.frames.get(&e).copied());
+        let frame = self
+            .selection
+            .and_then(|e| self.pres.world.frames.get(&e).copied());
         let to_pt = |v: i64| (v as f32 / 12_700.0).round() as i32;
         match kind {
             FieldKind::Rotation => format!("{}", self.sel_rotation().round() as i32),
@@ -837,12 +910,20 @@ impl HayateApp {
     }
 
     /// A clickable numeric field (click to type; shows the current value otherwise).
-    fn num_field(&self, id: &'static str, kind: FieldKind, cx: &mut Context<Self>) -> impl IntoElement {
+    fn num_field(
+        &self,
+        id: &'static str,
+        kind: FieldKind,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let editing = matches!(&self.field_edit, Some(fe) if fe.kind == kind);
         let shown = if editing {
             format!(
                 "{}|",
-                self.field_edit.as_ref().map(|f| f.buf.clone()).unwrap_or_default()
+                self.field_edit
+                    .as_ref()
+                    .map(|f| f.buf.clone())
+                    .unwrap_or_default()
             )
         } else {
             self.field_current(kind)
@@ -852,7 +933,11 @@ impl HayateApp {
             .px_2()
             .py_1()
             .rounded_md()
-            .bg(if editing { rgb(0x1f3a5f) } else { rgb(0x3a3a3a) })
+            .bg(if editing {
+                rgb(0x1f3a5f)
+            } else {
+                rgb(0x3a3a3a)
+            })
             .child(shown)
             .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
                 this.begin_field_edit(kind);
@@ -877,7 +962,10 @@ impl HayateApp {
                     .and_then(|t| t.as_str())
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| id.clone());
-                if q.is_empty() || id.to_lowercase().contains(&q) || title.to_lowercase().contains(&q) {
+                if q.is_empty()
+                    || id.to_lowercase().contains(&q)
+                    || title.to_lowercase().contains(&q)
+                {
                     Some((id, title))
                 } else {
                     None
@@ -1136,7 +1224,10 @@ impl HayateApp {
         let cmd = k.modifiers.platform || k.modifiers.control;
         match k.key.as_str() {
             "p" if cmd => {
-                self.palette = Some(PaletteState { query: String::new(), sel: 0 });
+                self.palette = Some(PaletteState {
+                    query: String::new(),
+                    sel: 0,
+                });
                 cx.notify();
             }
             "e" if cmd && k.modifiers.shift => self.export_pptx(),
@@ -1256,7 +1347,13 @@ impl HayateApp {
 
     /// Add a new slide based on the current slide's layout and switch to it.
     fn add_slide(&mut self) {
-        if let Some(layout) = self.pres.world.slide_info.get(&self.slide).map(|s| s.layout) {
+        if let Some(layout) = self
+            .pres
+            .world
+            .slide_info
+            .get(&self.slide)
+            .map(|s| s.layout)
+        {
             let s = self.pres.add_slide(layout);
             self.slide = s;
             self.selection = None;
@@ -1266,7 +1363,13 @@ impl HayateApp {
 
     /// Duplicate the current slide (copying its shapes) and switch to the copy.
     fn duplicate_slide(&mut self) {
-        let Some(layout) = self.pres.world.slide_info.get(&self.slide).map(|s| s.layout) else {
+        let Some(layout) = self
+            .pres
+            .world
+            .slide_info
+            .get(&self.slide)
+            .map(|s| s.layout)
+        else {
             return;
         };
         let children = self.pres.children(self.slide);
@@ -1302,6 +1405,35 @@ impl HayateApp {
         self.selection = None;
         self.rebuild();
         let _ = hayate_format::autosave(&self.pres, DOC_PATH);
+    }
+
+    /// Reorder `dragged` to sit immediately before `target` in the slide list, by assigning it
+    /// a fractional order key between `target` and its predecessor. No-op for self-drops.
+    fn reorder_slide(&mut self, dragged: Entity, target: Entity) {
+        if dragged == target {
+            return;
+        }
+        // Slide sequence with the dragged slide removed, to find the drop neighbor.
+        let mut seq = self.pres.slides();
+        seq.retain(|&e| e != dragged);
+        let Some(tpos) = seq.iter().position(|&e| e == target) else {
+            return;
+        };
+        let lo = if tpos == 0 {
+            None
+        } else {
+            self.pres.world.order.get(&seq[tpos - 1])
+        };
+        let hi = self.pres.world.order.get(&target);
+        let key = FracIndex::between(lo, hi);
+        let tx = Transaction::new(
+            "reorder slide",
+            vec![Operation::SetComponent {
+                entity: dragged,
+                value: CompValue::Order(key),
+            }],
+        );
+        self.commit_tx(tx);
     }
 
     // --- inspector (Format pane) actions ---
@@ -1445,11 +1577,20 @@ impl HayateApp {
                 }),
                 other => other,
             };
-            ops.push(Operation::SetComponent { entity: ne, value: comp });
+            ops.push(Operation::SetComponent {
+                entity: ne,
+                value: comp,
+            });
         }
         // Ensure it lands on the current slide, appended in order.
-        ops.push(Operation::SetComponent { entity: ne, value: CompValue::Parent(self.slide) });
-        ops.push(Operation::SetComponent { entity: ne, value: CompValue::Order(order) });
+        ops.push(Operation::SetComponent {
+            entity: ne,
+            value: CompValue::Parent(self.slide),
+        });
+        ops.push(Operation::SetComponent {
+            entity: ne,
+            value: CompValue::Order(order),
+        });
         self.commit_tx(Transaction::new("paste", ops));
         self.selection = Some(ne);
     }
@@ -1505,9 +1646,10 @@ fn paint_text(tb: &TextBlock, ox: Pixels, oy: Pixels, window: &mut Window, cx: &
         if runs.is_empty() {
             continue;
         }
-        let shaped = window
-            .text_system()
-            .shape_line(SharedString::from(text), font_size, &runs, None);
+        let shaped =
+            window
+                .text_system()
+                .shape_line(SharedString::from(text), font_size, &runs, None);
         let _ = shaped.paint(point(left, top), line_height, align, None, window, cx);
         top += line_height;
     }
@@ -1569,7 +1711,12 @@ fn paint_scene(
         let angle = node.rotation_deg.to_radians();
         let opacity = node.opacity;
         match &node.prim {
-            Primitive::Quad { bounds: r, corner_radius, fill: Some(Paint::Solid(c)), .. } => {
+            Primitive::Quad {
+                bounds: r,
+                corner_radius,
+                fill: Some(Paint::Solid(c)),
+                ..
+            } => {
                 if angle.abs() < 1e-3 {
                     let b = Bounds {
                         origin: point(o.x + px(r.x), o.y + px(r.y)),
@@ -1607,7 +1754,11 @@ fn paint_scene(
                     }
                 }
             }
-            Primitive::Ellipse { bounds: r, fill: Some(Paint::Solid(c)), .. } => {
+            Primitive::Ellipse {
+                bounds: r,
+                fill: Some(Paint::Solid(c)),
+                ..
+            } => {
                 let (cx_, cy_) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
                 let (rx, ry) = (r.w / 2.0, r.h / 2.0);
                 let mut b = PathBuilder::fill();
@@ -1628,7 +1779,10 @@ fn paint_scene(
                     window.paint_path(path, rgb(rgb_u32(*c)));
                 }
             }
-            Primitive::Image { bounds: r, media_key } => {
+            Primitive::Image {
+                bounds: r,
+                media_key,
+            } => {
                 let b = Bounds {
                     origin: point(o.x + px(r.x), o.y + px(r.y)),
                     size: size(px(r.w), px(r.h)),
@@ -1641,13 +1795,7 @@ fn paint_scene(
                         // gpui decodes asynchronously via its asset system; the first paint may
                         // return None and schedule a re-render once the image is ready.
                         if let Some(render) = image.use_render_image(window, cx) {
-                            let _ = window.paint_image(
-                                b,
-                                Corners::default(),
-                                render,
-                                0,
-                                false,
-                            );
+                            let _ = window.paint_image(b, Corners::default(), render, 0, false);
                             painted = true;
                         }
                     }
@@ -1743,7 +1891,11 @@ impl EntityInputHandler for HayateApp {
         })
     }
 
-    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Range<usize>> {
         self.text_edit.as_ref().and_then(|te| te.marked.clone())
     }
 
@@ -1864,7 +2016,11 @@ impl Render for HayateApp {
                 .bg(rgb(0x2a2a2a))
                 .border_1()
                 .border_color(rgb(SELECTION));
-            col = col.child(div().bg(rgb(0x111111)).child(format!("\u{203a} {}", p.query)));
+            col = col.child(
+                div()
+                    .bg(rgb(0x111111))
+                    .child(format!("\u{203a} {}", p.query)),
+            );
             for (i, (_id, t)) in list.iter().enumerate() {
                 let row = div().child(t.clone());
                 let row = if i == sel {
@@ -1896,7 +2052,10 @@ impl Render for HayateApp {
                     let gc = rgb(0xD0D0D0);
                     for x in g.vertical {
                         window.paint_quad(quad(
-                            Bounds { origin: point(o.x + px(x), o.y), size: size(px(1.0), px(scene.size.h)) },
+                            Bounds {
+                                origin: point(o.x + px(x), o.y),
+                                size: size(px(1.0), px(scene.size.h)),
+                            },
                             px(0.),
                             Background::from(gc),
                             px(0.),
@@ -1906,7 +2065,10 @@ impl Render for HayateApp {
                     }
                     for y in g.horizontal {
                         window.paint_quad(quad(
-                            Bounds { origin: point(o.x, o.y + px(y)), size: size(px(scene.size.w), px(1.0)) },
+                            Bounds {
+                                origin: point(o.x, o.y + px(y)),
+                                size: size(px(scene.size.w), px(1.0)),
+                            },
                             px(0.),
                             Background::from(gc),
                             px(0.),
@@ -2060,7 +2222,11 @@ impl Render for HayateApp {
                     .w(px(176.))
                     .h(px(99.))
                     .border_2()
-                    .border_color(if is_cur { rgb(SELECTION) } else { rgb(0x444444) })
+                    .border_color(if is_cur {
+                        rgb(SELECTION)
+                    } else {
+                        rgb(0x444444)
+                    })
                     .child(tcanvas)
                     .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
                         this.slide = s;
@@ -2082,7 +2248,24 @@ impl Render for HayateApp {
                             );
                             cx.notify();
                         }),
-                    ),
+                    )
+                    // Drag a thumbnail onto another to reorder the deck.
+                    .on_drag(DraggedSlide(s), |_, _offset, _window, cx| {
+                        cx.new(|_| SlideDragPreview)
+                    })
+                    .drag_over::<DraggedSlide>(|style, _, _, _| {
+                        style.border_color(rgb(0x9bbcff))
+                    })
+                    .on_drop::<DraggedSlide>({
+                        let view = cx.entity();
+                        move |dragged, _window, cx| {
+                            let dragged = dragged.0;
+                            view.update(cx, |this, cx| {
+                                this.reorder_slide(dragged, s);
+                                cx.notify();
+                            });
+                        }
+                    }),
             );
         }
 
@@ -2155,10 +2338,22 @@ impl Render for HayateApp {
                         .flex()
                         .flex_row()
                         .gap_2()
-                        .child(tool_button("x_m", "X-", cx, |t, _w, cx| { t.nudge(-91_440, 0); cx.notify(); }))
-                        .child(tool_button("x_p", "X+", cx, |t, _w, cx| { t.nudge(91_440, 0); cx.notify(); }))
-                        .child(tool_button("y_m", "Y-", cx, |t, _w, cx| { t.nudge(0, -91_440); cx.notify(); }))
-                        .child(tool_button("y_p", "Y+", cx, |t, _w, cx| { t.nudge(0, 91_440); cx.notify(); })),
+                        .child(tool_button("x_m", "X-", cx, |t, _w, cx| {
+                            t.nudge(-91_440, 0);
+                            cx.notify();
+                        }))
+                        .child(tool_button("x_p", "X+", cx, |t, _w, cx| {
+                            t.nudge(91_440, 0);
+                            cx.notify();
+                        }))
+                        .child(tool_button("y_m", "Y-", cx, |t, _w, cx| {
+                            t.nudge(0, -91_440);
+                            cx.notify();
+                        }))
+                        .child(tool_button("y_p", "Y+", cx, |t, _w, cx| {
+                            t.nudge(0, 91_440);
+                            cx.notify();
+                        })),
                 )
                 .child(div().child("Size (pt)"))
                 .child(
@@ -2174,10 +2369,22 @@ impl Render for HayateApp {
                         .flex()
                         .flex_row()
                         .gap_2()
-                        .child(tool_button("w_m", "W-", cx, |t, _w, cx| { t.resize_by(-182_880, 0); cx.notify(); }))
-                        .child(tool_button("w_p", "W+", cx, |t, _w, cx| { t.resize_by(182_880, 0); cx.notify(); }))
-                        .child(tool_button("h_m", "H-", cx, |t, _w, cx| { t.resize_by(0, -182_880); cx.notify(); }))
-                        .child(tool_button("h_p", "H+", cx, |t, _w, cx| { t.resize_by(0, 182_880); cx.notify(); })),
+                        .child(tool_button("w_m", "W-", cx, |t, _w, cx| {
+                            t.resize_by(-182_880, 0);
+                            cx.notify();
+                        }))
+                        .child(tool_button("w_p", "W+", cx, |t, _w, cx| {
+                            t.resize_by(182_880, 0);
+                            cx.notify();
+                        }))
+                        .child(tool_button("h_m", "H-", cx, |t, _w, cx| {
+                            t.resize_by(0, -182_880);
+                            cx.notify();
+                        }))
+                        .child(tool_button("h_p", "H+", cx, |t, _w, cx| {
+                            t.resize_by(0, 182_880);
+                            cx.notify();
+                        })),
                 )
                 .child(div().child("Fill"))
                 .child(swatches)
@@ -2203,12 +2410,30 @@ impl Render for HayateApp {
                         .flex()
                         .flex_row()
                         .gap_1()
-                        .child(tool_button("al_l", "L", cx, |t, _w, cx| { t.align("shapes.align_left"); cx.notify(); }))
-                        .child(tool_button("al_c", "C", cx, |t, _w, cx| { t.align("shapes.align_hcenter"); cx.notify(); }))
-                        .child(tool_button("al_r", "R", cx, |t, _w, cx| { t.align("shapes.align_right"); cx.notify(); }))
-                        .child(tool_button("al_t", "T", cx, |t, _w, cx| { t.align("shapes.align_top"); cx.notify(); }))
-                        .child(tool_button("al_m", "M", cx, |t, _w, cx| { t.align("shapes.align_vcenter"); cx.notify(); }))
-                        .child(tool_button("al_b", "B", cx, |t, _w, cx| { t.align("shapes.align_bottom"); cx.notify(); })),
+                        .child(tool_button("al_l", "L", cx, |t, _w, cx| {
+                            t.align("shapes.align_left");
+                            cx.notify();
+                        }))
+                        .child(tool_button("al_c", "C", cx, |t, _w, cx| {
+                            t.align("shapes.align_hcenter");
+                            cx.notify();
+                        }))
+                        .child(tool_button("al_r", "R", cx, |t, _w, cx| {
+                            t.align("shapes.align_right");
+                            cx.notify();
+                        }))
+                        .child(tool_button("al_t", "T", cx, |t, _w, cx| {
+                            t.align("shapes.align_top");
+                            cx.notify();
+                        }))
+                        .child(tool_button("al_m", "M", cx, |t, _w, cx| {
+                            t.align("shapes.align_vcenter");
+                            cx.notify();
+                        }))
+                        .child(tool_button("al_b", "B", cx, |t, _w, cx| {
+                            t.align("shapes.align_bottom");
+                            cx.notify();
+                        })),
                 )
                 .child(div().child("Text"))
                 .child(
@@ -2257,16 +2482,26 @@ impl Render for HayateApp {
                             cx.notify();
                         })),
                 )
-                .child(tool_button("anim_fade", "Animate: Fade In", cx, |t, _w, cx| {
-                    t.add_fade_in();
-                    cx.notify();
-                }))
-                .child(tool_button("edit_text", "Edit Text (F2)", cx, |t, _w, cx| {
-                    if let Some(e) = t.selection {
-                        t.begin_text_edit(e);
-                    }
-                    cx.notify();
-                }))
+                .child(tool_button(
+                    "anim_fade",
+                    "Animate: Fade In",
+                    cx,
+                    |t, _w, cx| {
+                        t.add_fade_in();
+                        cx.notify();
+                    },
+                ))
+                .child(tool_button(
+                    "edit_text",
+                    "Edit Text (F2)",
+                    cx,
+                    |t, _w, cx| {
+                        if let Some(e) = t.selection {
+                            t.begin_text_edit(e);
+                        }
+                        cx.notify();
+                    },
+                ))
                 .child(tool_button("del", "Delete", cx, |t, _w, cx| {
                     t.delete_selection();
                     t.rebuild();
@@ -2316,9 +2551,14 @@ impl Render for HayateApp {
                             .child(tool_button("max", "\u{25A1}", cx, |_this, window, _cx| {
                                 window.zoom_window();
                             }))
-                            .child(tool_button("close", "\u{00D7}", cx, |_this, window, _cx| {
-                                window.remove_window();
-                            })),
+                            .child(tool_button(
+                                "close",
+                                "\u{00D7}",
+                                cx,
+                                |_this, window, _cx| {
+                                    window.remove_window();
+                                },
+                            )),
                     ),
             )
             .children(palette_panel)
@@ -2341,12 +2581,14 @@ impl Render for HayateApp {
                                     this.on_mouse_down(ev, cx);
                                 }),
                             )
-                            .on_mouse_move(
-                                cx.listener(|this, ev: &MouseMoveEvent, _, cx| this.on_mouse_move(ev, cx)),
-                            )
+                            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
+                                this.on_mouse_move(ev, cx)
+                            }))
                             .on_mouse_up(
                                 MouseButton::Left,
-                                cx.listener(|this, ev: &MouseUpEvent, _, cx| this.on_mouse_up(ev, cx)),
+                                cx.listener(|this, ev: &MouseUpEvent, _, cx| {
+                                    this.on_mouse_up(ev, cx)
+                                }),
                             )
                             .on_mouse_down(
                                 MouseButton::Right,
@@ -2423,9 +2665,15 @@ mod e2e {
             let b = prim_bounds(&a.scene.nodes[0].prim);
             (b.x + b.w * 0.5, b.y + b.h * 0.5)
         });
-        app.update(cx, |a, cx| a.on_right_down(&mouse(MouseButton::Right, x, y), cx));
-        let (target, has_sel) =
-            app.read_with(cx, |a, _| (a.context_menu.as_ref().map(|m| m.target), a.selection.is_some()));
+        app.update(cx, |a, cx| {
+            a.on_right_down(&mouse(MouseButton::Right, x, y), cx)
+        });
+        let (target, has_sel) = app.read_with(cx, |a, _| {
+            (
+                a.context_menu.as_ref().map(|m| m.target),
+                a.selection.is_some(),
+            )
+        });
         assert_eq!(target, Some(MenuTarget::Shape));
         assert!(has_sel, "right-clicking a shape should select it");
     }
@@ -2435,7 +2683,9 @@ mod e2e {
         let app = cx.new(|cx| HayateApp::new(cx));
         // Bottom-right corner of the slide, away from the sample content.
         let (x, y) = app.read_with(cx, |a, _| (a.scene.size.w * 0.97, a.scene.size.h * 0.97));
-        app.update(cx, |a, cx| a.on_right_down(&mouse(MouseButton::Right, x, y), cx));
+        app.update(cx, |a, cx| {
+            a.on_right_down(&mouse(MouseButton::Right, x, y), cx)
+        });
         let target = app.read_with(cx, |a, _| a.context_menu.as_ref().map(|m| m.target));
         assert_eq!(target, Some(MenuTarget::Canvas));
     }
@@ -2443,19 +2693,31 @@ mod e2e {
     #[gpui::test]
     fn escape_closes_menu(cx: &mut TestAppContext) {
         let app = cx.new(|cx| HayateApp::new(cx));
-        app.update(cx, |a, cx| a.on_right_down(&mouse(MouseButton::Right, 10.0, 10.0), cx));
+        app.update(cx, |a, cx| {
+            a.on_right_down(&mouse(MouseButton::Right, 10.0, 10.0), cx)
+        });
         assert!(app.read_with(cx, |a, _| a.context_menu.is_some()));
         app.update(cx, |a, cx| a.on_key_down(&keydown("escape"), cx));
-        assert!(app.read_with(cx, |a, _| a.context_menu.is_none()), "Esc should dismiss the menu");
+        assert!(
+            app.read_with(cx, |a, _| a.context_menu.is_none()),
+            "Esc should dismiss the menu"
+        );
     }
 
     #[gpui::test]
     fn left_click_closes_menu(cx: &mut TestAppContext) {
         let app = cx.new(|cx| HayateApp::new(cx));
-        app.update(cx, |a, cx| a.on_right_down(&mouse(MouseButton::Right, 10.0, 10.0), cx));
+        app.update(cx, |a, cx| {
+            a.on_right_down(&mouse(MouseButton::Right, 10.0, 10.0), cx)
+        });
         assert!(app.read_with(cx, |a, _| a.context_menu.is_some()));
-        app.update(cx, |a, cx| a.on_mouse_down(&mouse(MouseButton::Left, 10.0, 10.0), cx));
-        assert!(app.read_with(cx, |a, _| a.context_menu.is_none()), "a left click should dismiss the menu");
+        app.update(cx, |a, cx| {
+            a.on_mouse_down(&mouse(MouseButton::Left, 10.0, 10.0), cx)
+        });
+        assert!(
+            app.read_with(cx, |a, _| a.context_menu.is_none()),
+            "a left click should dismiss the menu"
+        );
     }
 
     #[gpui::test]
@@ -2467,10 +2729,16 @@ mod e2e {
             let b = prim_bounds(&a.scene.nodes[1].prim);
             (b.x + b.w * 0.5, b.y + b.h * 0.5)
         });
-        app.update(cx, |a, cx| a.on_right_down(&mouse(MouseButton::Right, x, y), cx));
+        app.update(cx, |a, cx| {
+            a.on_right_down(&mouse(MouseButton::Right, x, y), cx)
+        });
         app.update(cx, |a, _| a.duplicate_selection());
         let after = app.read_with(cx, |a, _| a.pres.children(a.slide).len());
-        assert_eq!(after, before + 1, "Duplicate should add one shape to the slide");
+        assert_eq!(
+            after,
+            before + 1,
+            "Duplicate should add one shape to the slide"
+        );
     }
 
     #[gpui::test]
@@ -2504,10 +2772,31 @@ mod e2e {
         app.update(cx, |a, _| a.insert_image_bytes(png));
         let (after, has_pic) = app.read_with(cx, |a, _| {
             let kids = a.pres.children(a.slide);
-            (kids.len(), kids.iter().any(|e| a.pres.world.pictures.contains_key(e)))
+            (
+                kids.len(),
+                kids.iter().any(|e| a.pres.world.pictures.contains_key(e)),
+            )
         });
         assert_eq!(after, before + 1, "inserting an image should add one shape");
         assert!(has_pic, "the new shape should carry a picture component");
+    }
+
+    #[gpui::test]
+    fn reorder_slide_moves_it_before_target(cx: &mut TestAppContext) {
+        let app = cx.new(|cx| HayateApp::new(cx));
+        // Start with three slides; remember their order.
+        app.update(cx, |a, _| {
+            a.add_slide();
+            a.add_slide();
+        });
+        let order = app.read_with(cx, |a, _| a.pres.slides());
+        assert_eq!(order.len(), 3);
+        let (first, _second, third) = (order[0], order[1], order[2]);
+        // Drag the last slide to sit before the first.
+        app.update(cx, |a, _| a.reorder_slide(third, first));
+        let after = app.read_with(cx, |a, _| a.pres.slides());
+        assert_eq!(after[0], third, "dragged slide should now be first");
+        assert_eq!(after.len(), 3, "reorder must not add or drop slides");
     }
 
     #[gpui::test]

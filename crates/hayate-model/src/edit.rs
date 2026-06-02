@@ -5,14 +5,14 @@
 
 use crate::history::Transaction;
 use crate::op::Operation;
-use hayate_ir::frac::FracIndex;
-use hayate_ir::geom::RectEmu;
-use hayate_ir::paint::Fill;
-use hayate_ir::shape::Geometry;
 use hayate_ir::anim::{Anim, AnimKind, AnimStep, Easing, Effect, SlideTimeline, Trigger};
 use hayate_ir::color::Color;
 use hayate_ir::color::ThemeColorToken;
 use hayate_ir::font::{FontRef, ThemeFontSlot};
+use hayate_ir::frac::FracIndex;
+use hayate_ir::geom::RectEmu;
+use hayate_ir::paint::Fill;
+use hayate_ir::shape::Geometry;
 use hayate_ir::text::{HAlign, Paragraph, Run, TextBody};
 use hayate_ir::units::pt;
 use hayate_ir::world::{CompKind, CompValue, Entity, World};
@@ -189,7 +189,8 @@ pub fn set_run_text(world: &World, e: Entity, text: String) -> Transaction {
                 }
             } else {
                 // Body with no paragraphs: create one minimal paragraph.
-                body.paragraphs.push(Paragraph::new(vec![default_run(text)]));
+                body.paragraphs
+                    .push(Paragraph::new(vec![default_run(text)]));
             }
             body
         }
@@ -219,7 +220,8 @@ pub fn append_paragraph(world: &World, e: Entity, text: String) -> Transaction {
             autofit: false,
         },
     };
-    body.paragraphs.push(Paragraph::new(vec![default_run(text)]));
+    body.paragraphs
+        .push(Paragraph::new(vec![default_run(text)]));
     Transaction::new(
         "append paragraph",
         vec![Operation::SetComponent {
@@ -420,10 +422,7 @@ mod tests {
         let frame = RectEmu::new(10, 20, 100, 50);
         let fill = red();
 
-        h.commit(
-            &mut w,
-            create_rect(e, parent, order.clone(), frame, fill),
-        );
+        h.commit(&mut w, create_rect(e, parent, order.clone(), frame, fill));
 
         // Alive with every component the helper set.
         assert!(w.is_alive(e));
@@ -434,7 +433,10 @@ mod tests {
         );
         assert_eq!(w.get(e, CompKind::Fill), Some(CompValue::Fill(fill)));
         assert_eq!(w.get(e, CompKind::Parent), Some(CompValue::Parent(parent)));
-        assert_eq!(w.get(e, CompKind::Order), Some(CompValue::Order(order.clone())));
+        assert_eq!(
+            w.get(e, CompKind::Order),
+            Some(CompValue::Order(order.clone()))
+        );
 
         // Undo removes the entity entirely.
         assert!(h.undo(&mut w));

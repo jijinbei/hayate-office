@@ -15,12 +15,14 @@ pub mod svg;
 
 pub use build::build_slide_scene;
 pub use build::build_slide_scene_at;
-pub use grid::{GridLines, grid_lines};
-pub use guides::{Guide, GuideKind, alignment_guides};
+pub use grid::{grid_lines, GridLines};
+pub use guides::{alignment_guides, Guide, GuideKind};
 pub use handles::resize_handles;
-pub use svg::export_svg;
 pub use hit::hit_test;
+pub use linebreak::{DefaultBreaker, Item, JapaneseBreaker, LineBreaker};
 pub use png::encode_png;
 pub use raster::rasterize;
-pub use linebreak::{DefaultBreaker, Item, JapaneseBreaker, LineBreaker};
-pub use scene::{Paint, Primitive, PxRect, PxSize, Scene, SceneNode, StrokePx, TextBlock, Viewport};
+pub use scene::{
+    Paint, Primitive, PxRect, PxSize, Scene, SceneNode, StrokePx, TextBlock, Viewport,
+};
+pub use svg::export_svg;
