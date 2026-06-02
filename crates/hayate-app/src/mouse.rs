@@ -19,11 +19,11 @@ impl HayateApp {
 
     pub(crate) fn on_mouse_down(&mut self, ev: &MouseDownEvent, cx: &mut Context<Self>) {
         // This low-level handler fires even when the click lands on the context-menu overlay
-        // (which sits above the canvas). If a menu is open, just dismiss it and do nothing else
-        // — otherwise a click on a menu item below the shapes would start a marquee and clear
-        // the selection before the menu action (e.g. Group) runs.
-        if self.context_menu.take().is_some() {
-            cx.notify();
+        // (which sits above the canvas). While a menu is open, do nothing here — the menu's
+        // backdrop/items handle dismissal on click (mouse-up). Closing it on mouse-down would
+        // remove the menu before the item's click (e.g. Group) could run, and acting on the
+        // click would start a marquee that clears the selection the menu action needs.
+        if self.context_menu.is_some() {
             return;
         }
         let o = self.canvas_origin.get();

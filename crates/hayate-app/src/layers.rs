@@ -1,6 +1,8 @@
 //! Layers (outline) panel: a left-side list of the slide's objects in z-order, grouped, so
 //! the stacking/hierarchy is visible and clickable. FRONT shapes appear at the TOP.
 
+use std::collections::HashMap;
+
 use gpui::{div, prelude::*, px, rgb, ClickEvent, Context};
 
 use hayate_ir::shape::Geometry;
@@ -16,6 +18,8 @@ impl HayateApp {
         // Children come back in document order (BACK-to-FRONT); the panel shows FRONT first.
         let children: Vec<Entity> = self.pres.children(self.slide);
         let front_to_back: Vec<Entity> = children.iter().rev().copied().collect();
+        // Distinguishing labels: number each kind in creation order (Rectangle 1, Ellipse 1, ...).
+        let labels = self.numbered_labels(&children);
 
         let mut panel = div()
             .flex()
@@ -70,12 +74,14 @@ impl HayateApp {
 
                     // Members of this group, front-to-back, indented under the header.
                     for &m in &members {
-                        panel = panel.child(self.layer_row(m, index, true, cx));
+                        let lbl = labels.get(&m).cloned().unwrap_or_default();
+                        panel = panel.child(self.layer_row(lbl, m, index, true, cx));
                         index += 1;
                     }
                 }
                 None => {
-                    panel = panel.child(self.layer_row(e, index, false, cx));
+                    let lbl = labels.get(&e).cloned().unwrap_or_default();
+                    panel = panel.child(self.layer_row(lbl, e, index, false, cx));
                     index += 1;
                 }
             }
@@ -84,15 +90,16 @@ impl HayateApp {
         panel.into_any_element()
     }
 
-    /// One clickable layer row for entity `e`. `indented` nests it under a group header.
+    /// One clickable layer row for entity `e` with the given `label`. `indented` nests it
+    /// under a group header.
     fn layer_row(
         &self,
+        label: String,
         e: Entity,
         index: usize,
         indented: bool,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let label = self.layer_label(e);
         let selected = self.selection == Some(e) || self.also.contains(&e);
 
         let mut row = div()
@@ -123,35 +130,48 @@ impl HayateApp {
         .into_any_element()
     }
 
-    /// Human-readable label for a layer row, derived from the entity's components.
-    fn layer_label(&self, e: Entity) -> String {
-        if let Some(body) = self.pres.world.texts.get(&e) {
-            let first = body
-                .paragraphs
-                .first()
-                .and_then(|p| p.runs.first())
-                .map(|r| r.text.as_str())
-                .unwrap_or("");
-            let trimmed = first.trim();
-            let truncated: String = trimmed.chars().take(20).collect();
-            let label = if trimmed.chars().count() > 20 {
-                format!("{truncated}\u{2026}")
+    /// Build a distinguishing label per object, numbering each kind in creation order
+    /// (Rectangle 1, Rectangle 2, Ellipse 1, Image 1, ...). Text shows its content.
+    fn numbered_labels(&self, children: &[Entity]) -> HashMap<Entity, String> {
+        let mut labels = HashMap::new();
+        let (mut rect, mut ell, mut img, mut txt) = (0u32, 0u32, 0u32, 0u32);
+        for &e in children {
+            let label = if let Some(body) = self.pres.world.texts.get(&e) {
+                txt += 1;
+                let content = body
+                    .paragraphs
+                    .first()
+                    .and_then(|p| p.runs.first())
+                    .map(|r| r.text.trim())
+                    .unwrap_or("");
+                if content.is_empty() {
+                    format!("Text {txt}")
+                } else {
+                    let t: String = content.chars().take(18).collect();
+                    if content.chars().count() > 18 {
+                        format!("{t}\u{2026}")
+                    } else {
+                        t
+                    }
+                }
+            } else if self.pres.world.pictures.contains_key(&e) {
+                img += 1;
+                format!("Image {img}")
             } else {
-                truncated
+                match self.pres.world.geometries.get(&e) {
+                    Some(Geometry::Ellipse) => {
+                        ell += 1;
+                        format!("Ellipse {ell}")
+                    }
+                    Some(_) => {
+                        rect += 1;
+                        format!("Rectangle {rect}")
+                    }
+                    None => "Shape".to_string(),
+                }
             };
-            return if label.is_empty() {
-                "Text".to_string()
-            } else {
-                label
-            };
+            labels.insert(e, label);
         }
-        if self.pres.world.pictures.contains_key(&e) {
-            return "Image".to_string();
-        }
-        match self.pres.world.geometries.get(&e) {
-            Some(Geometry::Ellipse) => "Ellipse".to_string(),
-            Some(Geometry::Rect) | Some(Geometry::RoundRect { .. }) => "Rectangle".to_string(),
-            None => "Shape".to_string(),
-        }
+        labels
     }
 }

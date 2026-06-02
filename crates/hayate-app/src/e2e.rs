@@ -94,7 +94,9 @@ fn escape_closes_menu(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn left_click_closes_menu(cx: &mut TestAppContext) {
+fn mousedown_is_noop_while_menu_open(cx: &mut TestAppContext) {
+    // While a menu is open the canvas mouse-down must do nothing (the menu's backdrop/items
+    // handle dismissal on click). Esc still closes it.
     let app = cx.new(|cx| HayateApp::new(cx));
     app.update(cx, |a, cx| {
         a.on_right_down(&mouse(MouseButton::Right, 10.0, 10.0), cx)
@@ -104,9 +106,11 @@ fn left_click_closes_menu(cx: &mut TestAppContext) {
         a.on_mouse_down(&mouse(MouseButton::Left, 10.0, 10.0), cx)
     });
     assert!(
-        app.read_with(cx, |a, _| a.context_menu.is_none()),
-        "a left click should dismiss the menu"
+        app.read_with(cx, |a, _| a.context_menu.is_some()),
+        "mouse-down should not close the menu (the overlay does, on click-up)"
     );
+    app.update(cx, |a, cx| a.on_key_down(&keydown("escape"), cx));
+    assert!(app.read_with(cx, |a, _| a.context_menu.is_none()));
 }
 
 #[gpui::test]
@@ -388,20 +392,20 @@ fn menu_open_click_keeps_selection(cx: &mut TestAppContext) {
         s.selection = Some(a);
         s.also = vec![b];
     });
-    // Open a context menu, then click on empty canvas (as clicking a menu item below the shapes
-    // would): the menu closes but the selection stays.
-    app.update(cx, |s, cx| {
+    // Open a context menu, then a canvas mouse-down on empty space (as a click on a menu item
+    // below the shapes triggers): the canvas must NOT clear the selection.
+    app.update(cx, |s, _cx| {
         s.open_menu(10.0, 10.0, crate::MenuTarget::Shape)
     });
     let (ex, ey) = app.read_with(cx, |s, _| (s.scene.size.w * 0.97, s.scene.size.h * 0.97));
     app.update(cx, |s, cx| {
         s.on_mouse_down(&mouse(MouseButton::Left, ex, ey), cx)
     });
-    let (n, menu_open) = app.read_with(cx, |s, _| {
-        (s.selected_all().len(), s.context_menu.is_some())
-    });
-    assert_eq!(n, 2, "selection must survive dismissing the menu");
-    assert!(!menu_open, "the click should have closed the menu");
+    let n = app.read_with(cx, |s, _| s.selected_all().len());
+    assert_eq!(
+        n, 2,
+        "the canvas mouse-down must not clear the selection while a menu is open"
+    );
     // The menu's Group action then groups both.
     app.update(cx, |s, _| s.group_selection());
     let grouped = app.read_with(cx, |s, _| {

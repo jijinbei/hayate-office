@@ -1,7 +1,7 @@
 //! Right-click context menu: opening it, handling the right mouse press, and building the
 //! floating overlay element.
 
-use gpui::{div, prelude::*, px, rgb, Context, MouseDownEvent};
+use gpui::{div, prelude::*, px, rgb, ClickEvent, Context, MouseDownEvent};
 
 use hayate_render::hit_test;
 
@@ -195,6 +195,18 @@ impl HayateApp {
                     }));
             }
         }
-        Some(menu.into_any_element())
+        // A full-window backdrop captures clicks outside the menu to dismiss it. The menu sits
+        // on top, so clicks on its items reach the items (topmost hitbox wins); clicks elsewhere
+        // hit the backdrop and close the menu.
+        let backdrop = div()
+            .id("menu_backdrop")
+            .absolute()
+            .inset_0()
+            .on_click(cx.listener(|this, _ev: &ClickEvent, _w, cx| {
+                this.context_menu = None;
+                cx.notify();
+            }))
+            .child(menu);
+        Some(backdrop.into_any_element())
     }
 }
