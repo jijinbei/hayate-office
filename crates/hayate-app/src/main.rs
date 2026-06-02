@@ -172,6 +172,7 @@ fn prim_bounds(prim: &Primitive) -> PxRect {
     match prim {
         Primitive::Quad { bounds, .. } => *bounds,
         Primitive::Ellipse { bounds, .. } => *bounds,
+        Primitive::Image { bounds, .. } => *bounds,
         Primitive::Text(tb) => tb.bounds,
     }
 }
@@ -213,6 +214,10 @@ struct HayateApp {
     clipboard: Option<Vec<CompValue>>,
     /// In-canvas text editing state, if any.
     text_edit: Option<TextEdit>,
+    /// Additional selected entities (besides `selection`) for multi-select align.
+    also: Vec<Entity>,
+    /// Fullscreen presentation (slideshow) mode.
+    present: bool,
 }
 
 struct TextEdit {
@@ -272,6 +277,75 @@ impl HayateApp {
             resize: None,
             clipboard: None,
             text_edit: None,
+            also: Vec::new(),
+            present: false,
+        }
+    }
+
+    /// All currently-selected entities (primary + additional).
+    fn selected_all(&self) -> Vec<Entity> {
+        let mut v: Vec<Entity> = self.selection.into_iter().collect();
+        v.extend(self.also.iter().copied());
+        v
+    }
+
+    /// Insert a placeholder image (a Picture box) on the current slide.
+    fn insert_image(&mut self) {
+        let key = self.pres.add_media(b"hayate-placeholder-image".to_vec());
+        let order = {
+            let kids = self.pres.children(self.slide);
+            let last = kids.last().and_then(|e| self.pres.world.order.get(e));
+            FracIndex::after(last)
+        };
+        let e = self.pres.world.reserve_id();
+        let frame = RectEmu::new(inch_f(3.0), inch_f(2.0), inch_f(3.0), inch_f(2.0));
+        let pic = hayate_ir::image::PictureRef {
+            media_key: key,
+            natural: SizeEmu::new(inch_f(3.0), inch_f(2.0)),
+        };
+        let tx = Transaction::new(
+            "insert image",
+            vec![
+                Operation::Spawn { entity: e },
+                Operation::SetComponent { entity: e, value: CompValue::Parent(self.slide) },
+                Operation::SetComponent { entity: e, value: CompValue::Order(order) },
+                Operation::SetComponent { entity: e, value: CompValue::Frame(frame) },
+                Operation::SetComponent { entity: e, value: CompValue::Picture(pic) },
+            ],
+        );
+        self.commit_tx(tx);
+        self.selection = Some(e);
+        self.also.clear();
+    }
+
+    /// Align the current multi-selection using a registry command.
+    fn align(&mut self, cmd_id: &str) {
+        let ids: Vec<u64> = self.selected_all().iter().map(|e| e.0).collect();
+        if ids.len() < 2 {
+            return;
+        }
+        let args = serde_json::json!({ "entities": ids });
+        if let Some(tx) = self.registry.build(cmd_id, &args, &self.pres.world) {
+            self.commit_tx(tx);
+        }
+    }
+
+    fn export_pptx(&self) {
+        match hayate_format_pptx::export_pptx(&self.pres, "hayate-deck.pptx") {
+            Ok(()) => eprintln!("exported hayate-deck.pptx"),
+            Err(e) => eprintln!("pptx export error: {e}"),
+        }
+    }
+
+    fn next_slide(&mut self, delta: i64) {
+        let slides = self.pres.slides();
+        if let Some(i) = slides.iter().position(|&s| s == self.slide) {
+            let n = slides.len() as i64;
+            let ni = ((i as i64 + delta) % n + n) % n;
+            self.slide = slides[ni as usize];
+            self.selection = None;
+            self.also.clear();
+            self.rebuild();
         }
     }
 
@@ -635,7 +709,19 @@ impl HayateApp {
                 }
             }
         }
-        self.selection = hit_test(&self.scene, x, y);
+        let hit = hit_test(&self.scene, x, y);
+        if ev.modifiers.shift {
+            // Shift-click adds/keeps a multi-selection (no drag).
+            if let Some(h) = hit {
+                if Some(h) != self.selection && !self.also.contains(&h) {
+                    self.also.push(h);
+                }
+            }
+            cx.notify();
+            return;
+        }
+        self.also.clear();
+        self.selection = hit;
         self.drag = self.selection.and_then(|e| {
             self.pres.world.frames.get(&e).map(|f| Drag {
                 entity: e,
@@ -739,6 +825,18 @@ impl HayateApp {
             self.text_key(ev, cx);
             return;
         }
+        if self.present {
+            match ev.keystroke.key.as_str() {
+                "escape" => {
+                    self.present = false;
+                    cx.notify();
+                }
+                "right" | "space" | "down" => self.next_slide(1),
+                "left" | "up" => self.next_slide(-1),
+                _ => {}
+            }
+            return;
+        }
         let k = &ev.keystroke;
         let cmd = k.modifiers.platform || k.modifiers.control;
         match k.key.as_str() {
@@ -746,7 +844,16 @@ impl HayateApp {
                 self.palette = Some(PaletteState { query: String::new(), sel: 0 });
                 cx.notify();
             }
+            "e" if cmd && k.modifiers.shift => self.export_pptx(),
             "e" if cmd => self.export_svg(),
+            "f5" => {
+                self.present = true;
+                cx.notify();
+            }
+            "i" if !cmd => {
+                self.insert_image();
+                cx.notify();
+            }
             "z" if cmd && k.modifiers.shift => {
                 self.history.redo(&mut self.pres.world);
                 self.after_doc_change();
@@ -1150,6 +1257,21 @@ fn paint_scene(scene: &Scene, o: Point<Pixels>, window: &mut Window, cx: &mut Ap
                     window.paint_path(path, rgb(rgb_u32(*c)));
                 }
             }
+            Primitive::Image { bounds: r, .. } => {
+                // Placeholder: a light-gray box (real image decoding is a follow-up).
+                let b = Bounds {
+                    origin: point(o.x + px(r.x), o.y + px(r.y)),
+                    size: size(px(r.w), px(r.h)),
+                };
+                window.paint_quad(quad(
+                    b,
+                    px(0.),
+                    Background::from(rgb(0xCCCCCC)),
+                    px(1.),
+                    rgb(0x888888),
+                    Default::default(),
+                ));
+            }
             Primitive::Text(tb) => paint_text(tb, o.x, o.y, window, cx),
             _ => {}
         }
@@ -1180,10 +1302,37 @@ impl Render for HayateApp {
             self.focused_once = true;
         }
 
+        // Fullscreen presentation mode: the slide fit to the whole window, no panels.
+        if self.present {
+            let vp = window.viewport_size();
+            let target = PxSize {
+                w: f32::from(vp.width),
+                h: f32::from(vp.height),
+            };
+            let pscene = build_slide_scene(&self.pres, self.slide, target);
+            let (pw, ph) = (pscene.size.w, pscene.size.h);
+            let pcanvas = canvas(
+                |_, _, _| {},
+                move |b, _, window, cx| paint_scene(&pscene, b.origin, window, cx),
+            )
+            .size_full();
+            return div()
+                .track_focus(&self.focus)
+                .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| this.on_key_down(ev, cx)))
+                .size_full()
+                .bg(rgb(0x000000))
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().w(px(pw)).h(px(ph)).child(pcanvas))
+                .into_any_element();
+        }
+
         // Document coordinates are absolute (points); on-screen size = slide_pt * zoom.
         // Window resizing does not change zoom (use the zoom controls / Fit).
         let scene = self.scene.clone();
         let selection = self.selection;
+        let also = self.also.clone();
         let guides = self.guides.clone();
         let show_grid = self.show_grid;
         let origin_cell = self.canvas_origin.clone();
@@ -1295,6 +1444,25 @@ impl Render for HayateApp {
                         }
                     }
                 }
+                // Additional multi-selection outlines.
+                for ae in &also {
+                    if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(*ae)) {
+                        let r = prim_bounds(&node.prim);
+                        let b = Bounds {
+                            origin: point(o.x + px(r.x - 2.0), o.y + px(r.y - 2.0)),
+                            size: size(px(r.w + 4.0), px(r.h + 4.0)),
+                        };
+                        window.paint_quad(quad(
+                            b,
+                            px(0.),
+                            gpui::transparent_black(),
+                            px(2.),
+                            rgb(0x60A5FA),
+                            Default::default(),
+                        ));
+                    }
+                }
+
                 // Resize handles on the selection.
                 if let Some(sel) = selection {
                     if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(sel)) {
@@ -1511,6 +1679,19 @@ impl Render for HayateApp {
                             cx.notify();
                         })),
                 )
+                .child(div().child("Align (Shift-click for multi)"))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_1()
+                        .child(tool_button("al_l", "L", cx, |t, _w, cx| { t.align("shapes.align_left"); cx.notify(); }))
+                        .child(tool_button("al_c", "C", cx, |t, _w, cx| { t.align("shapes.align_hcenter"); cx.notify(); }))
+                        .child(tool_button("al_r", "R", cx, |t, _w, cx| { t.align("shapes.align_right"); cx.notify(); }))
+                        .child(tool_button("al_t", "T", cx, |t, _w, cx| { t.align("shapes.align_top"); cx.notify(); }))
+                        .child(tool_button("al_m", "M", cx, |t, _w, cx| { t.align("shapes.align_vcenter"); cx.notify(); }))
+                        .child(tool_button("al_b", "B", cx, |t, _w, cx| { t.align("shapes.align_bottom"); cx.notify(); })),
+                )
                 .child(tool_button("edit_text", "Edit Text (F2)", cx, |t, _w, cx| {
                     if let Some(e) = t.selection {
                         t.begin_text_edit(e);
@@ -1602,6 +1783,7 @@ impl Render for HayateApp {
                     )
                     .children(inspector),
             )
+            .into_any_element()
     }
 }
 
