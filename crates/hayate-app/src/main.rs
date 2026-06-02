@@ -21,7 +21,7 @@ use gpui_platform::application;
 use hayate_ir::color::{Color, Rgba, ThemeColorToken};
 use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::frac::FracIndex;
-use hayate_ir::geom::{PointEmu, RectEmu};
+use hayate_ir::geom::{PointEmu, RectEmu, SizeEmu};
 use hayate_ir::paint::Fill;
 use hayate_ir::presentation::Presentation;
 use hayate_ir::shape::Geometry;
@@ -32,7 +32,9 @@ use hayate_ir::world::{CompValue, Entity};
 use hayate_model::{edit, History, Operation, Transaction};
 use hayate_core::CommandRegistry;
 use hayate_render::scene::{Paint, Primitive, PxRect, PxSize, ResolvedRun, Scene, TextBlock};
-use hayate_render::{alignment_guides, build_slide_scene, grid_lines, hit_test, Guide, GuideKind};
+use hayate_render::{
+    alignment_guides, build_slide_scene, grid_lines, hit_test, resize_handles, Guide, GuideKind,
+};
 
 const SELECTION: u32 = 0x3B82F6;
 const DOC_PATH: &str = "hayate-sample.hayate";
@@ -104,6 +106,38 @@ fn pt_to_emu(v: f32) -> i64 {
     (v * 12_700.0) as i64
 }
 
+/// New frame when dragging resize `handle` (TL,T,TR,R,BR,B,BL,L) by (dx,dy) EMU from `start`.
+/// Axis-aligned; keeps the opposite edge fixed and clamps to a minimum size.
+fn resize_frame(handle: usize, start: RectEmu, dx: i64, dy: i64) -> RectEmu {
+    let min = 12_700; // 1pt
+    let right0 = start.origin.x + start.size.w;
+    let bottom0 = start.origin.y + start.size.h;
+    let mut w = start.size.w;
+    let mut h = start.size.h;
+    if matches!(handle, 2 | 3 | 4) {
+        w = start.size.w + dx; // right edge
+    }
+    if matches!(handle, 0 | 6 | 7) {
+        w = start.size.w - dx; // left edge
+    }
+    if matches!(handle, 4 | 5 | 6) {
+        h = start.size.h + dy; // bottom edge
+    }
+    if matches!(handle, 0 | 1 | 2) {
+        h = start.size.h - dy; // top edge
+    }
+    w = w.max(min);
+    h = h.max(min);
+    let left = matches!(handle, 0 | 6 | 7);
+    let top = matches!(handle, 0 | 1 | 2);
+    let x = if left { right0 - w } else { start.origin.x };
+    let y = if top { bottom0 - h } else { start.origin.y };
+    RectEmu {
+        origin: PointEmu::new(x, y),
+        size: SizeEmu::new(w, h),
+    }
+}
+
 /// Fill background from an Rgba, scaling alpha by `opacity` (0..1).
 fn fill_bg(c: Rgba, opacity: f32) -> Background {
     gpui::Rgba {
@@ -173,6 +207,16 @@ struct HayateApp {
     guides: Vec<Guide>,
     /// Whether the editing grid is shown.
     show_grid: bool,
+    /// Active resize-by-handle drag, if any.
+    resize: Option<ResizeDrag>,
+    /// Copied shape components (Ctrl+C / Ctrl+V).
+    clipboard: Option<Vec<CompValue>>,
+}
+
+struct ResizeDrag {
+    handle: usize,
+    start_frame: RectEmu,
+    start_cursor: Point<Pixels>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -217,6 +261,8 @@ impl HayateApp {
             field_edit: None,
             guides: Vec::new(),
             show_grid: false,
+            resize: None,
+            clipboard: None,
         }
     }
 
@@ -448,6 +494,27 @@ impl HayateApp {
         let o = self.canvas_origin.get();
         let x = f32::from(ev.position.x - o.x);
         let y = f32::from(ev.position.y - o.y);
+        // Grab a resize handle on the current (axis-aligned) selection?
+        if let Some(sel) = self.selection {
+            if let Some(node) = self.scene.nodes.iter().find(|n| n.source == Some(sel)) {
+                if node.rotation_deg.abs() < 1e-3 {
+                    let r = prim_bounds(&node.prim);
+                    for (i, (hx, hy)) in resize_handles(r, 0.0).iter().enumerate() {
+                        if (x - hx).hypot(y - hy) < 8.0 {
+                            if let Some(f) = self.pres.world.frames.get(&sel).copied() {
+                                self.resize = Some(ResizeDrag {
+                                    handle: i,
+                                    start_frame: f,
+                                    start_cursor: ev.position,
+                                });
+                                cx.notify();
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
         self.selection = hit_test(&self.scene, x, y);
         self.drag = self.selection.and_then(|e| {
             self.pres.world.frames.get(&e).map(|f| Drag {
@@ -460,6 +527,21 @@ impl HayateApp {
     }
 
     fn on_mouse_move(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if let Some(rd) = &self.resize {
+            let scale = self.scale();
+            if scale <= 0.0 {
+                return;
+            }
+            let dx = (f32::from(ev.position.x - rd.start_cursor.x) as f64 / scale) as i64;
+            let dy = (f32::from(ev.position.y - rd.start_cursor.y) as f64 / scale) as i64;
+            let nf = resize_frame(rd.handle, rd.start_frame, dx, dy);
+            if let Some(e) = self.selection {
+                self.pres.world.frames.insert(e, nf);
+                self.rebuild();
+                cx.notify();
+            }
+            return;
+        }
         let Some(d) = &self.drag else { return };
         let scale = self.scale();
         if scale <= 0.0 {
@@ -497,6 +579,19 @@ impl HayateApp {
     }
 
     fn on_mouse_up(&mut self, _ev: &MouseUpEvent, cx: &mut Context<Self>) {
+        if let Some(rd) = self.resize.take() {
+            if let Some(e) = self.selection {
+                if let Some(final_f) = self.pres.world.frames.get(&e).copied() {
+                    if final_f != rd.start_frame {
+                        self.pres.world.frames.insert(e, rd.start_frame);
+                        let tx = edit::set_frame(e, final_f);
+                        self.commit_tx(tx);
+                    }
+                }
+            }
+            cx.notify();
+            return;
+        }
         self.guides.clear();
         let Some(d) = self.drag.take() else { return };
         let Some(final_f) = self.pres.world.frames.get(&d.entity).copied() else {
@@ -549,6 +644,15 @@ impl HayateApp {
             }
             "r" if !cmd => {
                 self.add_rect();
+                cx.notify();
+            }
+            "d" if cmd => {
+                self.duplicate_selection();
+                cx.notify();
+            }
+            "c" if cmd => self.copy_selection(),
+            "v" if cmd => {
+                self.paste_clipboard();
                 cx.notify();
             }
             "delete" | "backspace" if !cmd => {
@@ -722,6 +826,47 @@ impl HayateApp {
                 self.commit_tx(tx);
             }
         }
+    }
+
+    fn duplicate_selection(&mut self) {
+        if let Some(src) = self.selection {
+            let ne = self.pres.world.reserve_id();
+            let tx = edit::duplicate(&self.pres.world, src, ne);
+            self.commit_tx(tx);
+            self.selection = Some(ne);
+        }
+    }
+
+    fn copy_selection(&mut self) {
+        self.clipboard = self.selection.map(|e| self.pres.world.components_of(e));
+    }
+
+    fn paste_clipboard(&mut self) {
+        let Some(comps) = self.clipboard.clone() else {
+            return;
+        };
+        let order = {
+            let kids = self.pres.children(self.slide);
+            let last = kids.last().and_then(|e| self.pres.world.order.get(e));
+            FracIndex::after(last)
+        };
+        let ne = self.pres.world.reserve_id();
+        let mut ops = vec![Operation::Spawn { entity: ne }];
+        for comp in comps {
+            let comp = match comp {
+                CompValue::Frame(f) => CompValue::Frame(RectEmu {
+                    origin: PointEmu::new(f.origin.x + 182_880, f.origin.y + 182_880),
+                    size: f.size,
+                }),
+                other => other,
+            };
+            ops.push(Operation::SetComponent { entity: ne, value: comp });
+        }
+        // Ensure it lands on the current slide, appended in order.
+        ops.push(Operation::SetComponent { entity: ne, value: CompValue::Parent(self.slide) });
+        ops.push(Operation::SetComponent { entity: ne, value: CompValue::Order(order) });
+        self.commit_tx(Transaction::new("paste", ops));
+        self.selection = Some(ne);
     }
 
     fn open(&mut self) {
@@ -1013,6 +1158,26 @@ impl Render for HayateApp {
                             if let Ok(path) = sb.build() {
                                 window.paint_path(path, rgb(SELECTION));
                             }
+                        }
+                    }
+                }
+                // Resize handles on the selection.
+                if let Some(sel) = selection {
+                    if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(sel)) {
+                        let r = prim_bounds(&node.prim);
+                        for (hx, hy) in resize_handles(r, node.rotation_deg) {
+                            let b = Bounds {
+                                origin: point(o.x + px(hx - 4.0), o.y + px(hy - 4.0)),
+                                size: size(px(8.0), px(8.0)),
+                            };
+                            window.paint_quad(quad(
+                                b,
+                                px(1.0),
+                                Background::from(rgb(0xffffff)),
+                                px(1.0),
+                                rgb(SELECTION),
+                                Default::default(),
+                            ));
                         }
                     }
                 }
