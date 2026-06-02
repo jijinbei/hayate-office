@@ -78,10 +78,33 @@ impl HayateApp {
             FracIndex::after(last)
         };
         let e = self.pres.world.reserve_id();
-        let frame = RectEmu::new(inch_f(3.0), inch_f(2.0), inch_f(3.0), inch_f(2.0));
+        // Size the frame to the image's real aspect ratio. The natural size maps pixels to EMU
+        // at 96 DPI (9525 EMU/px); the on-slide frame scales that down to fit a sensible box
+        // while preserving the ratio. Unknown headers fall back to a 3x2 inch frame.
+        let (nat_w, nat_h, frame_w, frame_h) = match crate::paint::image_dimensions(
+            self.pres.media.get(&key).map(Vec::as_slice).unwrap_or(&[]),
+        ) {
+            Some((pw, ph)) if pw > 0 && ph > 0 => {
+                const EMU_PER_PX: f64 = 9525.0;
+                let nat_w = (pw as f64 * EMU_PER_PX) as i64;
+                let nat_h = (ph as f64 * EMU_PER_PX) as i64;
+                // Fit within 6x4.5 inches, never upscaling past the natural size.
+                let max_w = inch_f(6.0) as f64;
+                let max_h = inch_f(4.5) as f64;
+                let scale = (max_w / nat_w as f64).min(max_h / nat_h as f64).min(1.0);
+                (
+                    nat_w,
+                    nat_h,
+                    (nat_w as f64 * scale) as i64,
+                    (nat_h as f64 * scale) as i64,
+                )
+            }
+            _ => (inch_f(3.0), inch_f(2.0), inch_f(3.0), inch_f(2.0)),
+        };
+        let frame = RectEmu::new(inch_f(1.5), inch_f(1.0), frame_w, frame_h);
         let pic = hayate_ir::image::PictureRef {
             media_key: key,
-            natural: SizeEmu::new(inch_f(3.0), inch_f(2.0)),
+            natural: SizeEmu::new(nat_w, nat_h),
         };
         let tx = Transaction::new(
             "insert image",
@@ -543,14 +566,42 @@ impl HayateApp {
     /// paste was handled. Returns `false` when there is no clipboard image, so the caller can
     /// fall back to the internal shape paste.
     pub(crate) fn paste_clipboard_image(&mut self, cx: &mut Context<Self>) -> bool {
-        let Some(item) = cx.read_from_clipboard() else {
-            return false;
-        };
-        for entry in item.entries() {
-            if let ClipboardEntry::Image(img) = entry {
-                self.insert_image_bytes(img.bytes.clone());
-                return true;
+        // 1) gpui's own clipboard read: a decoded image, or file paths / a file URI pointing at
+        //    an image. On Wayland gpui returns text in preference to an image when the source
+        //    offers both, so this can miss screenshots — hence the external-tool fallback below.
+        if let Some(item) = cx.read_from_clipboard() {
+            for entry in item.entries() {
+                match entry {
+                    ClipboardEntry::Image(img) => {
+                        self.insert_image_bytes(img.bytes.clone());
+                        return true;
+                    }
+                    ClipboardEntry::ExternalPaths(paths) => {
+                        if let Some(p) = paths.paths().first() {
+                            let before = self.pres.children(self.slide).len();
+                            self.insert_image_file(p.clone());
+                            if self.pres.children(self.slide).len() > before {
+                                return true;
+                            }
+                        }
+                    }
+                    ClipboardEntry::String(s) => {
+                        if let Some(path) = clipboard_text_image_path(s.text()) {
+                            let before = self.pres.children(self.slide).len();
+                            self.insert_image_file(path);
+                            if self.pres.children(self.slide).len() > before {
+                                return true;
+                            }
+                        }
+                    }
+                }
             }
+        }
+        // 2) Fallback: ask the system clipboard for raw image bytes directly. This recovers
+        //    screenshots on Wayland/X11 that gpui skipped in favour of accompanying text.
+        if let Some(bytes) = read_clipboard_image_via_tool() {
+            self.insert_image_bytes(bytes);
+            return true;
         }
         false
     }
@@ -591,4 +642,79 @@ impl HayateApp {
         self.commit_tx(Transaction::new("paste", ops));
         self.selection = Some(ne);
     }
+}
+
+const CLIPBOARD_IMAGE_EXTS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+
+/// Interpret clipboard text as a path to an image file. Accepts an absolute path or a `file://`
+/// URI (as file managers place on the clipboard when copying a file), and only when the target
+/// has a supported image extension and exists. Returns `None` for ordinary text.
+fn clipboard_text_image_path(text: &str) -> Option<std::path::PathBuf> {
+    let first = text.lines().next()?.trim();
+    let raw = first.strip_prefix("file://").unwrap_or(first);
+    // Decode the handful of percent-escapes that show up in file URIs (spaces, etc.).
+    let decoded = percent_decode(raw);
+    let path = std::path::PathBuf::from(decoded);
+    let ok_ext = path
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|e| CLIPBOARD_IMAGE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+        .unwrap_or(false);
+    (ok_ext && path.is_file()).then_some(path)
+}
+
+/// Minimal percent-decoding for `file://` URIs (e.g. `%20` -> space). Leaves malformed escapes
+/// untouched.
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            let hi = (bytes[i + 1] as char).to_digit(16);
+            let lo = (bytes[i + 2] as char).to_digit(16);
+            if let (Some(hi), Some(lo)) = (hi, lo) {
+                out.push((hi * 16 + lo) as u8);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// Fetch raw image bytes from the system clipboard using an external helper, recovering images
+/// that gpui's reader skips (on Wayland it prefers accompanying text over the image). Tries
+/// `wl-paste` first when a Wayland session is present, then `xclip`. Returns the bytes only when
+/// they look like a supported image.
+fn read_clipboard_image_via_tool() -> Option<Vec<u8>> {
+    use std::process::Command;
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let attempts: &[(&str, &[&str])] = if wayland {
+        &[
+            ("wl-paste", &["--no-newline", "--type", "image/png"]),
+            (
+                "xclip",
+                &["-selection", "clipboard", "-t", "image/png", "-o"],
+            ),
+        ]
+    } else {
+        &[
+            (
+                "xclip",
+                &["-selection", "clipboard", "-t", "image/png", "-o"],
+            ),
+            ("wl-paste", &["--no-newline", "--type", "image/png"]),
+        ]
+    };
+    for (cmd, args) in attempts {
+        if let Ok(out) = Command::new(cmd).args(*args).output() {
+            if out.status.success() && crate::paint::guess_image_format(&out.stdout).is_some() {
+                return Some(out.stdout);
+            }
+        }
+    }
+    None
 }

@@ -126,6 +126,84 @@ pub(crate) fn guess_image_format(bytes: &[u8]) -> Option<ImageFormat> {
     }
 }
 
+/// Read an encoded image's pixel dimensions straight from its header bytes, without decoding
+/// the pixels. Supports the same formats as [`guess_image_format`] (PNG/JPEG/GIF/BMP/WebP).
+/// Returns `None` when the format is unknown or the header is truncated, so callers fall back
+/// to a default frame size.
+pub(crate) fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
+    let be16 = |i: usize| Some(u16::from_be_bytes([*bytes.get(i)?, *bytes.get(i + 1)?]) as u32);
+    let be32 = |i: usize| {
+        Some(u32::from_be_bytes([
+            bytes[i],
+            bytes[i + 1],
+            bytes[i + 2],
+            bytes[i + 3],
+        ]))
+    };
+    let le16 = |i: usize| Some(u16::from_le_bytes([*bytes.get(i)?, *bytes.get(i + 1)?]) as u32);
+    match guess_image_format(bytes)? {
+        // PNG IHDR: 4-byte big-endian width/height at offsets 16/20.
+        ImageFormat::Png if bytes.len() >= 24 => Some((be32(16)?, be32(20)?)),
+        // GIF logical screen: little-endian u16 width/height at offsets 6/8.
+        ImageFormat::Gif if bytes.len() >= 10 => Some((le16(6)?, le16(8)?)),
+        // BMP BITMAPINFOHEADER: little-endian i32 width/height at offsets 18/22 (height may be
+        // negative for top-down rasters).
+        ImageFormat::Bmp if bytes.len() >= 26 => {
+            let w = i32::from_le_bytes([bytes[18], bytes[19], bytes[20], bytes[21]]);
+            let h = i32::from_le_bytes([bytes[22], bytes[23], bytes[24], bytes[25]]);
+            Some((w.unsigned_abs(), h.unsigned_abs()))
+        }
+        // JPEG: walk segment markers until a Start-Of-Frame carries the dimensions.
+        ImageFormat::Jpeg => {
+            let mut i = 2;
+            while i + 9 < bytes.len() {
+                if bytes[i] != 0xFF {
+                    i += 1;
+                    continue;
+                }
+                let marker = bytes[i + 1];
+                // SOF0..SOF15 hold the frame size; DHT/DAC/RST are not frame headers.
+                let is_sof = (0xC0..=0xCF).contains(&marker)
+                    && marker != 0xC4
+                    && marker != 0xC8
+                    && marker != 0xCC;
+                if is_sof {
+                    let h = be16(i + 5)?;
+                    let w = be16(i + 7)?;
+                    return Some((w, h));
+                }
+                let len = be16(i + 2)? as usize;
+                if len < 2 {
+                    return None;
+                }
+                i += 2 + len;
+            }
+            None
+        }
+        // WebP: VP8X (extended), VP8L (lossless), or VP8 (lossy) sub-chunk at offset 12.
+        ImageFormat::Webp if bytes.len() >= 30 => match &bytes[12..16] {
+            b"VP8X" => {
+                let w = 1 + (bytes[24] as u32 | (bytes[25] as u32) << 8 | (bytes[26] as u32) << 16);
+                let h = 1 + (bytes[27] as u32 | (bytes[28] as u32) << 8 | (bytes[29] as u32) << 16);
+                Some((w, h))
+            }
+            b"VP8L" => {
+                let b = &bytes[21..25];
+                let bits =
+                    b[0] as u32 | (b[1] as u32) << 8 | (b[2] as u32) << 16 | (b[3] as u32) << 24;
+                Some((1 + (bits & 0x3FFF), 1 + ((bits >> 14) & 0x3FFF)))
+            }
+            b"VP8 " => {
+                let w = le16(26)? & 0x3FFF;
+                let h = le16(28)? & 0x3FFF;
+                Some((w, h))
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Paint a Scene's background and shapes at `o` (window coords). Shared by the main view and
 /// the slide-list thumbnails. Rotated shapes are drawn as paths (quads carry no transform).
 ///

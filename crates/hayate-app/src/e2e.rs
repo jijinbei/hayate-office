@@ -648,3 +648,29 @@ fn line_endpoint_drag_allows_any_direction(cx: &mut TestAppContext) {
         "line should point up-left (negative frame size): {size:?}"
     );
 }
+
+#[gpui::test]
+fn image_dimensions_reads_png_header(_cx: &mut TestAppContext) {
+    // A real PNG built by the in-tree encoder; the header parser must recover its size.
+    let png = hayate_render::encode_png(&vec![0u8; 4 * 40 * 30], 40, 30);
+    assert_eq!(crate::paint::image_dimensions(&png), Some((40, 30)));
+    assert_eq!(crate::paint::image_dimensions(b"not an image"), None);
+}
+
+#[gpui::test]
+fn pasted_image_keeps_aspect_ratio(cx: &mut TestAppContext) {
+    // A 4:3 image should land in a frame whose width:height is also 4:3 (was a fixed 3:2 box).
+    let png = hayate_render::encode_png(&vec![0u8; 4 * 400 * 300], 400, 300);
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| s.insert_image_bytes(png));
+    let (w, h) = app.read_with(cx, |s, _| {
+        let e = s.selection.unwrap();
+        let f = s.pres.world.frames.get(&e).unwrap();
+        (f.size.w as f64, f.size.h as f64)
+    });
+    let ratio = w / h;
+    assert!(
+        (ratio - 4.0 / 3.0).abs() < 0.02,
+        "frame aspect should be 4:3, got {ratio}"
+    );
+}
