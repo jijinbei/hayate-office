@@ -2,7 +2,7 @@
 //! pixel-space primitives (DESIGN 6.7/6.14).
 
 use crate::scene::{
-    Paint, Primitive, PxSize, ResolvedParagraph, ResolvedRun, Scene, SceneNode, StrokePx,
+    Paint, Primitive, PxRect, PxSize, ResolvedParagraph, ResolvedRun, Scene, SceneNode, StrokePx,
     TextBlock, Viewport,
 };
 use hayate_ir::anim::{AnimKind, Trigger};
@@ -15,6 +15,51 @@ use hayate_ir::text::TextBody;
 use hayate_ir::theme::Theme;
 use hayate_ir::world::Entity;
 
+/// Build a vector-shape primitive from a resolved geometry, bounds, and paints. Shared by the
+/// slide's own shapes and by inherited placeholders. A line with no stroke gets a default 2pt
+/// dark stroke so it stays visible.
+fn geometry_prim(
+    geom: &Geometry,
+    bounds: PxRect,
+    fill: Option<Paint>,
+    stroke: Option<StrokePx>,
+    vp: &Viewport,
+) -> Primitive {
+    match geom {
+        Geometry::Ellipse => Primitive::Ellipse {
+            bounds,
+            fill,
+            stroke,
+        },
+        Geometry::Rect => Primitive::Quad {
+            bounds,
+            corner_radius: 0.0,
+            fill,
+            stroke,
+        },
+        Geometry::RoundRect { radius } => Primitive::Quad {
+            bounds,
+            corner_radius: vp.len(*radius),
+            fill,
+            stroke,
+        },
+        Geometry::Line { start, end } => {
+            // A line runs along the diagonal of its frame (top-left -> bottom-right).
+            let stroke = stroke.or(Some(StrokePx {
+                color: Rgba::rgb(0x20, 0x20, 0x20),
+                width: vp.len(hayate_ir::units::pt(2)),
+            }));
+            Primitive::Line {
+                from: (bounds.x, bounds.y),
+                to: (bounds.x + bounds.w, bounds.y + bounds.h),
+                stroke,
+                start_arrow: matches!(start, ArrowHead::Arrow),
+                end_arrow: matches!(end, ArrowHead::Arrow),
+            }
+        }
+    }
+}
+
 /// Build the scene for `slide` rendered to fit `target` pixels.
 pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Scene {
     let vp = Viewport::fit(p.slide_size, target);
@@ -26,7 +71,41 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
         .unwrap_or(Rgba::WHITE);
 
     let mut nodes = Vec::new();
+
+    // Inherited placeholders are drawn first (behind the slide's own content). Each
+    // placeholder's fields resolve slide -> layout -> master independently, so a frame may come
+    // from the layout while the text comes from the slide. A placeholder the slide overrides
+    // directly is selectable (source = the slide entity); a purely inherited one is display-only.
+    for ph in p.effective_placeholders(slide) {
+        let Some(frame) = p.ph_frame(slide, ph) else {
+            continue;
+        };
+        let bounds = vp.rect(frame);
+        let fill = p.ph_fill(slide, ph).map(|f| fill_to_paint(&f, &theme));
+        let prim = if let Some(tb) = p.ph_text(slide, ph) {
+            Primitive::Text(resolve_text(tb, &theme, &vp, bounds))
+        } else if let Some(geom) = p.ph_geometry(slide, ph) {
+            geometry_prim(&geom, bounds, fill, None, &vp)
+        } else {
+            continue;
+        };
+        let source = p.find_placeholder(slide, ph);
+        let rotation_deg = source
+            .and_then(|e| p.world.rotations.get(&e).copied())
+            .unwrap_or(0.0);
+        nodes.push(SceneNode {
+            source,
+            rotation_deg,
+            opacity: 1.0,
+            prim,
+        });
+    }
+
     for e in p.children(slide) {
+        // Placeholder shapes are rendered above via the inheritance resolvers.
+        if p.world.placeholders.get(&e).is_some() {
+            continue;
+        }
         let frame = match p.world.frames.get(&e) {
             Some(f) => *f,
             None => continue, // shapes without geometry are skipped for now
@@ -49,41 +128,7 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
                 media_key: pic.media_key.clone(),
             }
         } else if let Some(geom) = p.world.geometries.get(&e) {
-            match geom {
-                Geometry::Ellipse => Primitive::Ellipse {
-                    bounds,
-                    fill,
-                    stroke,
-                },
-                Geometry::Rect => Primitive::Quad {
-                    bounds,
-                    corner_radius: 0.0,
-                    fill,
-                    stroke,
-                },
-                Geometry::RoundRect { radius } => Primitive::Quad {
-                    bounds,
-                    corner_radius: vp.len(*radius),
-                    fill,
-                    stroke,
-                },
-                Geometry::Line { start, end } => {
-                    // A line runs along the diagonal of its frame (top-left -> bottom-right).
-                    // It has no fill; if the shape carries no stroke, synthesize a default
-                    // 2pt dark stroke so the line is visible.
-                    let stroke = stroke.or(Some(StrokePx {
-                        color: Rgba::rgb(0x20, 0x20, 0x20),
-                        width: vp.len(hayate_ir::units::pt(2)),
-                    }));
-                    Primitive::Line {
-                        from: (bounds.x, bounds.y),
-                        to: (bounds.x + bounds.w, bounds.y + bounds.h),
-                        stroke,
-                        start_arrow: matches!(start, ArrowHead::Arrow),
-                        end_arrow: matches!(end, ArrowHead::Arrow),
-                    }
-                }
-            }
+            geometry_prim(geom, bounds, fill, stroke, &vp)
         } else {
             continue;
         };

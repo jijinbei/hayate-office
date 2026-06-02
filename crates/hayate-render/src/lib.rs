@@ -8,6 +8,7 @@ pub mod guides;
 pub mod handles;
 pub mod hit;
 pub mod linebreak;
+pub mod pdf;
 pub mod png;
 pub mod raster;
 pub mod scene;
@@ -20,6 +21,7 @@ pub use guides::{alignment_guides, Guide, GuideKind};
 pub use handles::resize_handles;
 pub use hit::hit_test;
 pub use linebreak::{DefaultBreaker, Item, JapaneseBreaker, LineBreaker};
+pub use pdf::export_pdf;
 pub use png::encode_png;
 pub use raster::rasterize;
 pub use scene::{
