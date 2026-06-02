@@ -81,6 +81,49 @@ pub fn load(path: impl AsRef<Path>) -> Result<Presentation> {
     Ok(pres)
 }
 
+// --- Human-readable JSON dump (open-format escape hatch, DESIGN) -----------
+//
+// `.hayate` is a binary redb database; for inspectability and debugging we also
+// expose a plain, pretty-printed JSON view of the whole document. This is the
+// open-format escape hatch promised in DESIGN: it lets a human (or a script)
+// read the full document state without the redb engine. It is a one-way dump,
+// not a load path.
+
+/// Render `pres` as pretty-printed JSON:
+/// `{ "format_version", "slide_size", "default_master", "entities": { "<id>": [<CompValue>, ...] } }`.
+pub fn dump_json(pres: &Presentation) -> String {
+    // Build the per-entity component map keyed by the stringified entity id, so
+    // the result is a stable, human-readable JSON object.
+    let mut entities = serde_json::Map::new();
+    for e in pres.world.iter() {
+        let comps = pres.world.components_of(e);
+        entities.insert(e.0.to_string(), serde_json::json!(comps));
+    }
+
+    let doc = serde_json::json!({
+        "format_version": FORMAT_VERSION,
+        "slide_size": pres.slide_size,
+        "default_master": pres.default_master,
+        "entities": entities,
+    });
+
+    // dump_json builds a serde_json::Value, which serializes infallibly to a
+    // String, so to_string_pretty cannot fail here.
+    serde_json::to_string_pretty(&doc).expect("serializing a serde_json::Value is infallible")
+}
+
+/// Write [`dump_json`] of `pres` to `path` atomically (write to a temp file,
+/// then rename over the target), mirroring [`save`].
+pub fn write_json(pres: &Presentation, path: impl AsRef<Path>) -> Result<()> {
+    let path = path.as_ref();
+    let tmp = path.with_extension("json.tmp");
+    let _ = std::fs::remove_file(&tmp);
+
+    std::fs::write(&tmp, dump_json(pres))?;
+    std::fs::rename(&tmp, path)?;
+    Ok(())
+}
+
 // --- Autosave / crash recovery (MVP) ---------------------------------------
 //
 // This is the MVP recovery seam. We keep a full-snapshot autosave file next to
@@ -211,6 +254,46 @@ mod tests {
         assert_eq!(loaded.slides().len(), 2);
 
         clear_autosave(&doc);
+    }
+
+    #[test]
+    fn dump_json_is_readable_and_contains_components() {
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        let slide = p.add_slide(layout);
+        let rect = p.add_shape(slide);
+        p.world.frames.insert(rect, RectEmu::new(10, 20, 300, 400));
+        p.world.geometries.insert(rect, Geometry::Rect);
+
+        let json = dump_json(&p);
+        assert!(json.contains("format_version"));
+        assert!(json.contains("entities"));
+        // The component variant name appears for the shape's Frame.
+        assert!(json.contains("Frame"));
+        // It is valid, parseable JSON.
+        let _: serde_json::Value = serde_json::from_str(&json).unwrap();
+    }
+
+    #[test]
+    fn write_json_writes_readable_file() {
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        let slide = p.add_slide(layout);
+        let rect = p.add_shape(slide);
+        p.world.frames.insert(rect, RectEmu::new(1, 2, 3, 4));
+
+        let path = temp_path("dump-json").with_extension("json");
+        write_json(&p, &path).unwrap();
+        // No temp file left behind after the atomic rename.
+        assert!(!path.with_extension("json.tmp").exists());
+
+        let contents = std::fs::read_to_string(&path).unwrap();
+        assert!(contents.contains("format_version"));
+        assert!(contents.contains("Frame"));
+
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]
