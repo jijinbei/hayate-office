@@ -11,7 +11,7 @@
 //! `schemars` (so the manifest is literally an AI tool definition); the simple schema here is
 //! a deliberate placeholder for that.
 
-use hayate_ir::color::{Color, Rgba};
+use hayate_ir::color::{Color, Rgba, ThemeColorToken};
 use hayate_ir::frac::FracIndex;
 use hayate_ir::paint::Fill;
 use hayate_ir::world::{CompValue, Entity, World};
@@ -157,6 +157,22 @@ impl CommandRegistry {
             })
             .collect()
     }
+
+    /// Return `(id, title)` pairs for commands whose id or title contains `query`
+    /// (case-insensitive). An empty query matches every command. Used to drive the command
+    /// palette's incremental search. Results are in registration order.
+    pub fn filter(&self, query: &str) -> Vec<(String, String)> {
+        let q = query.to_lowercase();
+        self.commands
+            .iter()
+            .filter(|c| {
+                q.is_empty()
+                    || c.meta.id.to_lowercase().contains(&q)
+                    || c.meta.title.to_lowercase().contains(&q)
+            })
+            .map(|c| (c.meta.id.clone(), c.meta.title.clone()))
+            .collect()
+    }
 }
 
 // --- Arg parsing helpers (lenient) ---
@@ -170,6 +186,11 @@ fn arg_entity(args: &Value, key: &str) -> Option<Entity> {
 fn arg_i64(args: &Value, key: &str) -> Option<i64> {
     let v = args.get(key)?;
     v.as_i64().or_else(|| v.as_f64().map(|f| f as i64))
+}
+
+/// Read an `f64` from `args[key]`, accepting integer or float JSON numbers.
+fn arg_f64(args: &Value, key: &str) -> Option<f64> {
+    args.get(key)?.as_f64()
 }
 
 /// Parse a color from `args[key]`. Accepts either an `{ "r":.., "g":.., "b":.., "a"?:.. }`
@@ -272,6 +293,54 @@ pub fn builtins() -> CommandRegistry {
             None => vec![],
         },
     );
+
+    // shape.set_rotation — set the entity's Rotation (degrees clockwise). Built directly as a
+    // SetComponent op so this does not depend on the (separately evolving) edit::set_rotation.
+    reg.register(
+        CommandMeta::new("shape.set_rotation", "Set Rotation", "Shape"),
+        vec![
+            ParamSpec::new("entity", ParamType::Entity),
+            ParamSpec::new("degrees", ParamType::Float),
+        ],
+        |_world, args| match (arg_entity(args, "entity"), arg_f64(args, "degrees")) {
+            (Some(entity), Some(degrees)) => vec![Operation::SetComponent {
+                entity,
+                value: CompValue::Rotation(degrees as f32),
+            }],
+            _ => vec![],
+        },
+    );
+
+    // shape.fill_accent1 .. shape.fill_accent6 — set the shape fill to a theme accent color.
+    // Theme references (rather than literals) let a palette change propagate everywhere.
+    for (n, token) in [
+        ThemeColorToken::Accent1,
+        ThemeColorToken::Accent2,
+        ThemeColorToken::Accent3,
+        ThemeColorToken::Accent4,
+        ThemeColorToken::Accent5,
+        ThemeColorToken::Accent6,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let n = n + 1;
+        reg.register(
+            CommandMeta::new(
+                format!("shape.fill_accent{n}"),
+                format!("Fill: Accent {n}"),
+                "Style",
+            ),
+            vec![ParamSpec::new("entity", ParamType::Entity)],
+            move |_world, args| match arg_entity(args, "entity") {
+                Some(entity) => vec![Operation::SetComponent {
+                    entity,
+                    value: CompValue::Fill(Fill::Solid(Color::theme(token))),
+                }],
+                None => vec![],
+            },
+        );
+    }
 
     reg
 }
@@ -553,5 +622,79 @@ mod tests {
         let params = mv["params"].as_array().unwrap();
         assert_eq!(params[0]["name"], "entity");
         assert_eq!(params[0]["type"], "entity");
+    }
+
+    #[test]
+    fn set_rotation_command_sets_rotation() {
+        let (mut w, e) = world_with_framed_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build(
+                "shape.set_rotation",
+                &json!({ "entity": e.0, "degrees": 45 }),
+                &w,
+            )
+            .expect("shape.set_rotation is registered");
+        assert_eq!(tx.label, "Set Rotation");
+        h.commit(&mut w, tx);
+
+        assert_eq!(
+            w.get(e, CompKind::Rotation),
+            Some(CompValue::Rotation(45.0))
+        );
+
+        // Undoable as one step (the rotation was previously absent).
+        assert!(h.undo(&mut w));
+        assert_eq!(w.get(e, CompKind::Rotation), None);
+    }
+
+    #[test]
+    fn fill_accent_command_sets_theme_fill() {
+        use hayate_ir::color::{Color, ThemeColorToken};
+
+        let (mut w, e) = world_with_framed_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build("shape.fill_accent3", &json!({ "entity": e.0 }), &w)
+            .expect("shape.fill_accent3 is registered");
+        h.commit(&mut w, tx);
+
+        assert_eq!(
+            w.get(e, CompKind::Fill),
+            Some(CompValue::Fill(Fill::Solid(Color::theme(
+                ThemeColorToken::Accent3
+            ))))
+        );
+    }
+
+    #[test]
+    fn filter_finds_accent_commands() {
+        let reg = builtins();
+        let hits = reg.filter("accent");
+        let ids: Vec<&str> = hits.iter().map(|(id, _)| id.as_str()).collect();
+        assert_eq!(ids.len(), 6, "exactly the six accent fills, got {ids:?}");
+        for n in 1..=6 {
+            let id = format!("shape.fill_accent{n}");
+            assert!(ids.contains(&id.as_str()), "missing {id}");
+        }
+        // Titles come through alongside ids.
+        assert!(hits
+            .iter()
+            .any(|(_, title)| title == "Fill: Accent 1"));
+    }
+
+    #[test]
+    fn manifest_includes_set_rotation() {
+        let reg = builtins();
+        let manifest = reg.manifest();
+        let ids: Vec<&str> = manifest
+            .iter()
+            .filter_map(|c| c["id"].as_str())
+            .collect();
+        assert!(ids.contains(&"shape.set_rotation"));
     }
 }
