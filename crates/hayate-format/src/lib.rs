@@ -81,6 +81,45 @@ pub fn load(path: impl AsRef<Path>) -> Result<Presentation> {
     Ok(pres)
 }
 
+// --- Autosave / crash recovery (MVP) ---------------------------------------
+//
+// This is the MVP recovery seam. We keep a full-snapshot autosave file next to
+// the document at `<doc>.autosave`, written via the same atomic `save()` path.
+// On a crash the caller can detect a leftover autosave and offer to recover it.
+//
+// A true operation-log WAL (DESIGN 6.9) — appending edits incrementally and
+// replaying them — can replace this snapshot approach later without changing
+// the calling convention here.
+
+/// Autosave file path for `doc_path`: the document path with `.autosave`
+/// appended to its existing name (e.g. "deck.hayate" -> "deck.hayate.autosave").
+pub fn autosave_path(doc_path: &Path) -> std::path::PathBuf {
+    let mut name = doc_path.as_os_str().to_os_string();
+    name.push(".autosave");
+    std::path::PathBuf::from(name)
+}
+
+/// Save a recovery snapshot of `pres` next to `doc_path`.
+pub fn autosave(pres: &Presentation, doc_path: impl AsRef<Path>) -> Result<()> {
+    save(pres, autosave_path(doc_path.as_ref()))
+}
+
+/// Whether an autosave snapshot exists for `doc_path`.
+pub fn has_autosave(doc_path: impl AsRef<Path>) -> bool {
+    autosave_path(doc_path.as_ref()).exists()
+}
+
+/// Load the autosave snapshot for `doc_path`.
+pub fn load_autosave(doc_path: impl AsRef<Path>) -> Result<Presentation> {
+    load(autosave_path(doc_path.as_ref()))
+}
+
+/// Remove the autosave file for `doc_path` if present; errors are ignored
+/// (e.g. there is nothing to recover after a clean save).
+pub fn clear_autosave(doc_path: impl AsRef<Path>) {
+    let _ = std::fs::remove_file(autosave_path(doc_path.as_ref()));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -138,5 +177,51 @@ mod tests {
         assert!(!tmp.exists(), "temp file should be renamed away");
         assert!(path.exists());
         let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn autosave_path_appends_extension() {
+        let p = std::path::Path::new("deck.hayate");
+        assert_eq!(autosave_path(p), std::path::PathBuf::from("deck.hayate.autosave"));
+    }
+
+    #[test]
+    fn autosave_writes_detectable_file() {
+        let p = Presentation::new();
+        let doc = temp_path("autosave-write");
+        assert!(!has_autosave(&doc));
+        autosave(&p, &doc).unwrap();
+        assert!(has_autosave(&doc));
+        // Autosave does not create the document itself.
+        assert!(!doc.exists());
+        clear_autosave(&doc);
+    }
+
+    #[test]
+    fn load_autosave_roundtrips() {
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        p.add_slide(layout);
+        p.add_slide(layout);
+
+        let doc = temp_path("autosave-roundtrip");
+        autosave(&p, &doc).unwrap();
+        let loaded = load_autosave(&doc).unwrap();
+        assert_eq!(loaded.slides().len(), 2);
+
+        clear_autosave(&doc);
+    }
+
+    #[test]
+    fn clear_autosave_removes_file() {
+        let p = Presentation::new();
+        let doc = temp_path("autosave-clear");
+        autosave(&p, &doc).unwrap();
+        assert!(has_autosave(&doc));
+        clear_autosave(&doc);
+        assert!(!has_autosave(&doc));
+        // Clearing a non-existent autosave is a no-op (no panic).
+        clear_autosave(&doc);
     }
 }
