@@ -143,6 +143,8 @@ struct HayateApp {
     registry: CommandRegistry,
     /// Command palette state when open.
     palette: Option<PaletteState>,
+    /// Rotation numeric-entry buffer (Some while the angle field is being typed into).
+    rot_edit: Option<String>,
 }
 
 struct PaletteState {
@@ -168,7 +170,37 @@ impl HayateApp {
             view_size: TARGET,
             registry: hayate_core::builtins(),
             palette: None,
+            rot_edit: None,
         }
+    }
+
+    /// Handle a key while the rotation field is being edited (digits only, 0..=360).
+    fn rot_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        let key = ev.keystroke.key.clone();
+        match key.as_str() {
+            "escape" => self.rot_edit = None,
+            "enter" => {
+                if let Some(buf) = self.rot_edit.take() {
+                    if let Ok(v) = buf.trim().parse::<f32>() {
+                        self.set_rotation_abs(v.rem_euclid(360.0));
+                    }
+                }
+            }
+            "backspace" => {
+                if let Some(b) = self.rot_edit.as_mut() {
+                    b.pop();
+                }
+            }
+            s if s.len() == 1 && (s.chars().all(|c| c.is_ascii_digit()) || s == ".") => {
+                if let Some(b) = self.rot_edit.as_mut() {
+                    if b.len() < 6 {
+                        b.push_str(s);
+                    }
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
     }
 
     /// Commands matching the palette query, as (id, title).
@@ -319,6 +351,10 @@ impl HayateApp {
     fn on_key_down(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         if self.palette.is_some() {
             self.palette_key(ev, cx);
+            return;
+        }
+        if self.rot_edit.is_some() {
+            self.rot_key(ev, cx);
             return;
         }
         let k = &ev.keystroke;
@@ -525,8 +561,16 @@ fn paint_text(tb: &TextBlock, ox: Pixels, oy: Pixels, window: &mut Window, cx: &
 }
 
 /// A small clickable toolbar button.
+/// Rotate point (x,y) around center (cx,cy) by `rad` radians (clockwise in screen coords).
+fn rotate_pt(x: f32, y: f32, cx: f32, cy: f32, rad: f32) -> (f32, f32) {
+    let (s, c) = rad.sin_cos();
+    let dx = x - cx;
+    let dy = y - cy;
+    (cx + dx * c - dy * s, cy + dx * s + dy * c)
+}
+
 /// Paint a Scene's background and shapes at `o` (window coords). Shared by the main view and
-/// the slide-list thumbnails.
+/// the slide-list thumbnails. Rotated shapes are drawn as paths (quads carry no transform).
 fn paint_scene(scene: &Scene, o: Point<Pixels>, window: &mut Window, cx: &mut App) {
     let bg: Background = rgb(rgb_u32(scene.background)).into();
     window.paint_quad(quad(
@@ -542,30 +586,62 @@ fn paint_scene(scene: &Scene, o: Point<Pixels>, window: &mut Window, cx: &mut Ap
     ));
 
     for node in &scene.nodes {
+        let angle = node.rotation_deg.to_radians();
         match &node.prim {
             Primitive::Quad { bounds: r, corner_radius, fill: Some(Paint::Solid(c)), .. } => {
-                let b = Bounds {
-                    origin: point(o.x + px(r.x), o.y + px(r.y)),
-                    size: size(px(r.w), px(r.h)),
-                };
-                window.paint_quad(quad(
-                    b,
-                    px(*corner_radius),
-                    Background::from(rgb(rgb_u32(*c))),
-                    px(0.),
-                    gpui::transparent_black(),
-                    Default::default(),
-                ));
+                if angle.abs() < 1e-3 {
+                    let b = Bounds {
+                        origin: point(o.x + px(r.x), o.y + px(r.y)),
+                        size: size(px(r.w), px(r.h)),
+                    };
+                    window.paint_quad(quad(
+                        b,
+                        px(*corner_radius),
+                        Background::from(rgb(rgb_u32(*c))),
+                        px(0.),
+                        gpui::transparent_black(),
+                        Default::default(),
+                    ));
+                } else {
+                    let (cx_, cy_) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+                    let corners = [
+                        (r.x, r.y),
+                        (r.x + r.w, r.y),
+                        (r.x + r.w, r.y + r.h),
+                        (r.x, r.y + r.h),
+                    ];
+                    let mut b = PathBuilder::fill();
+                    for (i, (cxp, cyp)) in corners.iter().enumerate() {
+                        let (gx, gy) = rotate_pt(*cxp, *cyp, cx_, cy_, angle);
+                        let p = point(o.x + px(gx), o.y + px(gy));
+                        if i == 0 {
+                            b.move_to(p);
+                        } else {
+                            b.line_to(p);
+                        }
+                    }
+                    b.close();
+                    if let Ok(path) = b.build() {
+                        window.paint_path(path, rgb(rgb_u32(*c)));
+                    }
+                }
             }
             Primitive::Ellipse { bounds: r, fill: Some(Paint::Solid(c)), .. } => {
-                let cx_ = o.x + px(r.x + r.w / 2.0);
-                let cy_ = o.y + px(r.y + r.h / 2.0);
-                let rx = px(r.w / 2.0);
-                let ry = px(r.h / 2.0);
+                let (cx_, cy_) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+                let (rx, ry) = (r.w / 2.0, r.h / 2.0);
                 let mut b = PathBuilder::fill();
-                b.move_to(point(cx_ + rx, cy_));
-                b.arc_to(point(rx, ry), px(0.), false, false, point(cx_ - rx, cy_));
-                b.arc_to(point(rx, ry), px(0.), false, false, point(cx_ + rx, cy_));
+                let n = 48;
+                for i in 0..n {
+                    let th = (i as f32) / (n as f32) * std::f32::consts::TAU;
+                    let (ex, ey) = (cx_ + rx * th.cos(), cy_ + ry * th.sin());
+                    let (gx, gy) = rotate_pt(ex, ey, cx_, cy_, angle);
+                    let p = point(o.x + px(gx), o.y + px(gy));
+                    if i == 0 {
+                        b.move_to(p);
+                    } else {
+                        b.line_to(p);
+                    }
+                }
                 b.close();
                 if let Ok(path) = b.build() {
                     window.paint_path(path, rgb(rgb_u32(*c)));
@@ -723,8 +799,21 @@ impl Render for HayateApp {
             ThemeColorToken::Accent6,
         ];
         let theme = self.pres.theme_of(self.slide).cloned().unwrap_or_default();
-        let inspector = self.selection.map(|_e| {
+        let inspector = self.selection.map(|e| {
             let rot = self.sel_rotation();
+            let frame = self.pres.world.frames.get(&e).copied();
+            let inch = |v: i64| v as f64 / 914_400.0;
+            let pos_str = frame
+                .map(|f| format!("X {:.2}\"   Y {:.2}\"", inch(f.origin.x), inch(f.origin.y)))
+                .unwrap_or_default();
+            let size_str = frame
+                .map(|f| format!("W {:.2}\"   H {:.2}\"", inch(f.size.w), inch(f.size.h)))
+                .unwrap_or_default();
+            let editing = self.rot_edit.is_some();
+            let rot_display = match &self.rot_edit {
+                Some(b) => format!("{b}|"),
+                None => format!("{}", rot.round() as i32),
+            };
             let mut swatches = div().flex().flex_row().gap_1();
             for (i, t) in accents.into_iter().enumerate() {
                 let cu = rgb_u32(theme.color_for(t));
@@ -749,7 +838,20 @@ impl Render for HayateApp {
                 .p_2()
                 .bg(rgb(0x252525))
                 .child(div().text_xl().child("Format"))
-                .child(div().child(format!("Rotation: {}\u{00B0}", rot.round() as i32)))
+                .child(div().child("Rotation (0-360)"))
+                .child(
+                    div()
+                        .id("rot_field")
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(if editing { rgb(0x1f3a5f) } else { rgb(0x3a3a3a) })
+                        .child(format!("{rot_display}\u{00B0}  (click & type, Enter)"))
+                        .on_click(cx.listener(|this, _ev: &ClickEvent, _w, cx| {
+                            this.rot_edit = Some(format!("{}", this.sel_rotation().round() as i32));
+                            cx.notify();
+                        })),
+                )
                 .child(
                     div()
                         .flex()
@@ -769,6 +871,7 @@ impl Render for HayateApp {
                         })),
                 )
                 .child(div().child("Position"))
+                .child(div().child(pos_str))
                 .child(
                     div()
                         .flex()
@@ -780,6 +883,7 @@ impl Render for HayateApp {
                         .child(tool_button("y_p", "Y+", cx, |t, _w, cx| { t.nudge(0, 91_440); cx.notify(); })),
                 )
                 .child(div().child("Size"))
+                .child(div().child(size_str))
                 .child(
                     div()
                         .flex()
