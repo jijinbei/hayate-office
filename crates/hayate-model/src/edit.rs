@@ -12,7 +12,7 @@ use hayate_ir::shape::Geometry;
 use hayate_ir::color::Color;
 use hayate_ir::color::ThemeColorToken;
 use hayate_ir::font::{FontRef, ThemeFontSlot};
-use hayate_ir::text::{Paragraph, Run, TextBody};
+use hayate_ir::text::{HAlign, Paragraph, Run, TextBody};
 use hayate_ir::units::pt;
 use hayate_ir::world::{CompKind, CompValue, Entity, World};
 
@@ -221,6 +221,51 @@ pub fn append_paragraph(world: &World, e: Entity, text: String) -> Transaction {
     body.paragraphs.push(Paragraph::new(vec![default_run(text)]));
     Transaction::new(
         "append paragraph",
+        vec![Operation::SetComponent {
+            entity: e,
+            value: CompValue::Text(body),
+        }],
+    )
+}
+
+/// Set the horizontal alignment of *every* paragraph in the entity's `TextBody` to `align`.
+/// Reads the current body from `world`; if the entity has no `TextBody`, returns an empty
+/// transaction (nothing to align). Otherwise emits `SetComponent(Text)`.
+pub fn set_paragraph_align(world: &World, e: Entity, align: HAlign) -> Transaction {
+    let mut body = match world.texts.get(&e) {
+        Some(existing) => existing.clone(),
+        None => return Transaction::new("set paragraph align", vec![]),
+    };
+    for para in &mut body.paragraphs {
+        para.align = align;
+    }
+    Transaction::new(
+        "set paragraph align",
+        vec![Operation::SetComponent {
+            entity: e,
+            value: CompValue::Text(body),
+        }],
+    )
+}
+
+/// Toggle bullets across all paragraphs of the entity's `TextBody`. If any paragraph
+/// currently has `bullet_level == 0` (i.e. bullets are not uniformly on), turn bullets on by
+/// setting every paragraph's `bullet_level` to 1; otherwise turn them all off (set to 0).
+/// Reads the current body from `world`; if the entity has no `TextBody`, returns an empty
+/// transaction. Otherwise emits `SetComponent(Text)`.
+pub fn toggle_bullets(world: &World, e: Entity) -> Transaction {
+    let mut body = match world.texts.get(&e) {
+        Some(existing) => existing.clone(),
+        None => return Transaction::new("toggle bullets", vec![]),
+    };
+    // Any paragraph without a bullet means "not fully bulleted": turn bullets on.
+    let turn_on = body.paragraphs.iter().any(|p| p.bullet_level == 0);
+    let new_level = if turn_on { 1 } else { 0 };
+    for para in &mut body.paragraphs {
+        para.bullet_level = new_level;
+    }
+    Transaction::new(
+        "toggle bullets",
         vec![Operation::SetComponent {
             entity: e,
             value: CompValue::Text(body),
@@ -624,6 +669,96 @@ mod tests {
 
         assert!(h.undo(&mut w));
         assert!(w.texts.get(&e).is_none());
+    }
+
+    /// Build a two-paragraph body (both left-aligned, no bullets) on `e`.
+    fn two_paragraph_body(w: &mut World, e: Entity) {
+        let body = TextBody {
+            paragraphs: vec![
+                Paragraph::new(vec![styled_run("first")]),
+                Paragraph::new(vec![styled_run("second")]),
+            ],
+            autofit: false,
+        };
+        w.set(e, CompValue::Text(body));
+    }
+
+    #[test]
+    fn set_paragraph_align_changes_all_paragraphs_and_undoes() {
+        use hayate_ir::text::HAlign;
+        let mut w = World::new();
+        let mut h = History::new();
+        let e = w.spawn();
+        two_paragraph_body(&mut w, e);
+
+        // Both paragraphs start left-aligned (Paragraph::new default).
+        let before = w.texts.get(&e).expect("text present");
+        assert_eq!(before.paragraphs[0].align, HAlign::Left);
+        assert_eq!(before.paragraphs[1].align, HAlign::Left);
+
+        let tx = set_paragraph_align(&w, e, HAlign::Center);
+        h.commit(&mut w, tx);
+
+        // Every paragraph is now centered.
+        let got = w.texts.get(&e).expect("text present");
+        assert_eq!(got.paragraphs[0].align, HAlign::Center);
+        assert_eq!(got.paragraphs[1].align, HAlign::Center);
+
+        // Undo restores the prior alignment for all paragraphs.
+        assert!(h.undo(&mut w));
+        let restored = w.texts.get(&e).expect("text present");
+        assert_eq!(restored.paragraphs[0].align, HAlign::Left);
+        assert_eq!(restored.paragraphs[1].align, HAlign::Left);
+    }
+
+    #[test]
+    fn set_paragraph_align_without_body_is_empty() {
+        use hayate_ir::text::HAlign;
+        let mut w = World::new();
+        let e = w.spawn();
+        let tx = set_paragraph_align(&w, e, HAlign::Right);
+        assert!(tx.ops.is_empty());
+    }
+
+    #[test]
+    fn toggle_bullets_flips_on_then_off_across_paragraphs() {
+        let mut w = World::new();
+        let mut h = History::new();
+        let e = w.spawn();
+        two_paragraph_body(&mut w, e);
+
+        // Initially no bullets on either paragraph.
+        let before = w.texts.get(&e).expect("text present");
+        assert_eq!(before.paragraphs[0].bullet_level, 0);
+        assert_eq!(before.paragraphs[1].bullet_level, 0);
+
+        // First toggle: bullets on (0 -> 1) for all paragraphs.
+        let tx = toggle_bullets(&w, e);
+        h.commit(&mut w, tx);
+        let on = w.texts.get(&e).expect("text present");
+        assert_eq!(on.paragraphs[0].bullet_level, 1);
+        assert_eq!(on.paragraphs[1].bullet_level, 1);
+
+        // Second toggle: bullets off (1 -> 0) for all paragraphs.
+        let tx = toggle_bullets(&w, e);
+        h.commit(&mut w, tx);
+        let off = w.texts.get(&e).expect("text present");
+        assert_eq!(off.paragraphs[0].bullet_level, 0);
+        assert_eq!(off.paragraphs[1].bullet_level, 0);
+
+        // Undo the off-toggle: bullets back on.
+        assert!(h.undo(&mut w));
+        let undone = w.texts.get(&e).expect("text present");
+        assert_eq!(undone.paragraphs[0].bullet_level, 1);
+        assert_eq!(undone.paragraphs[1].bullet_level, 1);
+    }
+
+    #[test]
+    fn toggle_bullets_without_body_is_empty() {
+        let mut w = World::new();
+        let e = w.spawn();
+        let tx = toggle_bullets(&w, e);
+        assert!(tx.ops.is_empty());
     }
 
     /// Spawn three sibling entities a, b, c under `parent` with strictly increasing Order
