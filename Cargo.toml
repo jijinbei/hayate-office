@@ -7,6 +7,7 @@ members = [
     "crates/hayate-model",
     "crates/hayate-render",
     "crates/hayate-format",
+    "crates/hayate-app",
 ]
 
 [workspace.package]
@@ -23,10 +24,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 redb = "2"
 
-# UI は gpui（jijinbei/zed fork を rev ピン）。hayate-app を追加する段で有効化する。
-# 今はコアのビルドを軽く保つため未使用（[workspace.dependencies] の未参照定義は fetch されない）。
-# gpui          = { git = "https://github.com/jijinbei/zed", rev = "4fe71ffcc6a01b007df7e035df23e80647143b31" }
-# gpui_platform = { git = "https://github.com/jijinbei/zed", rev = "4fe71ffcc6a01b007df7e035df23e80647143b31" }
+# UI は gpui（jijinbei/zed fork を rev ピン）。features (wayland/x11) は hayate-app 側で付与。
+gpui          = { git = "https://github.com/jijinbei/zed", rev = "4fe71ffcc6a01b007df7e035df23e80647143b31" }
+gpui_platform = { git = "https://github.com/jijinbei/zed", rev = "4fe71ffcc6a01b007df7e035df23e80647143b31" }
 
 [profile.dev.package."*"]
 opt-level = 2

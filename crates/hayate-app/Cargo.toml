@@ -1,0 +1,15 @@
+[package]
+name = "hayate-app"
+description = "HayateOffice presentation editor (gpui app)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hayate-ir.workspace = true
+hayate-model.workspace = true
+hayate-render.workspace = true
+gpui.workspace = true
+# Linux windowing backends for gpui_platform.
+gpui_platform = { workspace = true, features = ["wayland", "x11"] }
