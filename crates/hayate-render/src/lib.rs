@@ -5,6 +5,7 @@
 pub mod build;
 pub mod grid;
 pub mod guides;
+pub mod handles;
 pub mod hit;
 pub mod linebreak;
 pub mod raster;
@@ -14,6 +15,7 @@ pub mod svg;
 pub use build::build_slide_scene;
 pub use grid::{GridLines, grid_lines};
 pub use guides::{Guide, GuideKind, alignment_guides};
+pub use handles::resize_handles;
 pub use svg::export_svg;
 pub use hit::hit_test;
 pub use raster::rasterize;
