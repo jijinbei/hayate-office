@@ -10,6 +10,7 @@ repository.workspace = true
 hayate-ir.workspace = true
 hayate-model.workspace = true
 hayate-render.workspace = true
+hayate-format = { path = "../hayate-format" }
 gpui.workspace = true
 # Linux windowing backends for gpui_platform.
 gpui_platform = { workspace = true, features = ["wayland", "x11"] }

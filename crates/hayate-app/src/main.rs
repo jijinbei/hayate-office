@@ -19,6 +19,7 @@ use gpui_platform::application;
 
 use hayate_ir::color::{Color, Rgba, ThemeColorToken};
 use hayate_ir::font::{FontRef, ThemeFontSlot};
+use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::{PointEmu, RectEmu};
 use hayate_ir::paint::Fill;
 use hayate_ir::presentation::Presentation;
@@ -27,12 +28,13 @@ use hayate_ir::text::{Paragraph, Run, TextBody};
 use hayate_ir::theme::Theme;
 use hayate_ir::units::{inch_f, pt};
 use hayate_ir::world::Entity;
-use hayate_model::{edit, History};
+use hayate_model::{edit, History, Operation, Transaction};
 use hayate_render::scene::{Paint, Primitive, PxRect, PxSize, ResolvedRun, Scene, TextBlock};
 use hayate_render::{build_slide_scene, hit_test};
 
 const TARGET: PxSize = PxSize { w: 960.0, h: 540.0 };
 const SELECTION: u32 = 0x3B82F6;
+const DOC_PATH: &str = "hayate-sample.hayate";
 
 /// Build a small sample deck: a title, three accent rectangles, and an ellipse.
 fn sample_presentation() -> Presentation {
@@ -213,14 +215,80 @@ impl HayateApp {
     fn on_key_down(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         let k = &ev.keystroke;
         let cmd = k.modifiers.platform || k.modifiers.control;
-        if cmd && k.key == "z" {
-            if k.modifiers.shift {
+        let mut dirty = true;
+        match k.key.as_str() {
+            "z" if cmd && k.modifiers.shift => {
                 self.history.redo(&mut self.pres.world);
-            } else {
+            }
+            "z" if cmd => {
                 self.history.undo(&mut self.pres.world);
             }
+            "s" if cmd => {
+                self.save();
+                dirty = false;
+            }
+            "o" if cmd => {
+                self.open();
+            }
+            "r" if !cmd => {
+                self.add_rect();
+            }
+            "delete" | "backspace" if !cmd => {
+                self.delete_selection();
+            }
+            _ => dirty = false,
+        }
+        if dirty {
             self.rebuild();
             cx.notify();
+        }
+    }
+
+    /// Add a rectangle at the slide center as one undoable transaction, and select it.
+    fn add_rect(&mut self) {
+        let order = {
+            let kids = self.pres.children(self.slide);
+            let last = kids.last().and_then(|e| self.pres.world.order.get(e));
+            FracIndex::after(last)
+        };
+        let e = self.pres.world.reserve_id();
+        let frame = RectEmu::new(inch_f(4.0), inch_f(3.5), inch_f(1.6), inch_f(1.6));
+        let tx = edit::create_rect(
+            e,
+            self.slide,
+            order,
+            frame,
+            Fill::Solid(Color::theme(ThemeColorToken::Accent5)),
+        );
+        self.history.commit(&mut self.pres.world, tx);
+        self.selection = Some(e);
+    }
+
+    /// Delete the selected shape (undoable: despawn captures components to restore).
+    fn delete_selection(&mut self) {
+        if let Some(e) = self.selection.take() {
+            let tx = Transaction::new("delete shape", vec![Operation::Despawn { entity: e }]);
+            self.history.commit(&mut self.pres.world, tx);
+        }
+    }
+
+    fn save(&self) {
+        match hayate_format::save(&self.pres, DOC_PATH) {
+            Ok(()) => eprintln!("saved to {DOC_PATH}"),
+            Err(e) => eprintln!("save error: {e}"),
+        }
+    }
+
+    fn open(&mut self) {
+        match hayate_format::load(DOC_PATH) {
+            Ok(p) => {
+                self.pres = p;
+                self.slide = self.pres.slides().first().copied().unwrap_or(self.slide);
+                self.history = History::new();
+                self.selection = None;
+                eprintln!("opened {DOC_PATH}");
+            }
+            Err(e) => eprintln!("open error: {e}"),
         }
     }
 }
