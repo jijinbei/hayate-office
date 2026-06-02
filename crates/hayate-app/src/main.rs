@@ -137,8 +137,8 @@ struct HayateApp {
     /// Keyboard focus for the editor (so Ctrl/Cmd+Z reaches us).
     focus: gpui::FocusHandle,
     focused_once: bool,
-    /// Display zoom factor for the slide view.
-    zoom: f32,
+    /// Available slide-view size in pixels (the slide is fit into this; grows with the window).
+    view_size: PxSize,
     /// Command registry (palette / scripts / AI surface).
     registry: CommandRegistry,
     /// Command palette state when open.
@@ -165,24 +165,10 @@ impl HayateApp {
             canvas_origin: Rc::new(Cell::new(point(px(0.), px(0.)))),
             focus: cx.focus_handle(),
             focused_once: false,
-            zoom: 1.0,
+            view_size: TARGET,
             registry: hayate_core::builtins(),
             palette: None,
         }
-    }
-
-    /// Slide render target in pixels at the current zoom.
-    fn target(&self) -> PxSize {
-        PxSize {
-            w: 960.0 * self.zoom,
-            h: 540.0 * self.zoom,
-        }
-    }
-
-    fn set_zoom(&mut self, z: f32, cx: &mut Context<Self>) {
-        self.zoom = z.clamp(0.25, 4.0);
-        self.rebuild();
-        cx.notify();
     }
 
     /// Commands matching the palette query, as (id, title).
@@ -274,8 +260,7 @@ impl HayateApp {
     }
 
     fn rebuild(&mut self) {
-        let target = self.target();
-        self.scene = build_slide_scene(&self.pres, self.slide, target);
+        self.scene = build_slide_scene(&self.pres, self.slide, self.view_size);
     }
 
     /// Pixels per EMU (width-fit).
@@ -489,6 +474,15 @@ impl Render for HayateApp {
             window.focus(&self.focus, cx);
             self.focused_once = true;
         }
+
+        // Fit the slide into the current window area: content scales as the window grows.
+        let vp = window.viewport_size();
+        self.view_size = PxSize {
+            w: (f32::from(vp.width) - 24.0).max(64.0),
+            h: (f32::from(vp.height) - 80.0).max(64.0),
+        };
+        self.rebuild();
+
         let scene = self.scene.clone();
         let selection = self.selection;
         let origin_cell = self.canvas_origin.clone();
@@ -618,14 +612,10 @@ impl Render for HayateApp {
                             .flex_row()
                             .gap_2()
                             .items_center()
-                            .child(tool_button("zoom_out", "\u{2212}", cx, |this, cx| {
-                                let z = this.zoom / 1.25;
-                                this.set_zoom(z, cx);
-                            }))
-                            .child(div().child(format!("{}%", (self.zoom * 100.0).round() as i32)))
-                            .child(tool_button("zoom_in", "+", cx, |this, cx| {
-                                let z = this.zoom * 1.25;
-                                this.set_zoom(z, cx);
+                            .child(tool_button("add", "Add (R)", cx, |this, cx| {
+                                this.add_rect();
+                                this.rebuild();
+                                cx.notify();
                             }))
                             .child(tool_button("delete", "Delete", cx, |this, cx| {
                                 this.delete_selection();
