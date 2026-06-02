@@ -19,6 +19,7 @@ use hayate_ir::paint::Fill;
 use hayate_ir::text::{Paragraph, Run, TextBody};
 use hayate_ir::units::{pt, EMU_PER_PT};
 use hayate_ir::world::{CompKind, CompValue, Entity, World};
+use hayate_model::align::{align, distribute, Align, Axis};
 use hayate_model::edit;
 use hayate_model::{Operation, Transaction};
 use serde::{Deserialize, Serialize};
@@ -184,6 +185,16 @@ impl CommandRegistry {
 /// Read an `Entity` from `args[key]` (a non-negative integer id).
 fn arg_entity(args: &Value, key: &str) -> Option<Entity> {
     args.get(key)?.as_u64().map(Entity)
+}
+
+/// Read a list of `Entity`s from `args["entities"]` (a JSON array of non-negative integer
+/// ids). Non-integer elements are skipped. A missing/non-array field yields an empty Vec, so
+/// the align/distribute handlers stay lenient (they themselves return empty for too-few ids).
+fn arg_entities(args: &Value) -> Vec<Entity> {
+    match args.get("entities").and_then(Value::as_array) {
+        Some(arr) => arr.iter().filter_map(Value::as_u64).map(Entity).collect(),
+        None => vec![],
+    }
 }
 
 /// Read an `i64` from `args[key]`, accepting integer or float JSON numbers.
@@ -559,6 +570,44 @@ pub fn builtins() -> CommandRegistry {
                     value: CompValue::Fill(Fill::Solid(Color::Literal(rgba))),
                 }],
                 None => vec![],
+            },
+        );
+    }
+
+    // shapes.align_* — align a multi-entity selection to the group bounding box. The selection
+    // is passed as `entities` (a JSON array of u64 ids). Each delegates to
+    // `hayate_model::align::align`, returning its frame-setting ops (empty for < 2 framed ids).
+    for (id, title, how) in [
+        ("shapes.align_left", "Align Left", Align::Left),
+        ("shapes.align_hcenter", "Align Center (Horizontal)", Align::HCenter),
+        ("shapes.align_right", "Align Right", Align::Right),
+        ("shapes.align_top", "Align Top", Align::Top),
+        ("shapes.align_vcenter", "Align Middle (Vertical)", Align::VCenter),
+        ("shapes.align_bottom", "Align Bottom", Align::Bottom),
+    ] {
+        reg.register(
+            CommandMeta::new(id, title, "Arrange"),
+            vec![ParamSpec::new("entities", ParamType::Entity)],
+            move |world, args| {
+                let ids = arg_entities(args);
+                align(world, &ids, how).ops
+            },
+        );
+    }
+
+    // shapes.distribute_* — evenly distribute a multi-entity selection along an axis. The
+    // selection is passed as `entities` (a JSON array of u64 ids). Each delegates to
+    // `hayate_model::align::distribute`, returning its ops (empty for < 3 framed ids).
+    for (id, title, axis) in [
+        ("shapes.distribute_h", "Distribute Horizontally", Axis::Horizontal),
+        ("shapes.distribute_v", "Distribute Vertically", Axis::Vertical),
+    ] {
+        reg.register(
+            CommandMeta::new(id, title, "Arrange"),
+            vec![ParamSpec::new("entities", ParamType::Entity)],
+            move |world, args| {
+                let ids = arg_entities(args);
+                distribute(world, &ids, axis).ops
             },
         );
     }
@@ -1203,5 +1252,128 @@ mod tests {
         assert!(ids.contains(&"shape.set_text"));
         assert!(ids.contains(&"shape.fill_black"));
         assert!(ids.contains(&"shape.fill_white"));
+    }
+
+    /// Spawn three framed entities under a common parent with increasing order keys; return
+    /// (world, [e0, e1, e2]). Their frames have differing x positions so alignment is visible.
+    fn world_with_three_framed() -> (World, [Entity; 3]) {
+        let mut w = World::new();
+        let parent = w.spawn();
+        let frames = [
+            RectEmu::new(10, 0, 100, 50),
+            RectEmu::new(30, 100, 40, 50),
+            RectEmu::new(70, 200, 60, 50),
+        ];
+        let mut entities = [Entity(0); 3];
+        let mut last: Option<FracIndex> = None;
+        for (slot, frame) in entities.iter_mut().zip(frames) {
+            let e = w.spawn();
+            w.set(e, CompValue::Parent(parent));
+            let order = FracIndex::after(last.as_ref());
+            w.set(e, CompValue::Order(order.clone()));
+            last = Some(order);
+            w.set(e, CompValue::Frame(frame));
+            *slot = e;
+        }
+        (w, entities)
+    }
+
+    #[test]
+    fn align_left_command_shares_min_x() {
+        let (mut w, es) = world_with_three_framed();
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build(
+                "shapes.align_left",
+                &json!({ "entities": [es[0].0, es[1].0, es[2].0] }),
+                &w,
+            )
+            .expect("shapes.align_left is registered");
+        assert_eq!(tx.label, "Align Left");
+        h.commit(&mut w, tx);
+
+        // All three left edges now sit at the group minimum x (10).
+        let x_of = |w: &World, e: Entity| match w.get(e, CompKind::Frame) {
+            Some(CompValue::Frame(f)) => f.origin.x,
+            other => panic!("expected a Frame, got {other:?}"),
+        };
+        assert_eq!(x_of(&w, es[0]), 10);
+        assert_eq!(x_of(&w, es[1]), 10);
+        assert_eq!(x_of(&w, es[2]), 10);
+    }
+
+    #[test]
+    fn distribute_h_command_equalizes_gaps() {
+        let (mut w, es) = world_with_three_framed();
+        // Lay the items out so distribution has something to do.
+        w.set(es[0], CompValue::Frame(RectEmu::new(0, 0, 100, 50)));
+        w.set(es[1], CompValue::Frame(RectEmu::new(120, 0, 40, 50)));
+        w.set(es[2], CompValue::Frame(RectEmu::new(240, 0, 60, 50)));
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build(
+                "shapes.distribute_h",
+                &json!({ "entities": [es[0].0, es[1].0, es[2].0] }),
+                &w,
+            )
+            .expect("shapes.distribute_h is registered");
+        assert_eq!(tx.label, "Distribute Horizontally");
+        h.commit(&mut w, tx);
+
+        // The middle item is repositioned so gaps are equal (gap = 50): x = 100 + 50 = 150.
+        assert_eq!(
+            w.get(es[1], CompKind::Frame),
+            Some(CompValue::Frame(RectEmu::new(150, 0, 40, 50)))
+        );
+    }
+
+    #[test]
+    fn align_distribute_missing_entities_is_lenient() {
+        let reg = builtins();
+        let w = World::new();
+        // Missing `entities` -> no ids -> align/distribute return empty.
+        assert!(reg
+            .build("shapes.align_left", &json!({}), &w)
+            .unwrap()
+            .ops
+            .is_empty());
+        assert!(reg
+            .build("shapes.distribute_v", &json!({ "entities": [] }), &w)
+            .unwrap()
+            .ops
+            .is_empty());
+    }
+
+    #[test]
+    fn manifest_includes_arrange_commands() {
+        let reg = builtins();
+        let manifest = reg.manifest();
+        let ids: Vec<&str> = manifest
+            .iter()
+            .filter_map(|c| c["id"].as_str())
+            .collect();
+        for id in [
+            "shapes.align_left",
+            "shapes.align_hcenter",
+            "shapes.align_right",
+            "shapes.align_top",
+            "shapes.align_vcenter",
+            "shapes.align_bottom",
+            "shapes.distribute_h",
+            "shapes.distribute_v",
+        ] {
+            assert!(ids.contains(&id), "manifest missing {id}");
+        }
+
+        // The new commands are grouped under "Arrange".
+        let al = manifest
+            .iter()
+            .find(|c| c["id"] == "shapes.align_left")
+            .unwrap();
+        assert_eq!(al["category"], "Arrange");
     }
 }
