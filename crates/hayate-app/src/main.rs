@@ -32,6 +32,7 @@ use hayate_render::scene::{PxSize, Scene};
 use hayate_render::{build_slide_scene, Guide};
 
 mod actions;
+mod icons;
 mod input;
 mod io;
 mod layers;
@@ -286,7 +287,7 @@ impl HayateApp {
 }
 
 fn run() {
-    application().run(|cx: &mut App| {
+    application().with_assets(icons::Icons).run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1100.), px(720.)), cx);
         cx.open_window(
             WindowOptions {

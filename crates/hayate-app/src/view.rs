@@ -13,6 +13,7 @@ use hayate_render::{
     build_slide_scene, build_slide_scene_at, grid_lines, resize_handles, GuideKind,
 };
 
+use crate::icons::icon_button;
 use crate::paint::paint_scene;
 use crate::util::{hsla_of, prim_bounds, rotate_pt, run_font};
 use crate::widgets::tool_button;
@@ -596,11 +597,11 @@ impl Render for HayateApp {
                         .flex()
                         .flex_row()
                         .gap_1()
-                        .child(tool_button("front", "Front", cx, |t, _w, cx| {
+                        .child(icon_button("front", "bring-front", cx, |t, _w, cx| {
                             t.run_on_selection("shape.bring_to_front");
                             cx.notify();
                         }))
-                        .child(tool_button("back", "Back", cx, |t, _w, cx| {
+                        .child(icon_button("back", "send-back", cx, |t, _w, cx| {
                             t.run_on_selection("shape.send_to_back");
                             cx.notify();
                         }))
@@ -638,18 +639,23 @@ impl Render for HayateApp {
                             .flex()
                             .flex_row()
                             .gap_1()
-                            .child(tool_button("txt_bold", "B", cx, |t, _w, cx| {
+                            .child(icon_button("txt_bold", "bold", cx, |t, _w, cx| {
                                 t.run_on_selection("shape.toggle_bold");
                                 cx.notify();
                             }))
-                            .child(tool_button("txt_italic", "I", cx, |t, _w, cx| {
+                            .child(icon_button("txt_italic", "italic", cx, |t, _w, cx| {
                                 t.run_on_selection("shape.toggle_italic");
                                 cx.notify();
                             }))
-                            .child(tool_button("txt_underline", "U", cx, |t, _w, cx| {
-                                t.run_on_selection("shape.toggle_underline");
-                                cx.notify();
-                            }))
+                            .child(icon_button(
+                                "txt_underline",
+                                "underline",
+                                cx,
+                                |t, _w, cx| {
+                                    t.run_on_selection("shape.toggle_underline");
+                                    cx.notify();
+                                },
+                            ))
                             .child(tool_button("txt_aminus", "A-", cx, |t, _w, cx| {
                                 t.change_font_size(-4);
                                 cx.notify();
@@ -677,7 +683,7 @@ impl Render for HayateApp {
                                 cx.notify();
                             })),
                     )
-                    .child(tool_button("txt_font", "Font \u{25BE}", cx, |t, _w, cx| {
+                    .child(icon_button("txt_font", "type", cx, |t, _w, cx| {
                         t.font_picker = !t.font_picker;
                         cx.notify();
                     }));
@@ -707,34 +713,29 @@ impl Render for HayateApp {
                             .flex_row()
                             .gap_2()
                             .items_center()
-                            .child(tool_button("zoom_out", "\u{2212}", cx, |t, _w, cx| {
+                            .child(icon_button("zoom_out", "minus", cx, |t, _w, cx| {
                                 let z = t.zoom / 1.25;
                                 t.set_zoom(z, cx);
                             }))
                             .child(div().child(format!("{}%", (self.zoom * 100.0).round() as i32)))
-                            .child(tool_button("zoom_in", "+", cx, |t, _w, cx| {
+                            .child(icon_button("zoom_in", "plus", cx, |t, _w, cx| {
                                 let z = t.zoom * 1.25;
                                 t.set_zoom(z, cx);
                             }))
-                            .child(tool_button("zoom_fit", "Fit", cx, |t, w, cx| {
+                            .child(icon_button("zoom_fit", "maximize", cx, |t, w, cx| {
                                 t.fit_zoom(w);
                                 t.rebuild();
                                 cx.notify();
                             }))
-                            .child(tool_button("min", "\u{2013}", cx, |_this, window, _cx| {
+                            .child(icon_button("min", "minus", cx, |_this, window, _cx| {
                                 window.minimize_window();
                             }))
-                            .child(tool_button("max", "\u{25A1}", cx, |_this, window, _cx| {
+                            .child(icon_button("max", "square", cx, |_this, window, _cx| {
                                 window.zoom_window();
                             }))
-                            .child(tool_button(
-                                "close",
-                                "\u{00D7}",
-                                cx,
-                                |_this, window, _cx| {
-                                    window.remove_window();
-                                },
-                            )),
+                            .child(icon_button("close", "x", cx, |_this, window, _cx| {
+                                window.remove_window();
+                            })),
                     ),
             )
             .children(palette_panel)
