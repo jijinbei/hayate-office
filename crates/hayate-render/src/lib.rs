@@ -3,7 +3,9 @@
 //! headless/offscreen rendering (thumbnails, PDF/video export).
 
 pub mod build;
+pub mod hit;
 pub mod scene;
 
 pub use build::build_slide_scene;
+pub use hit::hit_test;
 pub use scene::{Paint, Primitive, PxRect, PxSize, Scene, SceneNode, StrokePx, TextBlock, Viewport};
