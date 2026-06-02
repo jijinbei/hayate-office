@@ -34,7 +34,8 @@ use hayate_core::CommandRegistry;
 use hayate_render::scene::{Paint, Primitive, PxRect, PxSize, ResolvedRun, Scene, TextBlock};
 use hayate_render::{build_slide_scene, hit_test};
 
-const TARGET: PxSize = PxSize { w: 960.0, h: 540.0 };
+/// Fixed on-screen slide size (does not rescale with the window).
+const TARGET: PxSize = PxSize { w: 768.0, h: 432.0 };
 const SELECTION: u32 = 0x3B82F6;
 const DOC_PATH: &str = "hayate-sample.hayate";
 
@@ -677,15 +678,7 @@ impl Render for HayateApp {
             self.focused_once = true;
         }
 
-        // Fit the slide into the current window area: content scales as the window grows.
-        let vp = window.viewport_size();
-        let inspector_w = if self.selection.is_some() { 244.0 } else { 0.0 };
-        self.view_size = PxSize {
-            w: (f32::from(vp.width) - 244.0 - inspector_w).max(64.0), // minus slide-list + format pane
-            h: (f32::from(vp.height) - 88.0).max(64.0), // minus top bar
-        };
-        self.rebuild();
-
+        // Slide size is fixed (TARGET); resizing the window does not rescale the content.
         let scene = self.scene.clone();
         let selection = self.selection;
         let origin_cell = self.canvas_origin.clone();
@@ -828,12 +821,12 @@ impl Render for HayateApp {
         let inspector = self.selection.map(|e| {
             let rot = self.sel_rotation();
             let frame = self.pres.world.frames.get(&e).copied();
-            let inch = |v: i64| v as f64 / 914_400.0;
+            let pt = |v: i64| v as f64 / 12_700.0; // EMU -> points
             let pos_str = frame
-                .map(|f| format!("X {:.2}\"   Y {:.2}\"", inch(f.origin.x), inch(f.origin.y)))
+                .map(|f| format!("X {:.0} pt   Y {:.0} pt", pt(f.origin.x), pt(f.origin.y)))
                 .unwrap_or_default();
             let size_str = frame
-                .map(|f| format!("W {:.2}\"   H {:.2}\"", inch(f.size.w), inch(f.size.h)))
+                .map(|f| format!("W {:.0} pt   H {:.0} pt", pt(f.size.w), pt(f.size.h)))
                 .unwrap_or_default();
             let editing = self.rot_edit.is_some();
             let rot_display = match &self.rot_edit {
