@@ -3,6 +3,7 @@
 //! headless/offscreen rendering (thumbnails, PDF/video export).
 
 pub mod build;
+pub mod grid;
 pub mod guides;
 pub mod hit;
 pub mod linebreak;
@@ -11,6 +12,7 @@ pub mod scene;
 pub mod svg;
 
 pub use build::build_slide_scene;
+pub use grid::{GridLines, grid_lines};
 pub use guides::{Guide, GuideKind, alignment_guides};
 pub use svg::export_svg;
 pub use hit::hit_test;
