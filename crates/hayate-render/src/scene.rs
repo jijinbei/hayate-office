@@ -63,6 +63,9 @@ impl Viewport {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Paint {
     Solid(Rgba),
+    /// A two-stop linear gradient with literal colors. `angle_deg` is the gradient
+    /// direction in degrees (0 = left->right).
+    Linear { from: Rgba, to: Rgba, angle_deg: f32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

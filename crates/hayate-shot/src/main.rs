@@ -119,6 +119,18 @@ fn main() {
     );
     save!("fill", &p, slide);
 
+    // 06b gradient: fill the second rect with a linear gradient.
+    let (mut p, slide, mut h) = deck();
+    let r2 = shape(&p, slide, 2);
+    apply(
+        &reg,
+        &mut p,
+        &mut h,
+        "shape.fill_gradient",
+        json!({"entity": r2.0, "from": "#1E88E5", "to": "#E53935", "angle": 0.0}),
+    );
+    save!("gradient", &p, slide);
+
     // 07 opacity: make the first rect semi-transparent.
     let (mut p, slide, mut h) = deck();
     let r1 = shape(&p, slide, 1);

@@ -4,10 +4,17 @@ use crate::color::Color;
 use crate::units::Emu;
 use serde::{Deserialize, Serialize};
 
-/// How a shape's interior is painted. Gradient/image fills are reserved for later.
+/// How a shape's interior is painted. Image fills are reserved for later.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Fill {
     Solid(Color),
+    /// A two-stop linear gradient. `angle_deg` is the gradient direction in degrees
+    /// (0 = left->right). The enum stays `Copy` since `Color` and `f32` are `Copy`.
+    Linear {
+        from: Color,
+        to: Color,
+        angle_deg: f32,
+    },
 }
 
 /// Outline of a shape.

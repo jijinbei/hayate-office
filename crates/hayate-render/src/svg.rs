@@ -42,7 +42,11 @@ fn push_paint(out: &mut String, kind: &str, c: Option<Rgba>) {
 }
 
 fn paint_color(p: &Option<Paint>) -> Option<Rgba> {
-    p.as_ref().map(|Paint::Solid(c)| *c)
+    // SVG export is solid-only for now; a linear gradient is approximated by its start color.
+    p.as_ref().map(|paint| match paint {
+        Paint::Solid(c) => *c,
+        Paint::Linear { from, .. } => *from,
+    })
 }
 
 /// Build a `transform="rotate(deg cx cy)"` attribute for a node whose primitive occupies

@@ -464,6 +464,10 @@ fn parse_slide_into(
         /// The `<a:gd name="adj" fmla="val N">` value, if present, for round-rect radius.
         adj: Option<i64>,
         fill: Option<Color>,
+        /// Gradient stops/angle accumulated from a `<a:gradFill>` (first/last gs + lin ang).
+        grad_from: Option<Color>,
+        grad_to: Option<Color>,
+        grad_ang: Option<f32>,
         paras: Vec<ParsedPara>,
         /// Run properties accumulated from the current `<a:rPr>`, applied to the next `<a:t>`.
         pending: ParsedRun,
@@ -477,6 +481,9 @@ fn parse_slide_into(
                 preset: None,
                 adj: None,
                 fill: None,
+                grad_from: None,
+                grad_to: None,
+                grad_ang: None,
                 paras: Vec::new(),
                 pending: ParsedRun::default(),
             }
@@ -501,6 +508,8 @@ fn parse_slide_into(
     let mut solidfill_depth: i32 = 0;
     // Whether we are inside a run's <a:rPr> (so a nested solidFill is the text color).
     let mut in_rpr = false;
+    // Whether we are inside a <a:gradFill> (so nested gs/srgbClr are gradient stops).
+    let mut in_gradfill = false;
 
     // Apply an element's geometry/blip attributes to the current picture state (if any).
     fn apply_pic_attrs(pic: &mut Option<PicState>, name: &str, e: &quick_xml::events::BytesStart) {
@@ -540,6 +549,7 @@ fn parse_slide_into(
         state: &mut Option<ShapeState>,
         solidfill_depth: i32,
         in_rpr: bool,
+        in_gradfill: bool,
         name: &str,
         e: &quick_xml::events::BytesStart,
     ) {
@@ -597,6 +607,22 @@ fn parse_slide_into(
                 s.pending.italic = attr_str(e, b"i").as_deref() == Some("1");
                 s.pending.underline = attr_str(e, b"u").map(|u| u != "none").unwrap_or(false);
             }
+            "lin" if in_gradfill => {
+                // Gradient direction in 60000ths of a degree.
+                if let Some(ang) = attr_i64(e, b"ang") {
+                    s.grad_ang = Some(ang as f32 / 60_000.0);
+                }
+            }
+            "srgbClr" if in_gradfill => {
+                if let Some(rgba) = attr_str(e, b"val").as_deref().and_then(parse_hex_rgb) {
+                    // First stop is `from`, any later stop updates `to` (last wins).
+                    if s.grad_from.is_none() {
+                        s.grad_from = Some(Color::Literal(rgba));
+                    } else {
+                        s.grad_to = Some(Color::Literal(rgba));
+                    }
+                }
+            }
             "srgbClr" if solidfill_depth > 0 => {
                 if let Some(rgba) = attr_str(e, b"val").as_deref().and_then(parse_hex_rgb) {
                     if in_rpr {
@@ -618,10 +644,11 @@ fn parse_slide_into(
                     "sp" => state = Some(ShapeState::new()),
                     "pic" => pic = Some(PicState::default()),
                     "solidFill" => solidfill_depth += 1,
+                    "gradFill" => in_gradfill = true,
                     "t" => in_text = true,
                     "rPr" => {
                         in_rpr = true;
-                        apply_attrs(&mut state, solidfill_depth, in_rpr, "rPr", &e);
+                        apply_attrs(&mut state, solidfill_depth, in_rpr, in_gradfill, "rPr", &e);
                     }
                     "p" => {
                         if let Some(s) = state.as_mut() {
@@ -632,7 +659,7 @@ fn parse_slide_into(
                         }
                     }
                     other => {
-                        apply_attrs(&mut state, solidfill_depth, in_rpr, other, &e);
+                        apply_attrs(&mut state, solidfill_depth, in_rpr, in_gradfill, other, &e);
                         apply_pic_attrs(&mut pic, other, &e);
                     }
                 }
@@ -640,7 +667,7 @@ fn parse_slide_into(
             Ok(Event::Empty(e)) => {
                 // Self-closing variants, e.g. <a:off .../>, <a:srgbClr .../>, <a:rPr .../>.
                 let name = local_name(e.name().as_ref());
-                apply_attrs(&mut state, solidfill_depth, in_rpr, &name, &e);
+                apply_attrs(&mut state, solidfill_depth, in_rpr, in_gradfill, &name, &e);
                 apply_pic_attrs(&mut pic, &name, &e);
             }
             Ok(Event::Text(t)) if in_text => {
@@ -663,6 +690,7 @@ fn parse_slide_into(
                     "t" => in_text = false,
                     "rPr" => in_rpr = false,
                     "solidFill" => solidfill_depth = solidfill_depth.saturating_sub(1),
+                    "gradFill" => in_gradfill = false,
                     "sp" => {
                         if let Some(s) = state.take() {
                             // Resolve geometry now that both the preset and frame are known.
@@ -670,8 +698,17 @@ fn parse_slide_into(
                                 .preset
                                 .as_deref()
                                 .and_then(|prst| preset_to_geometry(prst, s.adj, s.off.zip(s.ext)));
+                            // A gradient (if both stops were seen) takes precedence over a solid fill.
+                            let fill = match (s.grad_from, s.grad_to) {
+                                (Some(from), Some(to)) => Some(Fill::Linear {
+                                    from,
+                                    to,
+                                    angle_deg: s.grad_ang.unwrap_or(0.0),
+                                }),
+                                _ => s.fill.map(Fill::Solid),
+                            };
                             commit_shape(
-                                pres, slide, s.off, s.ext, s.rotation, geometry, s.fill, s.paras,
+                                pres, slide, s.off, s.ext, s.rotation, geometry, fill, s.paras,
                             );
                         }
                     }
@@ -767,7 +804,7 @@ fn commit_shape(
     ext: Option<(Emu, Emu)>,
     rotation: Option<f32>,
     geometry: Option<Geometry>,
-    fill: Option<Color>,
+    fill: Option<Fill>,
     paras: Vec<ParsedPara>,
 ) {
     let e = pres.add_shape(slide);
@@ -781,8 +818,8 @@ fn commit_shape(
     if let Some(g) = geometry {
         pres.world.geometries.insert(e, g);
     }
-    if let Some(c) = fill {
-        pres.world.fills.insert(e, Fill::Solid(c));
+    if let Some(f) = fill {
+        pres.world.fills.insert(e, f);
     }
 
     let has_text = paras.iter().any(|p| !p.runs.is_empty());
@@ -1065,12 +1102,17 @@ fn slide_xml(
         s.push_str(&format!(
             r#"<a:prstGeom prst="{preset}">{av_lst}</a:prstGeom>"#
         ));
-        // Solid fill (resolved to literal RGB) when present.
-        if let Some(Fill::Solid(color)) = fill {
-            s.push_str(&solid_fill_xml(*color, theme));
-        } else if text.is_none() {
-            // A geometry with no fill: leave it unfilled (noFill) so it is not opaque black.
-            s.push_str("<a:noFill/>");
+        // Fill (resolved to literal RGB) when present: solid or two-stop linear gradient.
+        match fill {
+            Some(Fill::Solid(color)) => s.push_str(&solid_fill_xml(*color, theme)),
+            Some(Fill::Linear { from, to, angle_deg }) => {
+                s.push_str(&grad_fill_xml(*from, *to, *angle_deg, theme))
+            }
+            None if text.is_none() => {
+                // A geometry with no fill: leave it unfilled (noFill) so it is not opaque black.
+                s.push_str("<a:noFill/>");
+            }
+            None => {}
         }
         s.push_str("</p:spPr>");
 
@@ -1146,6 +1188,21 @@ fn solid_fill_xml(color: Color, theme: &Theme) -> String {
     format!(
         r#"<a:solidFill><a:srgbClr val="{}"/></a:solidFill>"#,
         hex_rgb(rgba.r, rgba.g, rgba.b)
+    )
+}
+
+/// A two-stop linear `gradFill`. `angle_deg` is converted to OOXML's 60000ths of a degree,
+/// normalized to 0..360.
+fn grad_fill_xml(from: Color, to: Color, angle_deg: f32, theme: &Theme) -> String {
+    let a = theme.resolve_color(&from);
+    let b = theme.resolve_color(&to);
+    let raw = (angle_deg as f64 * 60_000.0).round() as i64;
+    let ang = ((raw % 21_600_000) + 21_600_000) % 21_600_000;
+    format!(
+        r#"<a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="{}"/></a:gs><a:gs pos="100000"><a:srgbClr val="{}"/></a:gs></a:gsLst><a:lin ang="{}" scaled="1"/></a:gradFill>"#,
+        hex_rgb(a.r, a.g, a.b),
+        hex_rgb(b.r, b.g, b.b),
+        ang
     )
 }
 
@@ -1554,6 +1611,52 @@ mod tests {
             "text should round-trip"
         );
 
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn linear_gradient_roundtrips() {
+        // A shape with a two-stop linear gradient should survive export+import: both literal
+        // stop colors and the angle (within the 60000ths-of-a-degree quantization) come back.
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        let slide = p.add_slide(layout);
+
+        let frame = RectEmu::new(914_400, 457_200, 3_000_000, 2_000_000);
+        let from = Color::literal(Rgba::rgb(0x1E, 0x88, 0xE5));
+        let to = Color::literal(Rgba::rgb(0xE5, 0x39, 0x35));
+        let rect = p.add_shape(slide);
+        p.world.frames.insert(rect, frame);
+        p.world.geometries.insert(rect, Geometry::Rect);
+        p.world.fills.insert(
+            rect,
+            Fill::Linear {
+                from,
+                to,
+                angle_deg: 45.0,
+            },
+        );
+
+        let path = unique_temp_path("gradient");
+        let _ = std::fs::remove_file(&path);
+        export_pptx(&p, &path).expect("export should succeed");
+        let imported = import_pptx(&path).expect("import should succeed");
+
+        let first = imported.slides()[0];
+        let fill = imported
+            .children(first)
+            .iter()
+            .find_map(|c| imported.world.fills.get(c).copied())
+            .expect("expected a fill after import");
+        match fill {
+            Fill::Linear { from: f, to: t, angle_deg } => {
+                assert_eq!(f, from, "gradient `from` color should round-trip");
+                assert_eq!(t, to, "gradient `to` color should round-trip");
+                assert!((angle_deg - 45.0).abs() < 0.5, "angle should round-trip: {angle_deg}");
+            }
+            other => panic!("expected a linear gradient, got {other:?}"),
+        }
         let _ = std::fs::remove_file(&path);
     }
 

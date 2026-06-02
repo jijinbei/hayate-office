@@ -55,7 +55,7 @@ pub fn rasterize(scene: &Scene, out_w: u32, out_h: u32) -> Vec<u8> {
                 stroke,
             } => {
                 let style = ShapeStyle {
-                    fill: solid(fill, op),
+                    fill: fill_paint(fill, op),
                     stroke: stroke_px(stroke, op, s),
                     corner: (corner_radius * s).max(0.0),
                     ellipse: false,
@@ -68,7 +68,7 @@ pub fn rasterize(scene: &Scene, out_w: u32, out_h: u32) -> Vec<u8> {
                 stroke,
             } => {
                 let style = ShapeStyle {
-                    fill: solid(fill, op),
+                    fill: fill_paint(fill, op),
                     stroke: stroke_px(stroke, op, s),
                     corner: 0.0,
                     ellipse: true,
@@ -87,12 +87,35 @@ pub fn rasterize(scene: &Scene, out_w: u32, out_h: u32) -> Vec<u8> {
     buf
 }
 
-/// Resolve an optional solid paint to an opacity-adjusted color.
-fn solid(fill: &Option<Paint>, opacity: f32) -> Option<Rgba> {
+/// A resolved fill in output-pixel space: either a solid color or a two-stop linear gradient.
+/// Colors are already opacity-adjusted.
+#[derive(Clone, Copy)]
+enum FillPaint {
+    Solid(Rgba),
+    Linear { from: Rgba, to: Rgba, angle_deg: f32 },
+}
+
+/// Resolve an optional scene paint into an opacity-adjusted [`FillPaint`].
+fn fill_paint(fill: &Option<Paint>, opacity: f32) -> Option<FillPaint> {
     match fill {
-        Some(Paint::Solid(c)) => Some(apply_opacity(*c, opacity)),
+        Some(Paint::Solid(c)) => Some(FillPaint::Solid(apply_opacity(*c, opacity))),
+        Some(Paint::Linear {
+            from,
+            to,
+            angle_deg,
+        }) => Some(FillPaint::Linear {
+            from: apply_opacity(*from, opacity),
+            to: apply_opacity(*to, opacity),
+            angle_deg: *angle_deg,
+        }),
         None => None,
     }
+}
+
+/// Linearly interpolate two colors per channel at `t` in 0..=1.
+fn lerp_rgba(a: Rgba, b: Rgba, t: f32) -> Rgba {
+    let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round().clamp(0.0, 255.0) as u8;
+    Rgba::rgba(lerp(a.r, b.r), lerp(a.g, b.g), lerp(a.b, b.b), lerp(a.a, b.a))
 }
 
 /// Resolve an optional stroke to (color, width-in-output-px), opacity-adjusted.
@@ -112,7 +135,7 @@ fn apply_opacity(c: Rgba, opacity: f32) -> Rgba {
 
 /// Drawing style for a rect/ellipse primitive in output-pixel space.
 struct ShapeStyle {
-    fill: Option<Rgba>,
+    fill: Option<FillPaint>,
     /// (color, width in output px).
     stroke: Option<(Rgba, f32)>,
     /// Corner radius in output px (rects only).
@@ -150,6 +173,17 @@ fn paint_shape(
 
     let stroke_w = style.stroke.map(|(_, wd)| wd).unwrap_or(0.0);
 
+    // Precompute the gradient axis (in the shape's local frame) once. `half_span` is the
+    // shape's half-extent projected onto that axis, so the gradient parameter t spans 0..1.
+    let gradient = match style.fill {
+        Some(FillPaint::Linear { from, to, angle_deg }) => {
+            let (gs, gc) = angle_deg.to_radians().sin_cos();
+            let half_span = ((hw * gc).abs() + (hh * gs).abs()).max(1.0);
+            Some((from, to, gs, gc, half_span))
+        }
+        _ => None,
+    };
+
     for y in y0..y1 {
         for x in x0..x1 {
             let dx = x as f32 + 0.5 - cx;
@@ -176,8 +210,14 @@ fn paint_shape(
                     continue;
                 }
             }
-            if let Some(fc) = style.fill {
-                blend_over(buf, idx, fc);
+            match style.fill {
+                Some(FillPaint::Solid(fc)) => blend_over(buf, idx, fc),
+                Some(FillPaint::Linear { .. }) => {
+                    let (from, to, gs, gc, half_span) = gradient.unwrap();
+                    let t = (lx * gc + ly * gs) / (2.0 * half_span) + 0.5;
+                    blend_over(buf, idx, lerp_rgba(from, to, t.clamp(0.0, 1.0)));
+                }
+                None => {}
             }
         }
     }

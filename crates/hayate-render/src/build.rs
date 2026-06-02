@@ -34,11 +34,7 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
         let bounds = vp.rect(frame);
         let rotation_deg = p.world.rotations.get(&e).copied().unwrap_or(0.0);
         let opacity = p.world.opacity.get(&e).copied().unwrap_or(1.0);
-        let fill = p
-            .world
-            .fills
-            .get(&e)
-            .map(|f| Paint::Solid(paint_to_rgba(f, &theme)));
+        let fill = p.world.fills.get(&e).map(|f| fill_to_paint(f, &theme));
         let stroke = p.world.strokes.get(&e).map(|s| StrokePx {
             color: theme.resolve_color(&s.color),
             width: vp.len(s.width),
@@ -172,9 +168,28 @@ pub fn build_slide_scene_at(p: &Presentation, slide: Entity, target: PxSize, t_m
     scene
 }
 
+/// Resolve a `Fill` to a single representative color (used for backgrounds, where a gradient
+/// is collapsed to its `from` stop).
 fn paint_to_rgba(fill: &Fill, theme: &Theme) -> Rgba {
     match fill {
         Fill::Solid(c) => theme.resolve_color(c),
+        Fill::Linear { from, .. } => theme.resolve_color(from),
+    }
+}
+
+/// Resolve a `Fill` to a scene `Paint`, resolving theme colors to literals.
+fn fill_to_paint(fill: &Fill, theme: &Theme) -> Paint {
+    match fill {
+        Fill::Solid(c) => Paint::Solid(theme.resolve_color(c)),
+        Fill::Linear {
+            from,
+            to,
+            angle_deg,
+        } => Paint::Linear {
+            from: theme.resolve_color(from),
+            to: theme.resolve_color(to),
+            angle_deg: *angle_deg,
+        },
     }
 }
 

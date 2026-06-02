@@ -256,6 +256,14 @@ fn arg_fill(args: &Value, key: &str) -> Option<Fill> {
     Some(Fill::Solid(Color::Literal(rgba)))
 }
 
+/// Parse a color argument into a bare `Color` (reuses [`arg_fill`]'s hex/object parsing).
+fn arg_color(args: &Value, key: &str) -> Option<Color> {
+    match arg_fill(args, key)? {
+        Fill::Solid(c) => Some(c),
+        _ => None,
+    }
+}
+
 /// Parse `#rrggbb` or `#rrggbbaa` (the `#` is optional) into an `Rgba`.
 fn parse_hex(s: &str) -> Option<Rgba> {
     let hex = s.strip_prefix('#').unwrap_or(s);
@@ -292,6 +300,39 @@ pub fn builtins() -> CommandRegistry {
         |_world, args| match (arg_entity(args, "entity"), arg_fill(args, "color")) {
             (Some(entity), Some(fill)) => edit::set_fill(entity, fill).ops,
             _ => vec![],
+        },
+    );
+
+    // shape.fill_gradient — replace the entity's Fill with a two-stop linear gradient.
+    reg.register(
+        CommandMeta::new("shape.fill_gradient", "Gradient Fill", "Shape"),
+        vec![
+            ParamSpec::new("entity", ParamType::Entity),
+            ParamSpec::new("from", ParamType::Color),
+            ParamSpec::new("to", ParamType::Color),
+            ParamSpec::new("angle", ParamType::Float),
+        ],
+        |_world, args| {
+            match (
+                arg_entity(args, "entity"),
+                arg_color(args, "from"),
+                arg_color(args, "to"),
+            ) {
+                (Some(entity), Some(from), Some(to)) => {
+                    let angle_deg =
+                        args.get("angle").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+                    edit::set_fill(
+                        entity,
+                        Fill::Linear {
+                            from,
+                            to,
+                            angle_deg,
+                        },
+                    )
+                    .ops
+                }
+                _ => vec![],
+            }
         },
     );
 
