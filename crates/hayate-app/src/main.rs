@@ -1883,11 +1883,6 @@ impl Render for HayateApp {
             this.add_slide();
             cx.notify();
         }));
-        sidebar = sidebar.child(
-            div()
-                .text_color(rgb(0x888888))
-                .child("right-click a slide for options"),
-        );
         for (i, &s) in slides.iter().enumerate() {
             let tscene = build_slide_scene(&self.pres, s, PxSize { w: 176.0, h: 99.0 });
             let is_cur = s == current;
