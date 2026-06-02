@@ -228,6 +228,95 @@ pub fn append_paragraph(world: &World, e: Entity, text: String) -> Transaction {
     )
 }
 
+/// Collect `e`'s siblings (entities sharing `e`'s parent; a `None` parent means root-level
+/// siblings) paired with their `Order` key, sorted ascending by that key. `e` itself is
+/// excluded, and siblings without an `Order` are skipped (they cannot be positioned
+/// relative to `e`). The parent of an entity is read from `world.parent`.
+fn ordered_siblings(world: &World, e: Entity) -> Vec<(Entity, FracIndex)> {
+    let target_parent = world.parent.get(&e).copied();
+    let mut siblings: Vec<(Entity, FracIndex)> = world
+        .iter()
+        .filter(|&other| other != e)
+        .filter(|other| world.parent.get(other).copied() == target_parent)
+        .filter_map(|other| world.order.get(&other).map(|o| (other, o.clone())))
+        .collect();
+    siblings.sort_by(|a, b| a.1.cmp(&b.1));
+    siblings
+}
+
+/// Read `e`'s own `Order` key, if any.
+fn order_of(world: &World, e: Entity) -> Option<FracIndex> {
+    world.order.get(&e).cloned()
+}
+
+/// Build a transaction that sets `e`'s `Order` to `order`.
+fn set_order_tx(label: &str, e: Entity, order: FracIndex) -> Transaction {
+    Transaction::new(
+        label.to_string(),
+        vec![Operation::SetComponent {
+            entity: e,
+            value: CompValue::Order(order),
+        }],
+    )
+}
+
+/// Move `e` one step forward (toward the front / later in sibling order) among its siblings.
+/// Siblings are those sharing `e`'s parent (a `None` parent means root-level), sorted by
+/// their `Order` key. If `e` has a next sibling `n` and a sibling-after-next `n2`, `e`'s new
+/// `Order` is placed strictly between them; if `n` is the last sibling, `e`'s new `Order` is
+/// placed after `n`. If `e` is already last (no next sibling) or has no `Order`, this is a
+/// no-op (empty transaction).
+pub fn move_forward(world: &World, e: Entity) -> Transaction {
+    let empty = Transaction::new("move forward", vec![]);
+    let my_order = match order_of(world, e) {
+        Some(o) => o,
+        None => return empty,
+    };
+    let siblings = ordered_siblings(world, e);
+    // Index of the first sibling whose order is strictly after `e`'s order: that is the
+    // "next" sibling in front of `e`.
+    let next_pos = siblings.iter().position(|(_, o)| *o > my_order);
+    let next_pos = match next_pos {
+        Some(p) => p,
+        None => return empty, // Already last: nothing in front.
+    };
+    let n_order = &siblings[next_pos].1;
+    let new_order = match siblings.get(next_pos + 1) {
+        Some((_, n2_order)) => FracIndex::between(Some(n_order), Some(n2_order)),
+        None => FracIndex::after(Some(n_order)),
+    };
+    set_order_tx("move forward", e, new_order)
+}
+
+/// Move `e` one step backward (toward the back / earlier in sibling order) among its
+/// siblings. Symmetric to [`move_forward`]: if `e` has a previous sibling `p` and a
+/// sibling-before-that `p2`, `e`'s new `Order` is placed strictly between them; if `p` is the
+/// first sibling, `e`'s new `Order` is placed before `p`. If `e` is already first (no
+/// previous sibling) or has no `Order`, this is a no-op (empty transaction).
+pub fn move_backward(world: &World, e: Entity) -> Transaction {
+    let empty = Transaction::new("move backward", vec![]);
+    let my_order = match order_of(world, e) {
+        Some(o) => o,
+        None => return empty,
+    };
+    let siblings = ordered_siblings(world, e);
+    // Index of the last sibling whose order is strictly before `e`'s order: that is the
+    // "previous" sibling behind `e`.
+    let prev_pos = siblings.iter().rposition(|(_, o)| *o < my_order);
+    let prev_pos = match prev_pos {
+        Some(p) => p,
+        None => return empty, // Already first: nothing behind.
+    };
+    let p_order = &siblings[prev_pos].1;
+    let new_order = if prev_pos == 0 {
+        FracIndex::before(Some(p_order))
+    } else {
+        let p2_order = &siblings[prev_pos - 1].1;
+        FracIndex::between(Some(p2_order), Some(p_order))
+    };
+    set_order_tx("move backward", e, new_order)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -535,5 +624,93 @@ mod tests {
 
         assert!(h.undo(&mut w));
         assert!(w.texts.get(&e).is_none());
+    }
+
+    /// Spawn three sibling entities a, b, c under `parent` with strictly increasing Order
+    /// keys, returning them in that order.
+    fn three_siblings(w: &mut World, parent: Entity) -> (Entity, Entity, Entity) {
+        let a = w.spawn();
+        let b = w.spawn();
+        let c = w.spawn();
+        let oa = FracIndex::after(None);
+        let ob = FracIndex::after(Some(&oa));
+        let oc = FracIndex::after(Some(&ob));
+        for (e, o) in [(a, oa), (b, ob), (c, oc)] {
+            w.set(e, CompValue::Parent(parent));
+            w.set(e, CompValue::Order(o));
+        }
+        (a, b, c)
+    }
+
+    /// Read the live siblings of `parent` sorted by their Order key, returning entity ids.
+    fn sorted_children(w: &World, parent: Entity) -> Vec<Entity> {
+        let mut kids: Vec<(Entity, FracIndex)> = w
+            .iter()
+            .filter(|e| w.parent.get(e).copied() == Some(parent))
+            .filter_map(|e| w.order.get(&e).map(|o| (e, o.clone())))
+            .collect();
+        kids.sort_by(|x, y| x.1.cmp(&y.1));
+        kids.into_iter().map(|(e, _)| e).collect()
+    }
+
+    #[test]
+    fn move_forward_reorders_and_undoes() {
+        let mut w = World::new();
+        let mut h = History::new();
+        let parent = w.spawn();
+        let (a, b, c) = three_siblings(&mut w, parent);
+
+        // Initially a, b, c.
+        assert_eq!(sorted_children(&w, parent), vec![a, b, c]);
+
+        // Moving a forward places it between b and c.
+        let tx = move_forward(&w, a);
+        assert!(!tx.ops.is_empty());
+        h.commit(&mut w, tx);
+        assert_eq!(sorted_children(&w, parent), vec![b, a, c]);
+
+        // Undo restores the original order.
+        assert!(h.undo(&mut w));
+        assert_eq!(sorted_children(&w, parent), vec![a, b, c]);
+    }
+
+    #[test]
+    fn move_forward_on_last_is_noop() {
+        let mut w = World::new();
+        let parent = w.spawn();
+        let (_a, _b, c) = three_siblings(&mut w, parent);
+
+        // c is already last: no next sibling, so the transaction is empty.
+        let tx = move_forward(&w, c);
+        assert!(tx.ops.is_empty());
+    }
+
+    #[test]
+    fn move_backward_reorders_and_undoes() {
+        let mut w = World::new();
+        let mut h = History::new();
+        let parent = w.spawn();
+        let (a, b, c) = three_siblings(&mut w, parent);
+
+        // Moving c backward places it between a and b.
+        let tx = move_backward(&w, c);
+        assert!(!tx.ops.is_empty());
+        h.commit(&mut w, tx);
+        assert_eq!(sorted_children(&w, parent), vec![a, c, b]);
+
+        // Undo restores the original order.
+        assert!(h.undo(&mut w));
+        assert_eq!(sorted_children(&w, parent), vec![a, b, c]);
+    }
+
+    #[test]
+    fn move_backward_on_first_is_noop() {
+        let mut w = World::new();
+        let parent = w.spawn();
+        let (a, _b, _c) = three_siblings(&mut w, parent);
+
+        // a is already first: no previous sibling, so the transaction is empty.
+        let tx = move_backward(&w, a);
+        assert!(tx.ops.is_empty());
     }
 }
