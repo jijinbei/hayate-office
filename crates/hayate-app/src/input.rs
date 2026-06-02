@@ -379,6 +379,14 @@ impl HayateApp {
                 self.open();
                 cx.notify();
             }
+            "g" if cmd && k.modifiers.shift => {
+                self.ungroup_selection();
+                cx.notify();
+            }
+            "g" if cmd => {
+                self.group_selection();
+                cx.notify();
+            }
             "g" if !cmd => {
                 self.show_grid = !self.show_grid;
                 cx.notify();

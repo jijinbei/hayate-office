@@ -5,7 +5,8 @@
 
 use super::{HayateApp, MenuTarget};
 use gpui::{
-    point, px, AppContext, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, TestAppContext,
+    point, px, AppContext, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, TestAppContext,
 };
 use hayate_render::scene::prim_bounds;
 
@@ -13,6 +14,24 @@ use hayate_render::scene::prim_bounds;
 fn mouse(button: MouseButton, x: f32, y: f32) -> MouseDownEvent {
     MouseDownEvent {
         button,
+        position: point(px(x), px(y)),
+        ..Default::default()
+    }
+}
+
+/// A mouse-move event at output position (x, y) with the left button held.
+fn mouse_move(x: f32, y: f32) -> MouseMoveEvent {
+    MouseMoveEvent {
+        position: point(px(x), px(y)),
+        pressed_button: Some(MouseButton::Left),
+        ..Default::default()
+    }
+}
+
+/// A left mouse-up event at output position (x, y).
+fn mouse_up(x: f32, y: f32) -> MouseUpEvent {
+    MouseUpEvent {
+        button: MouseButton::Left,
         position: point(px(x), px(y)),
         ..Default::default()
     }
@@ -215,4 +234,57 @@ fn slide_add_and_delete_round_trips(cx: &mut TestAppContext) {
     assert_eq!(app.read_with(cx, |a, _| a.pres.slides().len()), start + 1);
     app.update(cx, |a, _| a.delete_slide());
     assert_eq!(app.read_with(cx, |a, _| a.pres.slides().len()), start);
+}
+
+#[gpui::test]
+fn grouped_shapes_drag_together(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // Two accent rects (shapes 1 and 2).
+    let (a, b) = app.read_with(cx, |s, _| {
+        let kids = s.pres.children(s.slide);
+        (kids[1], kids[2])
+    });
+    // Group them (as the context-menu "Group" does on a multi-selection).
+    app.update(cx, |s, _| {
+        s.selection = Some(a);
+        s.also = vec![b];
+        s.group_selection();
+    });
+    // Record starting origins.
+    let origin = |s: &HayateApp, e| {
+        let f = s.pres.world.frames.get(&e).unwrap();
+        (f.origin.x, f.origin.y)
+    };
+    let (a0, b0) = app.read_with(cx, |s, _| (origin(s, a), origin(s, b)));
+    // Click the center of A to select it (should expand to the whole group and arm a drag).
+    let (cx_, cy_) = app.read_with(cx, |s, _| {
+        let n = s.scene.nodes.iter().find(|n| n.source == Some(a)).unwrap();
+        let r = prim_bounds(&n.prim);
+        (r.x + r.w * 0.5, r.y + r.h * 0.5)
+    });
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, cx_, cy_), cx)
+    });
+    let drag_len = app.read_with(cx, |s, _| s.drag.as_ref().map(|d| d.entities.len()));
+    assert_eq!(
+        drag_len,
+        Some(2),
+        "dragging a grouped shape should arm a 2-shape drag"
+    );
+    // Drag by +120px,+80px and release.
+    app.update(cx, |s, cx| {
+        s.on_mouse_move(&mouse_move(cx_ + 120.0, cy_ + 80.0), cx)
+    });
+    app.update(cx, |s, cx| {
+        s.on_mouse_up(&mouse_up(cx_ + 120.0, cy_ + 80.0), cx)
+    });
+    let (a1, b1) = app.read_with(cx, |s, _| (origin(s, a), origin(s, b)));
+    // Both shapes moved, by the same nonzero delta.
+    let da = (a1.0 - a0.0, a1.1 - a0.1);
+    let db = (b1.0 - b0.0, b1.1 - b0.1);
+    assert!(da.0 != 0 || da.1 != 0, "shape A should have moved");
+    assert_eq!(
+        da, db,
+        "grouped shapes must move by the same delta: {da:?} vs {db:?}"
+    );
 }

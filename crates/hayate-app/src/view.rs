@@ -276,6 +276,36 @@ impl Render for HayateApp {
                     }
                 }
 
+                // Combined bounding box for a group / multi-selection, so it reads as one object.
+                let sel_ents: Vec<_> = selection.into_iter().chain(also.iter().copied()).collect();
+                if sel_ents.len() > 1 {
+                    let mut union: Option<(f32, f32, f32, f32)> = None;
+                    for e in &sel_ents {
+                        if let Some(n) = scene.nodes.iter().find(|n| n.source == Some(*e)) {
+                            let r = prim_bounds(&n.prim);
+                            let (x0, y0, x1, y1) = (r.x, r.y, r.x + r.w, r.y + r.h);
+                            union = Some(match union {
+                                None => (x0, y0, x1, y1),
+                                Some((a, b, c, d)) => (a.min(x0), b.min(y0), c.max(x1), d.max(y1)),
+                            });
+                        }
+                    }
+                    if let Some((x0, y0, x1, y1)) = union {
+                        let pad = 5.0;
+                        window.paint_quad(quad(
+                            Bounds {
+                                origin: point(o.x + px(x0 - pad), o.y + px(y0 - pad)),
+                                size: size(px(x1 - x0 + 2.0 * pad), px(y1 - y0 + 2.0 * pad)),
+                            },
+                            px(0.),
+                            gpui::transparent_black(),
+                            px(1.5),
+                            rgb(0x93C5FD),
+                            Default::default(),
+                        ));
+                    }
+                }
+
                 // Resize handles on the selection.
                 if let Some(sel) = selection {
                     if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(sel)) {
