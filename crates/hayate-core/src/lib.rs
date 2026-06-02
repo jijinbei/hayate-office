@@ -12,8 +12,9 @@
 //! a deliberate placeholder for that.
 
 use hayate_ir::color::{Color, Rgba};
+use hayate_ir::frac::FracIndex;
 use hayate_ir::paint::Fill;
-use hayate_ir::world::{Entity, World};
+use hayate_ir::world::{CompValue, Entity, World};
 use hayate_model::edit;
 use hayate_model::{Operation, Transaction};
 use serde::{Deserialize, Serialize};
@@ -250,7 +251,74 @@ pub fn builtins() -> CommandRegistry {
         },
     );
 
+    // shape.bring_to_front — move the entity to the front (largest Order) among its
+    // siblings (entities sharing the same parent). Reads current order state from the World.
+    reg.register(
+        CommandMeta::new("shape.bring_to_front", "Bring to Front", "Shape"),
+        vec![ParamSpec::new("entity", ParamType::Entity)],
+        |world, args| match arg_entity(args, "entity") {
+            Some(entity) => reorder_to_edge(world, entity, Edge::Front),
+            None => vec![],
+        },
+    );
+
+    // shape.send_to_back — symmetric: move the entity to the back (smallest Order) among
+    // its siblings.
+    reg.register(
+        CommandMeta::new("shape.send_to_back", "Send to Back", "Shape"),
+        vec![ParamSpec::new("entity", ParamType::Entity)],
+        |world, args| match arg_entity(args, "entity") {
+            Some(entity) => reorder_to_edge(world, entity, Edge::Back),
+            None => vec![],
+        },
+    );
+
     reg
+}
+
+/// Which sibling extreme to move an entity to.
+enum Edge {
+    /// Largest Order key (drawn last / on top).
+    Front,
+    /// Smallest Order key (drawn first / behind).
+    Back,
+}
+
+/// Compute the single `SetComponent { Order }` operation that moves `e` to the front or back
+/// of its sibling group. Siblings are the live entities sharing `e`'s parent (`None` parent
+/// means root-level siblings), excluding `e` itself. The new key is generated just past the
+/// current max (front) or min (back) sibling order via fractional indexing, so no other
+/// entity's key changes. With no siblings we fall back to re-keying relative to `e`'s own
+/// current order (still a valid, idempotent op).
+fn reorder_to_edge(world: &World, e: Entity, edge: Edge) -> Vec<Operation> {
+    if !world.is_alive(e) {
+        return vec![];
+    }
+    let parent = world.parent.get(&e).copied();
+
+    // Collect siblings' order keys (live entities with the same parent, excluding e).
+    let sibling_orders = world.iter().filter(|&s| s != e).filter(|&s| {
+        world.parent.get(&s).copied() == parent
+    });
+
+    let new_order = match edge {
+        Edge::Front => {
+            let max = sibling_orders.filter_map(|s| world.order.get(&s)).max();
+            // Fall back to e's own current order when there are no siblings to compare with.
+            let anchor = max.or_else(|| world.order.get(&e));
+            FracIndex::after(anchor)
+        }
+        Edge::Back => {
+            let min = sibling_orders.filter_map(|s| world.order.get(&s)).min();
+            let anchor = min.or_else(|| world.order.get(&e));
+            FracIndex::before(anchor)
+        }
+    };
+
+    vec![Operation::SetComponent {
+        entity: e,
+        value: CompValue::Order(new_order),
+    }]
 }
 
 #[cfg(test)]
@@ -364,6 +432,103 @@ mod tests {
         let w = World::new();
         let tx = reg.build("shape.move", &json!({}), &w).unwrap();
         assert!(tx.ops.is_empty(), "lenient: missing fields => no ops");
+    }
+
+    /// Build a parent with three ordered children. Returns (world, parent, [c0, c1, c2])
+    /// where the children's current Order keys are strictly increasing (c0 back .. c2 front).
+    fn world_with_three_children() -> (World, Entity, [Entity; 3]) {
+        let mut w = World::new();
+        let parent = w.spawn();
+
+        let mut children = [Entity(0); 3];
+        let mut last: Option<FracIndex> = None;
+        for child in &mut children {
+            let e = w.spawn();
+            w.set(e, CompValue::Parent(parent));
+            let order = FracIndex::after(last.as_ref());
+            w.set(e, CompValue::Order(order.clone()));
+            last = Some(order);
+            *child = e;
+        }
+        (w, parent, children)
+    }
+
+    /// Read an entity's Order key out of the world.
+    fn order_of(w: &World, e: Entity) -> FracIndex {
+        match w.get(e, CompKind::Order) {
+            Some(CompValue::Order(o)) => o,
+            other => panic!("expected an Order on {e:?}, got {other:?}"),
+        }
+    }
+
+    /// The three children re-sorted by their current Order key (back -> front).
+    fn children_by_order(w: &World, children: &[Entity; 3]) -> Vec<Entity> {
+        let mut sorted = children.to_vec();
+        sorted.sort_by_key(|&e| order_of(w, e));
+        sorted
+    }
+
+    #[test]
+    fn bring_to_front_moves_child_last() {
+        let (mut w, _parent, children) = world_with_three_children();
+        let reg = builtins();
+        let mut h = History::new();
+
+        // c0 starts at the back; bring it to the front.
+        let target = children[0];
+        let tx = reg
+            .build("shape.bring_to_front", &json!({ "entity": target.0 }), &w)
+            .expect("shape.bring_to_front is registered");
+        assert_eq!(tx.label, "Bring to Front");
+        h.commit(&mut w, tx);
+
+        let sorted = children_by_order(&w, &children);
+        assert_eq!(
+            *sorted.last().unwrap(),
+            target,
+            "bring_to_front puts the child last in Order; got {sorted:?}"
+        );
+
+        // One undo step restores the original ordering (c0 back).
+        assert!(h.undo(&mut w));
+        let restored = children_by_order(&w, &children);
+        assert_eq!(restored, children.to_vec());
+    }
+
+    #[test]
+    fn send_to_back_moves_child_first() {
+        let (mut w, _parent, children) = world_with_three_children();
+        let reg = builtins();
+        let mut h = History::new();
+
+        // c2 starts at the front; send it to the back.
+        let target = children[2];
+        let tx = reg
+            .build("shape.send_to_back", &json!({ "entity": target.0 }), &w)
+            .expect("shape.send_to_back is registered");
+        assert_eq!(tx.label, "Send to Back");
+        h.commit(&mut w, tx);
+
+        let sorted = children_by_order(&w, &children);
+        assert_eq!(
+            *sorted.first().unwrap(),
+            target,
+            "send_to_back puts the child first in Order; got {sorted:?}"
+        );
+
+        assert!(h.undo(&mut w));
+        let restored = children_by_order(&w, &children);
+        assert_eq!(restored, children.to_vec());
+    }
+
+    #[test]
+    fn z_order_missing_entity_is_lenient() {
+        let reg = builtins();
+        let w = World::new();
+        let front = reg.build("shape.bring_to_front", &json!({}), &w).unwrap();
+        let back = reg.build("shape.send_to_back", &json!({}), &w).unwrap();
+        assert!(front.ops.is_empty());
+        assert!(back.ops.is_empty());
     }
 
     #[test]
