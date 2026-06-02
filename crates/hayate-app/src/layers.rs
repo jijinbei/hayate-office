@@ -21,73 +21,111 @@ impl HayateApp {
         // Distinguishing labels: number each kind in creation order (Rectangle 1, Ellipse 1, ...).
         let labels = self.numbered_labels(&children);
 
-        let mut panel = div()
+        let mut rows: Vec<gpui::AnyElement> = Vec::new();
+        let mut index: usize = 0;
+        let mut group_no: u32 = 0;
+        self.build_rows(
+            &front_to_back,
+            0,
+            &labels,
+            &mut group_no,
+            &mut index,
+            &mut rows,
+            cx,
+        );
+
+        div()
             .flex()
             .flex_col()
             .w(px(180.))
             .p_2()
             .bg(rgb(0x202020))
             .text_color(rgb(0xffffff))
-            .child(div().text_sm().text_color(rgb(0x8a8a8a)).child("Layers"));
+            .child(div().text_sm().text_color(rgb(0x8a8a8a)).child("Layers"))
+            .children(rows)
+            .into_any_element()
+    }
 
-        // Track which group keys have already been emitted so a group is listed once.
-        let mut seen_groups: Vec<u64> = Vec::new();
-        // Monotonic row index for stable element ids and hover/click identity.
-        let mut index: usize = 0;
-
-        for &e in &front_to_back {
-            match self.pres.world.groups.get(&e) {
-                Some(&key) => {
-                    if seen_groups.contains(&key) {
-                        // A later member of an already-emitted group: skip.
-                        continue;
-                    }
-                    seen_groups.push(key);
-                    let group_no = seen_groups.len();
-                    let members: Vec<Entity> = front_to_back
-                        .iter()
-                        .copied()
-                        .filter(|m| self.pres.world.groups.get(m) == Some(&key))
-                        .collect();
-                    let first = members[0];
-
-                    // Group header row — clicking it selects the whole group.
-                    panel = panel.child(
-                        div()
-                            .id(("group", group_no))
-                            .px_2()
-                            .py_1()
-                            .text_sm()
-                            .rounded_md()
-                            .hover(|s| s.bg(rgb(0x2f2f2f)))
-                            .child(format!("\u{1F4C1} Group {group_no}"))
-                            .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
-                                window.focus(&this.focus, cx);
-                                this.selection = Some(first);
-                                this.also = group_members(&this.pres.world, first)
-                                    .into_iter()
-                                    .filter(|&m| m != first)
-                                    .collect();
-                                cx.notify();
-                            })),
-                    );
-
-                    // Members of this group, front-to-back, indented under the header.
-                    for &m in &members {
-                        let lbl = labels.get(&m).cloned().unwrap_or_default();
-                        panel = panel.child(self.layer_row(lbl, m, index, 1, cx));
-                        index += 1;
-                    }
+    /// Recursively emit layer rows for `entities` at nesting `level`. Shapes whose group path
+    /// ends at this level are leaf rows; deeper paths produce a "Group N" header followed by a
+    /// recursively-built subtree.
+    #[allow(clippy::too_many_arguments)]
+    fn build_rows(
+        &self,
+        entities: &[Entity],
+        level: usize,
+        labels: &HashMap<Entity, String>,
+        group_no: &mut u32,
+        index: &mut usize,
+        out: &mut Vec<gpui::AnyElement>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut seen: Vec<u64> = Vec::new();
+        for &e in entities {
+            let path = self.pres.world.groups.get(&e).cloned().unwrap_or_default();
+            if path.len() <= level {
+                let lbl = labels.get(&e).cloned().unwrap_or_default();
+                out.push(self.layer_row(lbl, e, *index, level, cx));
+                *index += 1;
+            } else {
+                let key = path[level];
+                if seen.contains(&key) {
+                    continue;
                 }
-                None => {
-                    let lbl = labels.get(&e).cloned().unwrap_or_default();
-                    panel = panel.child(self.layer_row(lbl, e, index, 0, cx));
-                    index += 1;
-                }
+                seen.push(key);
+                *group_no += 1;
+                let gno = *group_no;
+                let members: Vec<Entity> = entities
+                    .iter()
+                    .copied()
+                    .filter(|m| {
+                        self.pres
+                            .world
+                            .groups
+                            .get(m)
+                            .map_or(false, |p| p.get(level) == Some(&key))
+                    })
+                    .collect();
+                out.push(self.group_header_row(gno, level, members.clone(), *index, cx));
+                *index += 1;
+                self.build_rows(&members, level + 1, labels, group_no, index, out, cx);
             }
         }
+    }
 
-        panel.into_any_element()
+    /// A "Group N" header row; clicking it selects exactly that (sub-)group's members.
+    fn group_header_row(
+        &self,
+        group_no: u32,
+        level: usize,
+        members: Vec<Entity>,
+        index: usize,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let active = members
+            .iter()
+            .any(|m| self.selection == Some(*m) || self.also.contains(m));
+        let mut row = div()
+            .id(("layer", index))
+            .py_1()
+            .pr_2()
+            .pl(px(8.0 + level as f32 * 16.0))
+            .text_sm()
+            .rounded_md()
+            .hover(|s| s.bg(rgb(0x2f2f2f)))
+            .child(format!("\u{1F4C1} Group {group_no}"));
+        if active {
+            row = row.bg(rgb(0x2f2f2f));
+        }
+        row.on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+            window.focus(&this.focus, cx);
+            if let Some(&first) = members.first() {
+                this.selection = Some(first);
+                this.also = members.iter().copied().filter(|&m| m != first).collect();
+            }
+            cx.notify();
+        }))
+        .into_any_element()
     }
 
     /// One clickable layer row for entity `e` with the given `label`. `depth` indents it under

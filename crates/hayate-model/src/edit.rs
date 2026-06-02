@@ -398,36 +398,61 @@ pub fn add_entrance(
 
 /// Assign group membership `key` to every entity in `members`, so they select, move, and
 /// delete as a unit. Callers mint a fresh nonzero `key` per group.
-pub fn group(members: &[Entity], key: u64) -> Transaction {
+/// Wrap `members` in a new outer group `key`: prepend `key` to each member's group path, so any
+/// existing (inner) grouping is preserved and the new group nests around it.
+pub fn group(world: &World, members: &[Entity], key: u64) -> Transaction {
     let ops = members
         .iter()
-        .map(|&entity| Operation::SetComponent {
-            entity,
-            value: CompValue::Group(key),
+        .map(|&entity| {
+            let mut path = world.groups.get(&entity).cloned().unwrap_or_default();
+            path.insert(0, key);
+            Operation::SetComponent {
+                entity,
+                value: CompValue::Group(path),
+            }
         })
         .collect();
     Transaction::new("group", ops)
 }
 
-/// Remove group membership `key` from every entity that currently carries it.
+/// Remove group `key` from every shape's path (un-nesting one level). When a path becomes
+/// empty the component is removed entirely.
 pub fn ungroup(world: &World, key: u64) -> Transaction {
     let ops = world
         .iter()
-        .filter(|e| world.groups.get(e) == Some(&key))
-        .map(|entity| Operation::RemoveComponent {
-            entity,
-            kind: CompKind::Group,
+        .filter_map(|entity| {
+            let path = world.groups.get(&entity)?;
+            if !path.contains(&key) {
+                return None;
+            }
+            let rest: Vec<u64> = path.iter().copied().filter(|&k| k != key).collect();
+            Some(if rest.is_empty() {
+                Operation::RemoveComponent {
+                    entity,
+                    kind: CompKind::Group,
+                }
+            } else {
+                Operation::SetComponent {
+                    entity,
+                    value: CompValue::Group(rest),
+                }
+            })
         })
         .collect();
     Transaction::new("ungroup", ops)
 }
 
-/// All entities sharing the same group as `e` (including `e`); just `[e]` if it is ungrouped.
+/// The outermost group key of `e`, if any (the top-level group it belongs to).
+pub fn outer_group(world: &World, e: Entity) -> Option<u64> {
+    world.groups.get(&e).and_then(|p| p.first().copied())
+}
+
+/// All entities sharing `e`'s OUTERMOST group (including `e`); just `[e]` if it is ungrouped.
 pub fn group_members(world: &World, e: Entity) -> Vec<Entity> {
-    match world.groups.get(&e) {
-        Some(&key) => world
+    match outer_group(world, e) {
+        Some(key) => world
             .iter()
-            .filter(|x| world.groups.get(x) == Some(&key))
+            .filter(|x| outer_group(world, *x) == Some(key))
             .collect(),
         None => vec![e],
     }

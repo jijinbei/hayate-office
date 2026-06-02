@@ -280,14 +280,14 @@ impl HayateApp {
         }
         // Mint a unique nonzero group key from a reserved entity id.
         let key = self.pres.world.reserve_id().0;
-        let tx = edit::group(&members, key);
+        let tx = edit::group(&self.pres.world, &members, key);
         self.commit_tx(tx);
     }
 
-    /// Ungroup the group that the current selection belongs to.
+    /// Ungroup the outermost group the current selection belongs to (un-nests one level).
     pub(crate) fn ungroup_selection(&mut self) {
         if let Some(sel) = self.selection {
-            if let Some(&key) = self.pres.world.groups.get(&sel) {
+            if let Some(key) = edit::outer_group(&self.pres.world, sel) {
                 let tx = edit::ungroup(&self.pres.world, key);
                 self.commit_tx(tx);
                 self.also.clear();

@@ -190,8 +190,8 @@ fn grouping_links_and_unlinks_shapes(cx: &mut TestAppContext) {
     // Both shapes now share a (nonzero) group key.
     let (ga, gb) = app.read_with(cx, |s, _| {
         (
-            s.pres.world.groups.get(&a).copied(),
-            s.pres.world.groups.get(&b).copied(),
+            hayate_model::edit::outer_group(&s.pres.world, a),
+            hayate_model::edit::outer_group(&s.pres.world, b),
         )
     });
     assert!(
@@ -208,7 +208,7 @@ fn grouping_links_and_unlinks_shapes(cx: &mut TestAppContext) {
         s.selection = Some(a);
         s.ungroup_selection();
     });
-    let after = app.read_with(cx, |s, _| s.pres.world.groups.get(&a).copied());
+    let after = app.read_with(cx, |s, _| hayate_model::edit::outer_group(&s.pres.world, a));
     assert_eq!(after, None, "ungroup should clear the group key");
 }
 
@@ -369,8 +369,8 @@ fn full_group_flow_via_marquee_and_menu(cx: &mut TestAppContext) {
     );
     app.update(cx, |s, _| s.group_selection());
     let grouped = app.read_with(cx, |s, _| {
-        let ga = s.pres.world.groups.get(&a).copied();
-        let gb = s.pres.world.groups.get(&b).copied();
+        let ga = hayate_model::edit::outer_group(&s.pres.world, a);
+        let gb = hayate_model::edit::outer_group(&s.pres.world, b);
         ga.is_some() && ga == gb
     });
     assert!(
@@ -409,8 +409,8 @@ fn menu_open_click_keeps_selection(cx: &mut TestAppContext) {
     // The menu's Group action then groups both.
     app.update(cx, |s, _| s.group_selection());
     let grouped = app.read_with(cx, |s, _| {
-        s.pres.world.groups.get(&a).is_some()
-            && s.pres.world.groups.get(&a) == s.pres.world.groups.get(&b)
+        let ga = hayate_model::edit::outer_group(&s.pres.world, a);
+        ga.is_some() && ga == hayate_model::edit::outer_group(&s.pres.world, b)
     });
     assert!(grouped, "Group should succeed after the menu-dismiss click");
 }
@@ -474,4 +474,45 @@ fn double_click_drills_into_group(cx: &mut TestAppContext) {
         also_len, 0,
         "double-click should drop the rest of the group"
     );
+}
+
+#[gpui::test]
+fn nested_group_wraps_existing_group(cx: &mut TestAppContext) {
+    use hayate_model::edit::{group_members, outer_group};
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let (a, b, c) = app.read_with(cx, |s, _| {
+        let k = s.pres.children(s.slide);
+        (k[1], k[2], k[3])
+    });
+    // Group a + b -> inner group K1.
+    app.update(cx, |s, _| {
+        s.selection = Some(a);
+        s.also = vec![b];
+        s.group_selection();
+    });
+    let k1 = app
+        .read_with(cx, |s, _| outer_group(&s.pres.world, a))
+        .unwrap();
+    // Select that whole group, add c, and group again -> outer group K2 wrapping K1 + c.
+    app.update(cx, |s, _| {
+        s.selection = Some(a);
+        s.also = group_members(&s.pres.world, a)
+            .into_iter()
+            .filter(|&m| m != a)
+            .collect();
+        s.also.push(c);
+        s.group_selection();
+    });
+    let (k2, cg, apath, members) = app.read_with(cx, |s, _| {
+        (
+            outer_group(&s.pres.world, a).unwrap(),
+            outer_group(&s.pres.world, c),
+            s.pres.world.groups.get(&a).cloned().unwrap_or_default(),
+            group_members(&s.pres.world, a).len(),
+        )
+    });
+    assert_ne!(k2, k1, "the new outer group must be a different key");
+    assert_eq!(cg, Some(k2), "c joins the outer group");
+    assert_eq!(apath, vec![k2, k1], "a's path nests K1 inside K2");
+    assert_eq!(members, 3, "the outer group has all three shapes");
 }
