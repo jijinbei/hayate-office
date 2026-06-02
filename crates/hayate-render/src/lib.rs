@@ -13,6 +13,7 @@ pub mod scene;
 pub mod svg;
 
 pub use build::build_slide_scene;
+pub use build::build_slide_scene_at;
 pub use grid::{GridLines, grid_lines};
 pub use guides::{Guide, GuideKind, alignment_guides};
 pub use handles::resize_handles;

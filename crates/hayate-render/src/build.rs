@@ -5,6 +5,7 @@ use crate::scene::{
     Paint, Primitive, PxSize, ResolvedParagraph, ResolvedRun, Scene, SceneNode, StrokePx,
     TextBlock, Viewport,
 };
+use hayate_ir::anim::{AnimKind, Trigger};
 use hayate_ir::color::Rgba;
 use hayate_ir::font::Script;
 use hayate_ir::paint::Fill;
@@ -84,6 +85,83 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
         background,
         nodes,
     }
+}
+
+/// Build the scene for `slide` at playback time `t_ms`, applying any [`SlideTimeline`]
+/// entrance animations as a per-target progress in 0..1.
+///
+/// Steps lay out on a single timeline: they play in order, and an `AfterPrev` (or, for
+/// auto-play, `OnClick`) step starts after the previous step's maximum end, while a
+/// `WithPrev` step starts at the same point the previous step started. Within a step each
+/// anim begins at its own `delay`. For an `Entrance` anim the progress is
+/// `clamp((t - step_start - delay) / duration, 0, 1)` (a zero duration snaps to 1).
+///
+/// Shapes with no entrance animation are left fully visible; a shape whose entrance has not
+/// started yet (progress 0) is hidden (opacity 0).
+pub fn build_slide_scene_at(p: &Presentation, slide: Entity, target: PxSize, t_ms: u32) -> Scene {
+    let mut scene = build_slide_scene(p, slide, target);
+
+    let timeline = match p.world.timelines.get(&slide) {
+        Some(tl) => tl,
+        None => return scene, // no animation: fully-visible frame
+    };
+
+    // Lay the steps out on an absolute timeline and accumulate, per target entity, the
+    // progress of the entrance animation that governs its visibility.
+    let mut entrance_progress: std::collections::BTreeMap<Entity, f32> =
+        std::collections::BTreeMap::new();
+
+    let mut prev_start: u32 = 0;
+    let mut prev_end: u32 = 0;
+    for (i, step) in timeline.steps.iter().enumerate() {
+        // Resolve this step's start on the absolute timeline.
+        let start = if i == 0 {
+            0
+        } else {
+            match step.trigger {
+                // WithPrev runs alongside the previous step.
+                Trigger::WithPrev => prev_start,
+                // AfterPrev waits for the previous step to finish, then waits `delay`.
+                Trigger::AfterPrev { delay } => prev_end.saturating_add(delay),
+                // For auto-play we treat OnClick like AfterPrev with no extra delay.
+                Trigger::OnClick => prev_end,
+            }
+        };
+
+        let mut step_end = start;
+        for anim in &step.anims {
+            let anim_start = start.saturating_add(anim.delay);
+            let anim_end = anim_start.saturating_add(anim.duration);
+            step_end = step_end.max(anim_end);
+
+            if let AnimKind::Entrance(_effect) = anim.kind {
+                let progress = if anim.duration == 0 {
+                    if t_ms >= anim_start { 1.0 } else { 0.0 }
+                } else {
+                    let elapsed = t_ms as i64 - anim_start as i64;
+                    (elapsed as f32 / anim.duration as f32).clamp(0.0, 1.0)
+                };
+                // If several entrance anims target the same entity, the last one wins.
+                entrance_progress.insert(anim.target, progress);
+            }
+        }
+
+        prev_start = start;
+        prev_end = step_end;
+    }
+
+    // Apply the computed entrance progress to matching nodes.
+    for node in &mut scene.nodes {
+        if let Some(src) = node.source {
+            if let Some(&progress) = entrance_progress.get(&src) {
+                // Entrance(Fade) scales opacity. For MVP, other entrance effects (Fly, Wipe,
+                // Zoom) also just fade until proper motion/clipping is implemented.
+                node.opacity *= progress;
+            }
+        }
+    }
+
+    scene
 }
 
 fn paint_to_rgba(fill: &Fill, theme: &Theme) -> Rgba {
@@ -216,6 +294,91 @@ mod tests {
             }
             other => panic!("expected text, got {other:?}"),
         }
+    }
+
+    /// Build a slide with a single faded-in rectangle and a static (un-animated) rectangle.
+    /// Returns (presentation, slide, animated_rect, static_rect).
+    fn animated_deck() -> (Presentation, Entity, Entity, Entity) {
+        use hayate_ir::anim::{Anim, AnimStep, Easing, Effect, SlideTimeline};
+
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        let slide = p.add_slide(layout);
+
+        let animated = p.add_shape(slide);
+        p.world.frames.insert(animated, RectEmu::new(0, 0, 914_400, 914_400));
+        p.world.geometries.insert(animated, Geometry::Rect);
+
+        let still = p.add_shape(slide);
+        p.world.frames.insert(still, RectEmu::new(914_400, 0, 914_400, 914_400));
+        p.world.geometries.insert(still, Geometry::Rect);
+
+        // One entrance fade over [0, 1000ms] targeting `animated`.
+        p.world.timelines.insert(
+            slide,
+            SlideTimeline {
+                steps: vec![AnimStep {
+                    trigger: Trigger::OnClick,
+                    anims: vec![Anim {
+                        target: animated,
+                        kind: AnimKind::Entrance(Effect::Fade),
+                        duration: 1000,
+                        delay: 0,
+                        easing: Easing::Linear,
+                    }],
+                }],
+            },
+        );
+
+        (p, slide, animated, still)
+    }
+
+    /// Locate the opacity of the node whose source matches `e`.
+    fn opacity_of(scene: &Scene, e: Entity) -> f32 {
+        scene
+            .nodes
+            .iter()
+            .find(|n| n.source == Some(e))
+            .expect("node for entity")
+            .opacity
+    }
+
+    #[test]
+    fn entrance_fade_ramps_opacity_over_time() {
+        let (p, slide, animated, _still) = animated_deck();
+        let target = PxSize { w: 960.0, h: 540.0 };
+
+        let at0 = build_slide_scene_at(&p, slide, target, 0);
+        assert!(opacity_of(&at0, animated) < 0.01, "t=0 should be ~0");
+
+        let at500 = build_slide_scene_at(&p, slide, target, 500);
+        assert!((opacity_of(&at500, animated) - 0.5).abs() < 0.01, "t=500 should be ~0.5");
+
+        let at1000 = build_slide_scene_at(&p, slide, target, 1000);
+        assert!((opacity_of(&at1000, animated) - 1.0).abs() < 0.01, "t=1000 should be ~1");
+    }
+
+    #[test]
+    fn shape_without_animation_stays_visible() {
+        let (p, slide, _animated, still) = animated_deck();
+        let target = PxSize { w: 960.0, h: 540.0 };
+
+        for t in [0, 500, 1000, 5000] {
+            let scene = build_slide_scene_at(&p, slide, target, t);
+            assert_eq!(opacity_of(&scene, still), 1.0, "static shape stays opaque at t={t}");
+        }
+    }
+
+    #[test]
+    fn build_slide_scene_unchanged_without_timeline() {
+        let (p, slide) = deck();
+        let target = PxSize { w: 960.0, h: 540.0 };
+        // No timeline => the time-parameterized builder matches the static frame exactly.
+        assert_eq!(
+            build_slide_scene_at(&p, slide, target, 0),
+            build_slide_scene(&p, slide, target)
+        );
     }
 
     #[test]
