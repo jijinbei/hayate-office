@@ -331,7 +331,9 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
         rotation: Option<f32>,
         geometry: Option<Geometry>,
         fill: Option<Color>,
-        texts: Vec<String>,
+        paras: Vec<ParsedPara>,
+        /// Run properties accumulated from the current `<a:rPr>`, applied to the next `<a:t>`.
+        pending: ParsedRun,
     }
     impl ShapeState {
         fn new() -> Self {
@@ -341,7 +343,8 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
                 rotation: None,
                 geometry: None,
                 fill: None,
-                texts: Vec::new(),
+                paras: Vec::new(),
+                pending: ParsedRun::default(),
             }
         }
     }
@@ -349,13 +352,21 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
     let mut state: Option<ShapeState> = None;
     // Whether we are inside a <a:t> element (so the next Text event is run text).
     let mut in_text = false;
-    // Track whether we are inside a solidFill, so a nested srgbClr is taken as the fill.
+    // Track whether we are inside a solidFill, so a nested srgbClr is taken as a color.
     let mut solidfill_depth: i32 = 0;
+    // Whether we are inside a run's <a:rPr> (so a nested solidFill is the text color).
+    let mut in_rpr = false;
 
     // Handle the attributes of an element start (shared by Start and Empty events). The
-    // depth-tracking elements (`sp`, `solidFill`, `t`) are handled by the caller, since for
-    // self-closing (`Empty`) elements they would open and close at once.
-    fn apply_attrs(state: &mut Option<ShapeState>, solidfill_depth: i32, name: &str, e: &quick_xml::events::BytesStart) {
+    // depth-tracking elements (`sp`, `solidFill`, `t`, `rPr`) are handled by the caller, since
+    // for self-closing (`Empty`) elements they would open and close at once.
+    fn apply_attrs(
+        state: &mut Option<ShapeState>,
+        solidfill_depth: i32,
+        in_rpr: bool,
+        name: &str,
+        e: &quick_xml::events::BytesStart,
+    ) {
         let s = match state.as_mut() {
             Some(s) => s,
             None => return,
@@ -382,9 +393,31 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
                     s.geometry = preset_to_geometry(&prst);
                 }
             }
-            "srgbClr" if solidfill_depth > 0 && s.fill.is_none() => {
+            "pPr" => {
+                if let Some(algn) = attr_str(e, b"algn") {
+                    if let Some(p) = s.paras.last_mut() {
+                        p.align = algn_to_halign(&algn);
+                    }
+                }
+            }
+            "rPr" => {
+                // Font size: sz is in hundredths of a point.
+                if let Some(sz) = attr_i64(e, b"sz") {
+                    s.pending.size = Some(sz * EMU_PER_PT / 100);
+                }
+                s.pending.bold = attr_str(e, b"b").as_deref() == Some("1");
+                s.pending.italic = attr_str(e, b"i").as_deref() == Some("1");
+                s.pending.underline = attr_str(e, b"u")
+                    .map(|u| u != "none")
+                    .unwrap_or(false);
+            }
+            "srgbClr" if solidfill_depth > 0 => {
                 if let Some(rgba) = attr_str(e, b"val").as_deref().and_then(parse_hex_rgb) {
-                    s.fill = Some(Color::Literal(rgba));
+                    if in_rpr {
+                        s.pending.color = Some(Color::Literal(rgba));
+                    } else if s.fill.is_none() {
+                        s.fill = Some(Color::Literal(rgba));
+                    }
                 }
             }
             _ => {}
@@ -399,27 +432,49 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
                     "sp" => state = Some(ShapeState::new()),
                     "solidFill" => solidfill_depth += 1,
                     "t" => in_text = true,
-                    other => apply_attrs(&mut state, solidfill_depth, other, &e),
+                    "rPr" => {
+                        in_rpr = true;
+                        apply_attrs(&mut state, solidfill_depth, in_rpr, "rPr", &e);
+                    }
+                    "p" => {
+                        if let Some(s) = state.as_mut() {
+                            s.paras.push(ParsedPara {
+                                align: hayate_ir::text::HAlign::Left,
+                                runs: Vec::new(),
+                            });
+                        }
+                    }
+                    other => apply_attrs(&mut state, solidfill_depth, in_rpr, other, &e),
                 }
             }
             Ok(Event::Empty(e)) => {
-                // Self-closing variants, e.g. <a:off .../> or <a:srgbClr .../>.
+                // Self-closing variants, e.g. <a:off .../>, <a:srgbClr .../>, <a:rPr .../>.
                 let name = local_name(e.name().as_ref());
-                apply_attrs(&mut state, solidfill_depth, &name, &e);
+                apply_attrs(&mut state, solidfill_depth, in_rpr, &name, &e);
             }
             Ok(Event::Text(t)) if in_text => {
                 if let (Some(s), Ok(txt)) = (state.as_mut(), t.unescape()) {
-                    s.texts.push(txt.into_owned());
+                    // Commit the pending run (properties + this text) into the current paragraph.
+                    let mut run = std::mem::take(&mut s.pending);
+                    run.text = txt.into_owned();
+                    if s.paras.is_empty() {
+                        s.paras.push(ParsedPara {
+                            align: hayate_ir::text::HAlign::Left,
+                            runs: Vec::new(),
+                        });
+                    }
+                    s.paras.last_mut().unwrap().runs.push(run);
                 }
             }
             Ok(Event::End(e)) => {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     "t" => in_text = false,
+                    "rPr" => in_rpr = false,
                     "solidFill" => solidfill_depth = solidfill_depth.saturating_sub(1),
                     "sp" => {
                         if let Some(s) = state.take() {
-                            commit_shape(pres, slide, s.off, s.ext, s.rotation, s.geometry, s.fill, &s.texts);
+                            commit_shape(pres, slide, s.off, s.ext, s.rotation, s.geometry, s.fill, s.paras);
                         }
                     }
                     _ => {}
@@ -432,6 +487,24 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
     }
 }
 
+/// A run recovered from `<a:r>` (`<a:rPr>` properties plus its `<a:t>` text).
+#[derive(Default)]
+struct ParsedRun {
+    text: String,
+    /// Font size in EMU, if `<a:rPr sz>` was present.
+    size: Option<Emu>,
+    color: Option<Color>,
+    bold: bool,
+    italic: bool,
+    underline: bool,
+}
+
+/// A paragraph recovered from `<a:p>`: its alignment and ordered runs.
+struct ParsedPara {
+    align: hayate_ir::text::HAlign,
+    runs: Vec<ParsedRun>,
+}
+
 /// Build a shape entity under `slide` from accumulated parse state.
 #[allow(clippy::too_many_arguments)]
 fn commit_shape(
@@ -442,7 +515,7 @@ fn commit_shape(
     rotation: Option<f32>,
     geometry: Option<Geometry>,
     fill: Option<Color>,
-    texts: &[String],
+    paras: Vec<ParsedPara>,
 ) {
     let e = pres.add_shape(slide);
 
@@ -458,25 +531,35 @@ fn commit_shape(
     if let Some(c) = fill {
         pres.world.fills.insert(e, Fill::Solid(c));
     }
-    if !texts.is_empty() {
+
+    let has_text = paras.iter().any(|p| !p.runs.is_empty());
+    if has_text {
         use hayate_ir::color::Rgba;
         use hayate_ir::font::{FontRef, ThemeFontSlot};
         use hayate_ir::text::{Paragraph, Run};
         use hayate_ir::units::pt;
 
-        // One paragraph + one run per <a:t>, with default font/size/color.
-        let paragraphs: Vec<Paragraph> = texts
-            .iter()
-            .map(|t| {
-                Paragraph::new(vec![Run {
-                    text: t.clone(),
-                    font: FontRef::Theme(ThemeFontSlot::Minor),
-                    size: pt(18),
-                    color: Color::literal(Rgba::BLACK),
-                    bold: false,
-                    italic: false,
-                    underline: false,
-                }])
+        // Recover each run's properties; unspecified ones fall back to sane defaults.
+        let paragraphs: Vec<Paragraph> = paras
+            .into_iter()
+            .filter(|p| !p.runs.is_empty())
+            .map(|p| {
+                let runs = p
+                    .runs
+                    .into_iter()
+                    .map(|r| Run {
+                        text: r.text,
+                        font: FontRef::Theme(ThemeFontSlot::Minor),
+                        size: r.size.unwrap_or_else(|| pt(18)),
+                        color: r.color.unwrap_or_else(|| Color::literal(Rgba::BLACK)),
+                        bold: r.bold,
+                        italic: r.italic,
+                        underline: r.underline,
+                    })
+                    .collect();
+                let mut para = Paragraph::new(runs);
+                para.align = p.align;
+                para
             })
             .collect();
         pres.world.texts.insert(
@@ -486,6 +569,17 @@ fn commit_shape(
                 autofit: false,
             },
         );
+    }
+}
+
+/// Map an OOXML paragraph alignment (`algn`) to our `HAlign` (defaults to Left).
+fn algn_to_halign(algn: &str) -> hayate_ir::text::HAlign {
+    use hayate_ir::text::HAlign;
+    match algn {
+        "ctr" => HAlign::Center,
+        "r" => HAlign::Right,
+        "just" => HAlign::Justify,
+        _ => HAlign::Left,
     }
 }
 
