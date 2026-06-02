@@ -9,7 +9,26 @@ use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::RectEmu;
 use hayate_ir::paint::Fill;
 use hayate_ir::shape::Geometry;
+use hayate_ir::color::Color;
+use hayate_ir::color::ThemeColorToken;
+use hayate_ir::font::{FontRef, ThemeFontSlot};
+use hayate_ir::text::{Paragraph, Run, TextBody};
+use hayate_ir::units::pt;
 use hayate_ir::world::{CompKind, CompValue, Entity, World};
+
+/// A minimal default run carrying `text`: body theme font, 18pt, Dk1 theme color, no
+/// bold/italic/underline. Used when a text helper must synthesize a run because none exists.
+fn default_run(text: String) -> Run {
+    Run {
+        text,
+        font: FontRef::Theme(ThemeFontSlot::Minor),
+        size: pt(18),
+        color: Color::theme(ThemeColorToken::Dk1),
+        bold: false,
+        italic: false,
+        underline: false,
+    }
+}
 
 /// Set (insert or replace) the `Frame` of `e`.
 pub fn set_frame(e: Entity, frame: RectEmu) -> Transaction {
@@ -148,6 +167,65 @@ pub fn duplicate(world: &World, src: Entity, new_id: Entity) -> Transaction {
         });
     }
     Transaction::new("duplicate", ops)
+}
+
+/// Set the text of the entity's first run, preserving that run's formatting. Reads the
+/// current `TextBody` from `world`: if present, clones it and replaces the first paragraph's
+/// first run's `text` (keeping its font/size/color/bold/...). If the body exists but has no
+/// paragraphs/runs, a minimal default-run paragraph carrying `text` is inserted. If the
+/// entity has no `TextBody` at all, a new one is created. Always emits `SetComponent(Text)`.
+pub fn set_run_text(world: &World, e: Entity, text: String) -> Transaction {
+    let new_body = match world.texts.get(&e) {
+        Some(existing) => {
+            let mut body = existing.clone();
+            if let Some(para) = body.paragraphs.first_mut() {
+                if let Some(run) = para.runs.first_mut() {
+                    // Preserve formatting; replace only the text.
+                    run.text = text;
+                } else {
+                    // Paragraph with no runs: give it a minimal default run.
+                    para.runs.push(default_run(text));
+                }
+            } else {
+                // Body with no paragraphs: create one minimal paragraph.
+                body.paragraphs.push(Paragraph::new(vec![default_run(text)]));
+            }
+            body
+        }
+        // No TextBody at all: create a fresh one.
+        None => TextBody {
+            paragraphs: vec![Paragraph::new(vec![default_run(text)])],
+            autofit: false,
+        },
+    };
+    Transaction::new(
+        "set run text",
+        vec![Operation::SetComponent {
+            entity: e,
+            value: CompValue::Text(new_body),
+        }],
+    )
+}
+
+/// Append a new paragraph (a single minimal default run carrying `text`) to the entity's
+/// `TextBody`, creating an empty body first if the entity has none. Emits
+/// `SetComponent(Text)`.
+pub fn append_paragraph(world: &World, e: Entity, text: String) -> Transaction {
+    let mut body = match world.texts.get(&e) {
+        Some(existing) => existing.clone(),
+        None => TextBody {
+            paragraphs: Vec::new(),
+            autofit: false,
+        },
+    };
+    body.paragraphs.push(Paragraph::new(vec![default_run(text)]));
+    Transaction::new(
+        "append paragraph",
+        vec![Operation::SetComponent {
+            entity: e,
+            value: CompValue::Text(body),
+        }],
+    )
 }
 
 #[cfg(test)]
@@ -338,5 +416,124 @@ mod tests {
         assert!(h.undo(&mut w));
         assert!(!w.is_alive(new_id));
         assert_eq!(w.get(new_id, CompKind::Frame), None);
+    }
+
+    use hayate_ir::color::ThemeColorToken;
+    use hayate_ir::font::{FontRef, ThemeFontSlot};
+    use hayate_ir::text::{Paragraph, Run, TextBody};
+    use hayate_ir::units::pt;
+
+    fn styled_run(text: &str) -> Run {
+        Run {
+            text: text.to_string(),
+            font: FontRef::Theme(ThemeFontSlot::Major),
+            size: pt(44),
+            color: Color::theme(ThemeColorToken::Accent1),
+            bold: true,
+            italic: false,
+            underline: false,
+        }
+    }
+
+    #[test]
+    fn set_run_text_preserves_formatting() {
+        let mut w = World::new();
+        let mut h = History::new();
+        let e = w.spawn();
+
+        // Existing body with a distinctly-styled first run.
+        let original = styled_run("hello");
+        let body = TextBody {
+            paragraphs: vec![Paragraph::new(vec![original.clone()])],
+            autofit: false,
+        };
+        w.set(e, CompValue::Text(body));
+
+        let tx = set_run_text(&w, e, "world".to_string());
+        h.commit(&mut w, tx);
+
+        let got = w.texts.get(&e).expect("text present");
+        let run = &got.paragraphs[0].runs[0];
+        // Text changed.
+        assert_eq!(run.text, "world");
+        // Formatting preserved.
+        assert_eq!(run.size, original.size);
+        assert_eq!(run.color, original.color);
+        assert_eq!(run.font, original.font);
+        assert!(run.bold);
+
+        // Undoable: restores the prior text.
+        assert!(h.undo(&mut w));
+        let restored = w.texts.get(&e).expect("text present");
+        assert_eq!(restored.paragraphs[0].runs[0].text, "hello");
+    }
+
+    #[test]
+    fn set_run_text_creates_body_when_absent() {
+        let mut w = World::new();
+        let mut h = History::new();
+        let e = w.spawn();
+
+        // No TextBody initially.
+        assert!(w.texts.get(&e).is_none());
+
+        let tx = set_run_text(&w, e, "fresh".to_string());
+        h.commit(&mut w, tx);
+
+        let got = w.texts.get(&e).expect("text created");
+        assert_eq!(got.paragraphs.len(), 1);
+        let run = &got.paragraphs[0].runs[0];
+        assert_eq!(run.text, "fresh");
+        // Default run formatting.
+        assert_eq!(run.font, FontRef::Theme(ThemeFontSlot::Minor));
+        assert_eq!(run.size, pt(18));
+        assert_eq!(run.color, Color::theme(ThemeColorToken::Dk1));
+
+        // Undo removes the (previously absent) body.
+        assert!(h.undo(&mut w));
+        assert!(w.texts.get(&e).is_none());
+    }
+
+    #[test]
+    fn append_paragraph_increases_count_and_undoes() {
+        let mut w = World::new();
+        let mut h = History::new();
+        let e = w.spawn();
+
+        // Start with a one-paragraph body.
+        let body = TextBody {
+            paragraphs: vec![Paragraph::new(vec![styled_run("first")])],
+            autofit: false,
+        };
+        w.set(e, CompValue::Text(body));
+
+        let tx = append_paragraph(&w, e, "second".to_string());
+        h.commit(&mut w, tx);
+
+        let got = w.texts.get(&e).expect("text present");
+        assert_eq!(got.paragraphs.len(), 2);
+        assert_eq!(got.paragraphs[1].runs[0].text, "second");
+
+        // Undo restores the original single paragraph.
+        assert!(h.undo(&mut w));
+        let restored = w.texts.get(&e).expect("text present");
+        assert_eq!(restored.paragraphs.len(), 1);
+    }
+
+    #[test]
+    fn append_paragraph_creates_body_when_absent() {
+        let mut w = World::new();
+        let mut h = History::new();
+        let e = w.spawn();
+
+        let tx = append_paragraph(&w, e, "only".to_string());
+        h.commit(&mut w, tx);
+
+        let got = w.texts.get(&e).expect("text created");
+        assert_eq!(got.paragraphs.len(), 1);
+        assert_eq!(got.paragraphs[0].runs[0].text, "only");
+
+        assert!(h.undo(&mut w));
+        assert!(w.texts.get(&e).is_none());
     }
 }
