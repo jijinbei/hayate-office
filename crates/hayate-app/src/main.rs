@@ -306,12 +306,26 @@ impl HayateApp {
     }
 }
 
+/// Embedded application logo, used for the window/taskbar icon.
+const LOGO_PNG: &[u8] = include_bytes!("../../../assets/logo2.png");
+
+/// Decode the embedded logo into the RGBA image gpui takes for the window icon (X11). Returns
+/// `None` if decoding fails, in which case the window opens without a custom icon.
+fn app_icon() -> Option<std::sync::Arc<image::RgbaImage>> {
+    let img = image::load_from_memory(LOGO_PNG).ok()?;
+    Some(std::sync::Arc::new(img.to_rgba8()))
+}
+
 fn run() {
     application().with_assets(icons::Icons).run(|cx: &mut App| {
         let bounds = Bounds::centered(None, size(px(1100.), px(720.)), cx);
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // App identity for the taskbar: `icon` is honored on X11; on Wayland the
+                // compositor matches `app_id` to a desktop entry to find the icon.
+                icon: app_icon(),
+                app_id: Some("hayate-office".to_string()),
                 ..Default::default()
             },
             |_, cx| cx.new(|cx| HayateApp::new(cx)),

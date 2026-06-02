@@ -2612,6 +2612,7 @@ dependencies = [
  "hayate-ir",
  "hayate-model",
  "hayate-render",
+ "image",
  "serde_json",
 ]
 

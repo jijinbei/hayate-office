@@ -15,6 +15,9 @@ hayate-format-pptx = { path = "../hayate-format-pptx" }
 hayate-core = { path = "../hayate-core" }
 serde_json.workspace = true
 gpui.workspace = true
+# Decode the embedded app logo into the RGBA image gpui wants for the X11 window icon.
+# Pinned to the same 0.25 line gpui resolves, so the dependency graph stays unified.
+image = "0.25"
 # Linux windowing backends for gpui_platform.
 gpui_platform = { workspace = true, features = ["wayland", "x11"] }
 
