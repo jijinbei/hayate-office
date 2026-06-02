@@ -401,6 +401,43 @@ pub fn add_entrance(
     )
 }
 
+/// Assign group membership `key` to every entity in `members`, so they select, move, and
+/// delete as a unit. Callers mint a fresh nonzero `key` per group.
+pub fn group(members: &[Entity], key: u64) -> Transaction {
+    let ops = members
+        .iter()
+        .map(|&entity| Operation::SetComponent {
+            entity,
+            value: CompValue::Group(key),
+        })
+        .collect();
+    Transaction::new("group", ops)
+}
+
+/// Remove group membership `key` from every entity that currently carries it.
+pub fn ungroup(world: &World, key: u64) -> Transaction {
+    let ops = world
+        .iter()
+        .filter(|e| world.groups.get(e) == Some(&key))
+        .map(|entity| Operation::RemoveComponent {
+            entity,
+            kind: CompKind::Group,
+        })
+        .collect();
+    Transaction::new("ungroup", ops)
+}
+
+/// All entities sharing the same group as `e` (including `e`); just `[e]` if it is ungrouped.
+pub fn group_members(world: &World, e: Entity) -> Vec<Entity> {
+    match world.groups.get(&e) {
+        Some(&key) => world
+            .iter()
+            .filter(|x| world.groups.get(x) == Some(&key))
+            .collect(),
+        None => vec![e],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

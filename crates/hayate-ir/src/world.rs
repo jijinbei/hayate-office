@@ -109,6 +109,9 @@ define_world! {
     parent: Parent: Entity,
     /// Optional human-readable name (debugging and Morph matching aid).
     names: Name: String,
+    /// Group membership key: shapes sharing the same value are selected, moved, and deleted
+    /// together. 0 is unused; a fresh nonzero key is minted per group.
+    groups: Group: u64,
     /// Interior fill.
     fills: Fill: Fill,
     /// Outline.

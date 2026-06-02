@@ -241,9 +241,12 @@ fn prim_bounds(prim: &Primitive) -> PxRect {
     }
 }
 
+#[derive(Clone)]
 struct Drag {
-    entity: Entity,
-    start_frame: RectEmu,
+    /// (entity, start frame) for every shape moving in this drag (group / multi-select).
+    entities: Vec<(Entity, RectEmu)>,
+    /// The shape under the cursor; used as the snapping reference.
+    primary: Entity,
     start_cursor: Point<Pixels>,
 }
 
@@ -399,8 +402,13 @@ impl HayateApp {
         let x = f32::from(ev.position.x - o.x);
         let y = f32::from(ev.position.y - o.y);
         let target = if let Some(e) = hit_test(&self.scene, x, y) {
-            self.selection = Some(e);
-            self.also.clear();
+            // Keep an existing multi-selection if right-clicking within it (so Group works);
+            // otherwise select the shape (expanding to its group).
+            if !self.selected_all().contains(&e) {
+                self.selection = Some(e);
+                let members = hayate_model::edit::group_members(&self.pres.world, e);
+                self.also = members.into_iter().filter(|&m| m != e).collect();
+            }
             MenuTarget::Shape
         } else {
             MenuTarget::Canvas
@@ -471,6 +479,15 @@ impl HayateApp {
                     }))
                     .child(menu_item("m_align_r", "Align Right", cx, |t, _w, cx| {
                         t.run_on_selection("shape.align_text_right");
+                        cx.notify();
+                    }))
+                    .child(menu_divider())
+                    .child(menu_item("m_group", "Group", cx, |t, _w, cx| {
+                        t.group_selection();
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_ungroup", "Ungroup", cx, |t, _w, cx| {
+                        t.ungroup_selection();
                         cx.notify();
                     }))
                     .child(menu_divider())
@@ -1168,12 +1185,23 @@ impl HayateApp {
         }
         self.also.clear();
         self.selection = hit;
-        self.drag = self.selection.and_then(|e| {
-            self.pres.world.frames.get(&e).map(|f| Drag {
-                entity: e,
-                start_frame: *f,
-                start_cursor: ev.position,
-            })
+        // Clicking a grouped shape selects the whole group.
+        if let Some(h) = hit {
+            let members = hayate_model::edit::group_members(&self.pres.world, h);
+            if members.len() > 1 {
+                self.also = members.into_iter().filter(|&m| m != h).collect();
+            }
+        }
+        // Drag moves every selected shape (group / multi-select) together.
+        let entities: Vec<(Entity, RectEmu)> = self
+            .selected_all()
+            .into_iter()
+            .filter_map(|e| self.pres.world.frames.get(&e).map(|f| (e, *f)))
+            .collect();
+        self.drag = hit.filter(|_| !entities.is_empty()).map(|h| Drag {
+            entities,
+            primary: h,
+            start_cursor: ev.position,
         });
         cx.notify();
     }
@@ -1194,22 +1222,35 @@ impl HayateApp {
             }
             return;
         }
-        let Some(d) = &self.drag else { return };
+        let Some(d) = self.drag.clone() else { return };
         let scale = self.scale();
         if scale <= 0.0 {
             return;
         }
         let dx = (f32::from(ev.position.x - d.start_cursor.x) as f64 / scale) as i64;
         let dy = (f32::from(ev.position.y - d.start_cursor.y) as f64 / scale) as i64;
-        let nf = RectEmu {
-            origin: PointEmu::new(d.start_frame.origin.x + dx, d.start_frame.origin.y + dy),
-            size: d.start_frame.size,
+        // Snap the primary shape to guides, then apply the same (snapped) delta to every member.
+        let Some(&(_, prim_start)) = d.entities.iter().find(|(e, _)| *e == d.primary) else {
+            return;
         };
-        let e = d.entity;
-        let nf = self.snap_frame(e, nf);
-        self.pres.world.frames.insert(e, nf); // live preview, no history
+        let prim_nf = RectEmu {
+            origin: PointEmu::new(prim_start.origin.x + dx, prim_start.origin.y + dy),
+            size: prim_start.size,
+        };
+        let snapped = self.snap_frame(d.primary, prim_nf);
+        let (sdx, sdy) = (
+            snapped.origin.x - prim_start.origin.x,
+            snapped.origin.y - prim_start.origin.y,
+        );
+        for (e, start) in &d.entities {
+            let nf = RectEmu {
+                origin: PointEmu::new(start.origin.x + sdx, start.origin.y + sdy),
+                size: start.size,
+            };
+            self.pres.world.frames.insert(*e, nf); // live preview, no history
+        }
         self.rebuild();
-        self.update_guides(e);
+        self.update_guides(d.primary);
         cx.notify();
     }
 
@@ -1290,14 +1331,21 @@ impl HayateApp {
         }
         self.guides.clear();
         let Some(d) = self.drag.take() else { return };
-        let Some(final_f) = self.pres.world.frames.get(&d.entity).copied() else {
-            return;
-        };
-        if final_f != d.start_frame {
-            // Revert to the start, then commit the whole move as one undoable step.
-            self.pres.world.frames.insert(d.entity, d.start_frame);
-            let tx = edit::set_frame(d.entity, final_f);
-            self.commit_tx(tx);
+        // Revert every member to its start, then commit the whole move as one undoable step.
+        let mut ops = Vec::new();
+        for (e, start) in &d.entities {
+            if let Some(final_f) = self.pres.world.frames.get(e).copied() {
+                if final_f != *start {
+                    self.pres.world.frames.insert(*e, *start);
+                    ops.push(Operation::SetComponent {
+                        entity: *e,
+                        value: CompValue::Frame(final_f),
+                    });
+                }
+            }
+        }
+        if !ops.is_empty() {
+            self.commit_tx(Transaction::new("move", ops));
         }
         cx.notify();
     }
@@ -1605,6 +1653,29 @@ impl HayateApp {
                 let nh = (f.size.h + dh).max(91_440);
                 let tx = edit::resize(&self.pres.world, e, nw, nh);
                 self.commit_tx(tx);
+            }
+        }
+    }
+
+    /// Group the current (multi-)selection under a fresh group key.
+    fn group_selection(&mut self) {
+        let members = self.selected_all();
+        if members.len() < 2 {
+            return;
+        }
+        // Mint a unique nonzero group key from a reserved entity id.
+        let key = self.pres.world.reserve_id().0;
+        let tx = edit::group(&members, key);
+        self.commit_tx(tx);
+    }
+
+    /// Ungroup the group that the current selection belongs to.
+    fn ungroup_selection(&mut self) {
+        if let Some(sel) = self.selection {
+            if let Some(&key) = self.pres.world.groups.get(&sel) {
+                let tx = edit::ungroup(&self.pres.world, key);
+                self.commit_tx(tx);
+                self.also.clear();
             }
         }
     }
@@ -2951,6 +3022,41 @@ mod e2e {
         });
         assert_eq!(after, before + 1, "inserting an image should add one shape");
         assert!(has_pic, "the new shape should carry a picture component");
+    }
+
+    #[gpui::test]
+    fn grouping_links_and_unlinks_shapes(cx: &mut TestAppContext) {
+        let app = cx.new(|cx| HayateApp::new(cx));
+        // Select the first two accent rects (shapes 1 and 2) and group them.
+        let (a, b) = app.read_with(cx, |s, _| {
+            let kids = s.pres.children(s.slide);
+            (kids[1], kids[2])
+        });
+        app.update(cx, |s, _| {
+            s.selection = Some(a);
+            s.also = vec![b];
+            s.group_selection();
+        });
+        // Both shapes now share a (nonzero) group key.
+        let (ga, gb) = app.read_with(cx, |s, _| {
+            (
+                s.pres.world.groups.get(&a).copied(),
+                s.pres.world.groups.get(&b).copied(),
+            )
+        });
+        assert!(ga.is_some() && ga == gb, "grouped shapes share a key: {ga:?} {gb:?}");
+        // group_members expands from either member to both.
+        let members = app.read_with(cx, |s, _| {
+            hayate_model::edit::group_members(&s.pres.world, a)
+        });
+        assert_eq!(members.len(), 2);
+        // Ungroup removes the membership.
+        app.update(cx, |s, _| {
+            s.selection = Some(a);
+            s.ungroup_selection();
+        });
+        let after = app.read_with(cx, |s, _| s.pres.world.groups.get(&a).copied());
+        assert_eq!(after, None, "ungroup should clear the group key");
     }
 
     #[gpui::test]
