@@ -239,6 +239,22 @@ struct HayateApp {
     present: bool,
     /// Animation playback time (ms) within the current slide in presentation mode.
     present_t: u32,
+    /// Open right-click context menu, if any.
+    context_menu: Option<ContextMenu>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum MenuTarget {
+    Shape,
+    Slide,
+    Canvas,
+}
+
+struct ContextMenu {
+    /// Window-space position of the menu's top-left.
+    x: f32,
+    y: f32,
+    target: MenuTarget,
 }
 
 struct TextEdit {
@@ -303,7 +319,128 @@ impl HayateApp {
             also: Vec::new(),
             present: false,
             present_t: 0,
+            context_menu: None,
         }
+    }
+
+    /// Open the right-click context menu at window position (x,y) for `target`.
+    fn open_menu(&mut self, x: f32, y: f32, target: MenuTarget) {
+        self.context_menu = Some(ContextMenu { x, y, target });
+    }
+
+    /// Right mouse press: select what is under the cursor (if any) and open a context menu.
+    fn on_right_down(&mut self, ev: &MouseDownEvent, cx: &mut Context<Self>) {
+        let o = self.canvas_origin.get();
+        let x = f32::from(ev.position.x - o.x);
+        let y = f32::from(ev.position.y - o.y);
+        let target = if let Some(e) = hit_test(&self.scene, x, y) {
+            self.selection = Some(e);
+            self.also.clear();
+            MenuTarget::Shape
+        } else {
+            MenuTarget::Canvas
+        };
+        self.open_menu(f32::from(ev.position.x), f32::from(ev.position.y), target);
+        cx.notify();
+    }
+
+    /// Build the floating context-menu overlay (PowerPoint-style), if one is open.
+    fn menu_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let cm = self.context_menu.as_ref()?;
+        let mut menu = div()
+            .absolute()
+            .left(px(cm.x))
+            .top(px(cm.y))
+            .flex()
+            .flex_col()
+            .min_w(px(190.))
+            .py_1()
+            .bg(rgb(0x2b2b2b))
+            .border_1()
+            .border_color(rgb(0x555555))
+            .rounded_md()
+            .shadow_lg()
+            .text_color(rgb(0xffffff));
+
+        match cm.target {
+            MenuTarget::Shape => {
+                menu = menu
+                    .child(menu_item("m_edit_text", "Edit Text", cx, |t, _w, cx| {
+                        if let Some(e) = t.selection {
+                            t.begin_text_edit(e);
+                            cx.notify();
+                        }
+                    }))
+                    .child(menu_item("m_cut", "Cut", cx, |t, _w, cx| {
+                        t.copy_selection();
+                        t.delete_selection();
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_copy", "Copy", cx, |t, _w, _cx| {
+                        t.copy_selection();
+                    }))
+                    .child(menu_item("m_dup", "Duplicate", cx, |t, _w, cx| {
+                        t.duplicate_selection();
+                        cx.notify();
+                    }))
+                    .child(menu_divider())
+                    .child(menu_item("m_front", "Bring to Front", cx, |t, _w, cx| {
+                        t.run_on_selection("shape.bring_to_front");
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_back", "Send to Back", cx, |t, _w, cx| {
+                        t.run_on_selection("shape.send_to_back");
+                        cx.notify();
+                    }))
+                    .child(menu_divider())
+                    .child(menu_item("m_delete", "Delete", cx, |t, _w, cx| {
+                        t.delete_selection();
+                        cx.notify();
+                    }));
+            }
+            MenuTarget::Slide => {
+                menu = menu
+                    .child(menu_item("m_new_slide", "New Slide", cx, |t, _w, cx| {
+                        t.add_slide();
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_dup_slide", "Duplicate Slide", cx, |t, _w, cx| {
+                        t.duplicate_slide();
+                        cx.notify();
+                    }))
+                    .child(menu_divider())
+                    .child(menu_item("m_del_slide", "Delete Slide", cx, |t, _w, cx| {
+                        t.delete_slide();
+                        cx.notify();
+                    }));
+            }
+            MenuTarget::Canvas => {
+                menu = menu
+                    .child(menu_item("m_paste", "Paste", cx, |t, _w, cx| {
+                        t.paste_clipboard();
+                        cx.notify();
+                    }))
+                    .child(menu_divider())
+                    .child(menu_item("m_add_rect", "Add Rectangle", cx, |t, _w, cx| {
+                        t.add_rect();
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_add_text", "Add Text Box", cx, |t, _w, cx| {
+                        t.add_text_box();
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_add_image", "Insert Image", cx, |t, _w, cx| {
+                        t.insert_image();
+                        cx.notify();
+                    }))
+                    .child(menu_divider())
+                    .child(menu_item("m_new_slide_c", "New Slide", cx, |t, _w, cx| {
+                        t.add_slide();
+                        cx.notify();
+                    }));
+            }
+        }
+        Some(menu.into_any_element())
     }
 
     /// All currently-selected entities (primary + additional).
@@ -754,6 +891,10 @@ impl HayateApp {
     }
 
     fn on_mouse_down(&mut self, ev: &MouseDownEvent, cx: &mut Context<Self>) {
+        // Any left click dismisses an open context menu.
+        if self.context_menu.take().is_some() {
+            cx.notify();
+        }
         let o = self.canvas_origin.get();
         let x = f32::from(ev.position.x - o.x);
         let y = f32::from(ev.position.y - o.y);
@@ -882,6 +1023,12 @@ impl HayateApp {
     }
 
     fn on_key_down(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        // Esc dismisses an open context menu before anything else handles the key.
+        if self.context_menu.is_some() && ev.keystroke.key.as_str() == "escape" {
+            self.context_menu = None;
+            cx.notify();
+            return;
+        }
         if self.palette.is_some() {
             self.palette_key(ev, cx);
             return;
@@ -1380,6 +1527,32 @@ fn tool_button(
         .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| action(this, window, cx)))
 }
 
+/// A thin horizontal separator between context-menu groups.
+fn menu_divider() -> impl IntoElement {
+    div().my_1().h(px(1.)).bg(rgb(0x555555))
+}
+
+/// A single PowerPoint-style context-menu row. Runs `action`, then closes the menu.
+fn menu_item(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    cx: &mut Context<HayateApp>,
+    action: impl Fn(&mut HayateApp, &mut Window, &mut Context<HayateApp>) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px_3()
+        .py_1()
+        .text_sm()
+        .hover(|s| s.bg(rgb(0x094771)))
+        .child(label.into())
+        .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+            action(this, window, cx);
+            this.context_menu = None;
+            cx.notify();
+        }))
+}
+
 /// IME / platform text input. Active only while a text box is being edited
 /// (`accepts_text_input`), so single-key shortcuts still work otherwise.
 impl EntityInputHandler for HayateApp {
@@ -1712,17 +1885,8 @@ impl Render for HayateApp {
         }));
         sidebar = sidebar.child(
             div()
-                .flex()
-                .flex_row()
-                .gap_2()
-                .child(tool_button("dup_slide", "Dup", cx, |t, _w, cx| {
-                    t.duplicate_slide();
-                    cx.notify();
-                }))
-                .child(tool_button("del_slide", "Del", cx, |t, _w, cx| {
-                    t.delete_slide();
-                    cx.notify();
-                })),
+                .text_color(rgb(0x888888))
+                .child("right-click a slide for options"),
         );
         for (i, &s) in slides.iter().enumerate() {
             let tscene = build_slide_scene(&self.pres, s, PxSize { w: 176.0, h: 99.0 });
@@ -1745,7 +1909,22 @@ impl Render for HayateApp {
                         this.selection = None;
                         this.rebuild();
                         cx.notify();
-                    })),
+                    }))
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, ev: &MouseDownEvent, _w, cx| {
+                            this.slide = s;
+                            this.selection = None;
+                            this.also.clear();
+                            this.rebuild();
+                            this.open_menu(
+                                f32::from(ev.position.x),
+                                f32::from(ev.position.y),
+                                MenuTarget::Slide,
+                            );
+                            cx.notify();
+                        }),
+                    ),
             );
         }
 
@@ -1964,10 +2143,18 @@ impl Render for HayateApp {
                                 MouseButton::Left,
                                 cx.listener(|this, ev: &MouseUpEvent, _, cx| this.on_mouse_up(ev, cx)),
                             )
+                            .on_mouse_down(
+                                MouseButton::Right,
+                                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                                    window.focus(&this.focus, cx);
+                                    this.on_right_down(ev, cx);
+                                }),
+                            )
                             .child(slide_canvas),
                     )
                     .children(inspector),
             )
+            .children(self.menu_overlay(cx))
             .into_any_element()
     }
 }
