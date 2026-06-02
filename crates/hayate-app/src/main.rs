@@ -110,11 +110,6 @@ fn pt_to_emu(v: f32) -> i64 {
     (v * 12_700.0) as i64
 }
 
-/// Number of UTF-16 code units in `s`.
-fn utf16_len(s: &str) -> usize {
-    s.chars().map(|c| c.len_utf16()).sum()
-}
-
 /// Byte index in `s` for a UTF-16 code-unit offset (clamped to the end).
 fn utf16_to_byte(s: &str, off16: usize) -> usize {
     let mut u = 0;
@@ -125,6 +120,38 @@ fn utf16_to_byte(s: &str, off16: usize) -> usize {
         u += c.len_utf16();
     }
     s.len()
+}
+
+/// UTF-16 code-unit offset for a byte index in `s` (clamped to the end).
+fn byte_to_utf16(s: &str, byte: usize) -> usize {
+    let mut u = 0;
+    for (b, c) in s.char_indices() {
+        if b >= byte {
+            return u;
+        }
+        u += c.len_utf16();
+    }
+    u
+}
+
+/// Convert a byte range in `s` to a UTF-16 range.
+fn range_to_utf16(s: &str, r: &Range<usize>) -> Range<usize> {
+    byte_to_utf16(s, r.start)..byte_to_utf16(s, r.end)
+}
+
+/// Convert a UTF-16 range to a byte range in `s`.
+fn range_from_utf16(s: &str, r: &Range<usize>) -> Range<usize> {
+    utf16_to_byte(s, r.start)..utf16_to_byte(s, r.end)
+}
+
+/// Byte index of the char boundary before `byte` in `s` (for backspace).
+fn prev_char_boundary(s: &str, byte: usize) -> usize {
+    s[..byte].char_indices().next_back().map(|(i, _)| i).unwrap_or(0)
+}
+
+/// Byte index of the char boundary after `byte` in `s`.
+fn next_char_boundary(s: &str, byte: usize) -> usize {
+    s[byte..].char_indices().nth(1).map(|(i, _)| byte + i).unwrap_or(s.len())
 }
 
 /// New frame when dragging resize `handle` (TL,T,TR,R,BR,B,BL,L) by (dx,dy) EMU from `start`.
@@ -297,7 +324,9 @@ struct TextEdit {
     entity: Entity,
     original: String,
     buf: String,
-    /// IME composing (marked) range, in UTF-16 offsets into `buf`.
+    /// Caret/selection as a BYTE range into `buf` (caret when start == end).
+    selected: Range<usize>,
+    /// IME composing (marked) range, as a BYTE range into `buf`.
     marked: Option<Range<usize>>,
 }
 
@@ -683,10 +712,12 @@ impl HayateApp {
 
     fn begin_text_edit(&mut self, e: Entity) {
         let original = self.first_run_text(e);
+        let caret = original.len();
         self.text_edit = Some(TextEdit {
             entity: e,
             buf: original.clone(),
             original,
+            selected: caret..caret,
             marked: None,
         });
     }
@@ -702,7 +733,10 @@ impl HayateApp {
 
     fn text_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.clone();
-        let mut live = false;
+        // Character input (including the space key and IME composition) is delivered through the
+        // platform text-input handler (replace_text_in_range); handling it here too would double
+        // it. text_key only covers control keys (commit/cancel/erase/caret motion).
+        let mut live: Option<(Entity, String)> = None;
         match key.as_str() {
             "escape" => {
                 if let Some(te) = self.text_edit.take() {
@@ -719,45 +753,64 @@ impl HayateApp {
             }
             "backspace" => {
                 if let Some(te) = self.text_edit.as_mut() {
-                    te.buf.pop();
+                    if te.selected.start != te.selected.end {
+                        te.buf.replace_range(te.selected.clone(), "");
+                        let c = te.selected.start;
+                        te.selected = c..c;
+                    } else if te.selected.start > 0 {
+                        let p = prev_char_boundary(&te.buf, te.selected.start);
+                        te.buf.replace_range(p..te.selected.start, "");
+                        te.selected = p..p;
+                    }
                     te.marked = None;
+                    live = Some((te.entity, te.buf.clone()));
                 }
-                live = true;
             }
-            // Character input (including space and IME composition) flows through the platform
-            // text-input handler (`replace_text_in_range`); handling it here too would double it.
+            "left" => {
+                if let Some(te) = self.text_edit.as_mut() {
+                    let c = if te.selected.start > 0 {
+                        prev_char_boundary(&te.buf, te.selected.start)
+                    } else {
+                        0
+                    };
+                    te.selected = c..c;
+                }
+            }
+            "right" => {
+                if let Some(te) = self.text_edit.as_mut() {
+                    let c = next_char_boundary(&te.buf, te.selected.end.min(te.buf.len()));
+                    te.selected = c..c;
+                }
+            }
             _ => {}
         }
-        if live {
-            if let Some(te) = &self.text_edit {
-                let (e, buf) = (te.entity, te.buf.clone());
-                self.live_set_text(e, buf);
-            }
+        if let Some((e, buf)) = live {
+            self.live_set_text(e, buf);
         }
         cx.notify();
     }
 
-    /// Core of the IME replace methods: splice `text` into the edit buffer at `range`
-    /// (UTF-16), update the marked range, and live-render.
-    fn ime_replace(
-        &mut self,
-        range: Option<Range<usize>>,
-        text: &str,
-        new_marked: Option<Range<usize>>,
-    ) {
+    /// Splice `new_text` into the edit buffer, replacing `range_utf16` (or the marked range, or
+    /// the current selection), then move the caret to the end of the inserted text. When `mark`
+    /// is set the inserted text becomes the IME composing (marked) region.
+    fn apply_ime(&mut self, range_utf16: Option<Range<usize>>, new_text: &str, mark: bool) {
         let (e, buf) = {
             let te = match self.text_edit.as_mut() {
                 Some(t) => t,
                 None => return,
             };
-            let range = range.or_else(|| te.marked.clone()).unwrap_or_else(|| {
-                let end = utf16_len(&te.buf);
-                end..end
-            });
-            let sb = utf16_to_byte(&te.buf, range.start);
-            let eb = utf16_to_byte(&te.buf, range.end);
-            te.buf.replace_range(sb..eb, text);
-            te.marked = new_marked.map(|m| (range.start + m.start)..(range.start + m.end));
+            let range = range_utf16
+                .map(|r| range_from_utf16(&te.buf, &r))
+                .or_else(|| te.marked.clone())
+                .unwrap_or_else(|| te.selected.clone());
+            te.buf.replace_range(range.clone(), new_text);
+            let new_end = range.start + new_text.len();
+            te.marked = if mark && !new_text.is_empty() {
+                Some(range.start..new_end)
+            } else {
+                None
+            };
+            te.selected = new_end..new_end;
             (te.entity, te.buf.clone())
         };
         self.live_set_text(e, buf);
@@ -1955,9 +2008,8 @@ impl EntityInputHandler for HayateApp {
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
         let te = self.text_edit.as_ref()?;
-        let end = utf16_len(&te.buf);
         Some(UTF16Selection {
-            range: end..end,
+            range: range_to_utf16(&te.buf, &te.selected),
             reversed: false,
         })
     }
@@ -1967,7 +2019,9 @@ impl EntityInputHandler for HayateApp {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Range<usize>> {
-        self.text_edit.as_ref().and_then(|te| te.marked.clone())
+        self.text_edit
+            .as_ref()
+            .and_then(|te| te.marked.as_ref().map(|m| range_to_utf16(&te.buf, m)))
     }
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
@@ -1983,7 +2037,7 @@ impl EntityInputHandler for HayateApp {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.ime_replace(range, text, None);
+        self.apply_ime(range, text, false);
         cx.notify();
     }
 
@@ -1991,11 +2045,11 @@ impl EntityInputHandler for HayateApp {
         &mut self,
         range: Option<Range<usize>>,
         new_text: &str,
-        new_marked: Option<Range<usize>>,
+        _new_selected: Option<Range<usize>>,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.ime_replace(range, new_text, new_marked);
+        self.apply_ime(range, new_text, true);
         cx.notify();
     }
 
@@ -2066,6 +2120,8 @@ impl Render for HayateApp {
         let also = self.also.clone();
         let guides = self.guides.clone();
         let show_grid = self.show_grid;
+        // Caret (editing entity + byte offset) for drawing the text-insertion cursor.
+        let caret = self.text_edit.as_ref().map(|te| (te.entity, te.selected.start));
         let origin_cell = self.canvas_origin.clone();
         let input_entity = cx.entity();
         let input_focus = self.focus.clone();
@@ -2113,6 +2169,55 @@ impl Render for HayateApp {
                 );
 
                 paint_scene(&scene, o, &media, window, cx);
+
+                // Text-edit caret: a thin vertical bar at the insertion point.
+                if let Some((ent, caret_byte)) = caret {
+                    if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(ent)) {
+                        if let Primitive::Text(tb) = &node.prim {
+                            if let Some((para, run0)) =
+                                tb.paragraphs.first().and_then(|p| p.runs.first().map(|r| (p, r)))
+                            {
+                                let font_size =
+                                    px(para.runs.iter().map(|r| r.size_px).fold(0.0, f32::max));
+                                let line_height = font_size * 1.3;
+                                let upto = caret_byte.min(run0.text.len());
+                                let prefix = &run0.text[..upto];
+                                let caret_x = if prefix.is_empty() {
+                                    0.0
+                                } else {
+                                    let trun = TextRun {
+                                        len: prefix.len(),
+                                        font: run_font(run0),
+                                        color: hsla_of(run0.color),
+                                        background_color: None,
+                                        underline: None,
+                                        strikethrough: None,
+                                    };
+                                    let shaped = window.text_system().shape_line(
+                                        SharedString::from(prefix.to_string()),
+                                        font_size,
+                                        &[trun],
+                                        None,
+                                    );
+                                    f32::from(shaped.width)
+                                };
+                                let left = o.x + px(tb.bounds.x + caret_x);
+                                let top = o.y + px(tb.bounds.y);
+                                window.paint_quad(quad(
+                                    Bounds {
+                                        origin: point(left, top),
+                                        size: size(px(2.0), line_height),
+                                    },
+                                    px(0.),
+                                    Background::from(rgb(0x1166DD)),
+                                    px(0.),
+                                    gpui::transparent_black(),
+                                    Default::default(),
+                                ));
+                            }
+                        }
+                    }
+                }
 
                 if show_grid {
                     let g = grid_lines(scene.size, scene.size.w / 16.0);
