@@ -307,7 +307,7 @@ impl HayateApp {
 }
 
 /// Embedded application logo, used for the window/taskbar icon.
-const LOGO_PNG: &[u8] = include_bytes!("../../../assets/logo2.png");
+const LOGO_PNG: &[u8] = include_bytes!("../../../assets/icon.png");
 
 /// Decode the embedded logo into the RGBA image gpui takes for the window icon (X11). Returns
 /// `None` if decoding fails, in which case the window opens without a custom icon.

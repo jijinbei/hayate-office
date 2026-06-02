@@ -49,7 +49,7 @@ run *ARGS:
 run-plain *ARGS:
     nix develop --command cargo run -p hayate-app {{ARGS}}
 
-# Install a desktop entry so the Wayland/GNOME taskbar shows the logo (assets/logo2.png).
+# Install a desktop entry so the Wayland/GNOME taskbar shows the logo (assets/icon.png).
 # The compositor matches the window's app_id ("hayate-office") to this entry to find the icon.
 install-desktop:
     #!/usr/bin/env bash
@@ -64,13 +64,13 @@ install-desktop:
     Name=HayateOffice
     Comment=Fast, lightweight presentation editor
     Exec=$repo/scripts/hayate-office.sh
-    Icon=$repo/assets/logo2.png
+    Icon=$repo/assets/icon.png
     Terminal=false
     Categories=Office;Presentation;
     StartupWMClass=hayate-office
     EOF
     update-desktop-database "$apps" 2>/dev/null || true
-    echo "Installed $apps/hayate-office.desktop (Icon=$repo/assets/logo2.png)"
+    echo "Installed $apps/hayate-office.desktop (Icon=$repo/assets/icon.png)"
 
 # Lint the whole workspace (gpui app included).
 clippy:
