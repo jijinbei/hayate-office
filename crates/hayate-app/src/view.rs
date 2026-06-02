@@ -16,7 +16,7 @@ use hayate_render::{
 use crate::paint::paint_scene;
 use crate::util::{hsla_of, prim_bounds, rotate_pt, run_font};
 use crate::widgets::tool_button;
-use crate::{DraggedSlide, FieldKind, HayateApp, MenuTarget, SlideDragPreview, SELECTION};
+use crate::{DraggedSlide, FieldKind, HayateApp, LeftTab, MenuTarget, SlideDragPreview, SELECTION};
 
 impl Render for HayateApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -387,17 +387,12 @@ impl Render for HayateApp {
         )
         .size_full();
 
-        // Slide-list sidebar: a clickable thumbnail per slide + an "add slide" button.
+        // Left panel: a tab toggle between the slide list and the layers list, each scrollable.
         let slides = self.pres.slides();
         let current = self.slide;
-        let mut sidebar = div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .w(px(208.))
-            .p_2()
-            .bg(rgb(0x252525));
-        sidebar = sidebar.child(tool_button("add_slide", "+ Slide", cx, |this, _w, cx| {
+        let left_tab = self.left_tab;
+        let mut slide_list = div().flex().flex_col().gap_2();
+        slide_list = slide_list.child(tool_button("add_slide", "+ Slide", cx, |this, _w, cx| {
             this.add_slide();
             cx.notify();
         }));
@@ -410,7 +405,7 @@ impl Render for HayateApp {
                 move |b, _, window, cx| paint_scene(&tscene, b.origin, &tmedia, window, cx),
             )
             .size_full();
-            sidebar = sidebar.child(
+            slide_list = slide_list.child(
                 div()
                     .id(("slide", i))
                     .w(px(176.))
@@ -461,6 +456,68 @@ impl Render for HayateApp {
             );
         }
 
+        // Tab row: Slides | Layers.
+        let tab = |id: &'static str,
+                   lbl: &'static str,
+                   this_tab: LeftTab,
+                   active: bool,
+                   cx: &mut Context<Self>| {
+            div()
+                .id(id)
+                .flex_1()
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .text_sm()
+                .bg(if active { rgb(0x3a3a3a) } else { rgb(0x2a2a2a) })
+                .hover(|s| s.bg(rgb(0x444444)))
+                .child(lbl)
+                .on_click(cx.listener(move |t, _ev: &ClickEvent, window, cx| {
+                    window.focus(&t.focus, cx);
+                    t.left_tab = this_tab;
+                    cx.notify();
+                }))
+        };
+        let tab_row = div()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .child(tab(
+                "tab_slides",
+                "Slides",
+                LeftTab::Slides,
+                left_tab == LeftTab::Slides,
+                cx,
+            ))
+            .child(tab(
+                "tab_layers",
+                "Layers",
+                LeftTab::Layers,
+                left_tab == LeftTab::Layers,
+                cx,
+            ));
+        let content: gpui::AnyElement = match left_tab {
+            LeftTab::Slides => slide_list.into_any_element(),
+            LeftTab::Layers => self.layers_panel(cx),
+        };
+        let sidebar = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .w(px(208.))
+            .h_full()
+            .p_2()
+            .bg(rgb(0x252525))
+            .child(tab_row)
+            .child(
+                div()
+                    .id("left_scroll")
+                    .flex_1()
+                    .min_h(px(0.))
+                    .overflow_y_scroll()
+                    .child(content),
+            );
+
         // Format (properties) pane for the selected shape — PowerPoint-style.
         let accents = [
             ThemeColorToken::Accent1,
@@ -493,10 +550,13 @@ impl Render for HayateApp {
                 );
             }
             let mut pane = div()
+                .id("inspector")
                 .flex()
                 .flex_col()
                 .gap_1()
                 .w(px(228.))
+                .h_full()
+                .overflow_y_scroll()
                 .p_2()
                 .bg(rgb(0x252525))
                 .child(div().text_lg().pb_1().child("Format"))
@@ -682,39 +742,53 @@ impl Render for HayateApp {
                 div()
                     .flex()
                     .flex_row()
+                    .flex_1()
+                    .min_h(px(0.))
                     .gap_3()
                     .child(sidebar)
-                    .child(self.layers_panel(cx))
+                    // Canvas viewport: takes the remaining width and scrolls if the slide is
+                    // larger than the area, so it never overlaps the Format pane.
                     .child(
                         div()
-                            .w(px(sw))
-                            .h(px(sh))
-                            .border_1()
-                            .border_color(rgb(0x555555))
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
-                                    window.focus(&this.focus, cx);
-                                    this.on_mouse_down(ev, cx);
-                                }),
-                            )
-                            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| {
-                                this.on_mouse_move(ev, cx)
-                            }))
-                            .on_mouse_up(
-                                MouseButton::Left,
-                                cx.listener(|this, ev: &MouseUpEvent, _, cx| {
-                                    this.on_mouse_up(ev, cx)
-                                }),
-                            )
-                            .on_mouse_down(
-                                MouseButton::Right,
-                                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
-                                    window.focus(&this.focus, cx);
-                                    this.on_right_down(ev, cx);
-                                }),
-                            )
-                            .child(slide_canvas),
+                            .id("canvas_viewport")
+                            .flex_1()
+                            .min_w(px(0.))
+                            .h_full()
+                            .overflow_x_scroll()
+                            .overflow_y_scroll()
+                            .child(
+                                div()
+                                    .w(px(sw))
+                                    .h(px(sh))
+                                    .border_1()
+                                    .border_color(rgb(0x555555))
+                                    .on_mouse_down(
+                                        MouseButton::Left,
+                                        cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                                            window.focus(&this.focus, cx);
+                                            this.on_mouse_down(ev, cx);
+                                        }),
+                                    )
+                                    .on_mouse_move(cx.listener(
+                                        |this, ev: &MouseMoveEvent, _, cx| {
+                                            this.on_mouse_move(ev, cx)
+                                        },
+                                    ))
+                                    .on_mouse_up(
+                                        MouseButton::Left,
+                                        cx.listener(|this, ev: &MouseUpEvent, _, cx| {
+                                            this.on_mouse_up(ev, cx)
+                                        }),
+                                    )
+                                    .on_mouse_down(
+                                        MouseButton::Right,
+                                        cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                                            window.focus(&this.focus, cx);
+                                            this.on_right_down(ev, cx);
+                                        }),
+                                    )
+                                    .child(slide_canvas),
+                            ),
                     )
                     .children(inspector),
             )

@@ -165,6 +165,8 @@ struct HayateApp {
     context_menu: Option<ContextMenu>,
     /// Whether the font picker overlay is open.
     font_picker: bool,
+    /// Which list the left panel shows (slide thumbnails vs. layers).
+    left_tab: LeftTab,
     /// Active marquee (rubber-band) selection rect in scene px: (start_x, start_y, cur_x, cur_y).
     marquee: Option<(f32, f32, f32, f32)>,
     /// Last window viewport size; used to refit the slide when the window is resized.
@@ -176,6 +178,13 @@ enum MenuTarget {
     Shape,
     Slide,
     Canvas,
+}
+
+/// Which list the left panel shows.
+#[derive(Clone, Copy, PartialEq)]
+enum LeftTab {
+    Slides,
+    Layers,
 }
 
 struct ContextMenu {
@@ -269,6 +278,7 @@ impl HayateApp {
             present_t: 0,
             context_menu: None,
             font_picker: false,
+            left_tab: LeftTab::Slides,
             marquee: None,
             last_viewport: None,
         }

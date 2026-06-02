@@ -118,7 +118,15 @@ impl HayateApp {
             }
             let dx = (f32::from(ev.position.x - rd.start_cursor.x) as f64 / scale) as i64;
             let dy = (f32::from(ev.position.y - rd.start_cursor.y) as f64 / scale) as i64;
-            let nf = resize_frame(rd.handle, rd.start_frame, dx, dy);
+            let mut nf = resize_frame(rd.handle, rd.start_frame, dx, dy);
+            // Shift preserves the original aspect ratio (height follows width).
+            if ev.modifiers.shift {
+                let sf = rd.start_frame;
+                if sf.size.h > 0 {
+                    let ar = sf.size.w as f64 / sf.size.h as f64;
+                    nf.size.h = ((nf.size.w as f64 / ar).round() as i64).max(12_700);
+                }
+            }
             if let Some(e) = self.selection {
                 self.pres.world.frames.insert(e, nf);
                 self.rebuild();
