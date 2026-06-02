@@ -226,43 +226,57 @@ impl Render for HayateApp {
                 // Selection outline (drawn on top), rotated to match the shape.
                 if let Some(sel) = selection {
                     if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(sel)) {
-                        let r = prim_bounds(&node.prim);
-                        let angle = node.rotation_deg.to_radians();
-                        let pad = 2.0;
-                        if angle.abs() < 1e-3 {
-                            let b = Bounds {
-                                origin: point(o.x + px(r.x - pad), o.y + px(r.y - pad)),
-                                size: size(px(r.w + 2.0 * pad), px(r.h + 2.0 * pad)),
-                            };
-                            window.paint_quad(quad(
-                                b,
-                                px(0.),
-                                gpui::transparent_black(),
-                                px(2.),
-                                rgb(SELECTION),
-                                Default::default(),
-                            ));
-                        } else {
-                            let (cx_, cy_) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
-                            let corners = [
-                                (r.x - pad, r.y - pad),
-                                (r.x + r.w + pad, r.y - pad),
-                                (r.x + r.w + pad, r.y + r.h + pad),
-                                (r.x - pad, r.y + r.h + pad),
-                                (r.x - pad, r.y - pad), // close the loop for the stroke
-                            ];
-                            let mut sb = PathBuilder::stroke(px(2.));
-                            for (i, (xx, yy)) in corners.iter().enumerate() {
-                                let (gx, gy) = rotate_pt(*xx, *yy, cx_, cy_, angle);
-                                let p = point(o.x + px(gx), o.y + px(gy));
-                                if i == 0 {
-                                    sb.move_to(p);
-                                } else {
-                                    sb.line_to(p);
-                                }
-                            }
+                        // A line/arrow is selected by its two endpoints, not a bounding box.
+                        if let Primitive::Line { from, to, .. } = &node.prim {
+                            let angle = node.rotation_deg.to_radians();
+                            let (cx_, cy_) = ((from.0 + to.0) * 0.5, (from.1 + to.1) * 0.5);
+                            let (ax, ay) = rotate_pt(from.0, from.1, cx_, cy_, angle);
+                            let (bx, by) = rotate_pt(to.0, to.1, cx_, cy_, angle);
+                            let mut sb = PathBuilder::stroke(px(1.5));
+                            sb.move_to(point(o.x + px(ax), o.y + px(ay)));
+                            sb.line_to(point(o.x + px(bx), o.y + px(by)));
                             if let Ok(path) = sb.build() {
                                 window.paint_path(path, rgb(SELECTION));
+                            }
+                        } else {
+                            let r = prim_bounds(&node.prim);
+                            let angle = node.rotation_deg.to_radians();
+                            let pad = 2.0;
+                            if angle.abs() < 1e-3 {
+                                let b = Bounds {
+                                    origin: point(o.x + px(r.x - pad), o.y + px(r.y - pad)),
+                                    size: size(px(r.w + 2.0 * pad), px(r.h + 2.0 * pad)),
+                                };
+                                window.paint_quad(quad(
+                                    b,
+                                    px(0.),
+                                    gpui::transparent_black(),
+                                    px(2.),
+                                    rgb(SELECTION),
+                                    Default::default(),
+                                ));
+                            } else {
+                                let (cx_, cy_) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+                                let corners = [
+                                    (r.x - pad, r.y - pad),
+                                    (r.x + r.w + pad, r.y - pad),
+                                    (r.x + r.w + pad, r.y + r.h + pad),
+                                    (r.x - pad, r.y + r.h + pad),
+                                    (r.x - pad, r.y - pad), // close the loop for the stroke
+                                ];
+                                let mut sb = PathBuilder::stroke(px(2.));
+                                for (i, (xx, yy)) in corners.iter().enumerate() {
+                                    let (gx, gy) = rotate_pt(*xx, *yy, cx_, cy_, angle);
+                                    let p = point(o.x + px(gx), o.y + px(gy));
+                                    if i == 0 {
+                                        sb.move_to(p);
+                                    } else {
+                                        sb.line_to(p);
+                                    }
+                                }
+                                if let Ok(path) = sb.build() {
+                                    window.paint_path(path, rgb(SELECTION));
+                                }
                             }
                         }
                     }
@@ -316,23 +330,35 @@ impl Render for HayateApp {
                     }
                 }
 
-                // Resize handles on the selection.
+                // Resize handles on the selection: two endpoint handles for a line, the usual
+                // eight bounding-box handles otherwise.
                 if let Some(sel) = selection {
                     if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(sel)) {
-                        let r = prim_bounds(&node.prim);
-                        for (hx, hy) in resize_handles(r, node.rotation_deg) {
-                            let b = Bounds {
-                                origin: point(o.x + px(hx - 4.0), o.y + px(hy - 4.0)),
-                                size: size(px(8.0), px(8.0)),
-                            };
+                        let handle = |hx: f32, hy: f32, window: &mut Window| {
                             window.paint_quad(quad(
-                                b,
+                                Bounds {
+                                    origin: point(o.x + px(hx - 4.0), o.y + px(hy - 4.0)),
+                                    size: size(px(8.0), px(8.0)),
+                                },
                                 px(1.0),
                                 Background::from(rgb(0xffffff)),
                                 px(1.0),
                                 rgb(SELECTION),
                                 Default::default(),
                             ));
+                        };
+                        if let Primitive::Line { from, to, .. } = &node.prim {
+                            let angle = node.rotation_deg.to_radians();
+                            let (cx_, cy_) = ((from.0 + to.0) * 0.5, (from.1 + to.1) * 0.5);
+                            let (ax, ay) = rotate_pt(from.0, from.1, cx_, cy_, angle);
+                            let (bx, by) = rotate_pt(to.0, to.1, cx_, cy_, angle);
+                            handle(ax, ay, window);
+                            handle(bx, by, window);
+                        } else {
+                            let r = prim_bounds(&node.prim);
+                            for (hx, hy) in resize_handles(r, node.rotation_deg) {
+                                handle(hx, hy, window);
+                            }
                         }
                     }
                 }
