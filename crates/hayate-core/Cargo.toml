@@ -1,0 +1,13 @@
+[package]
+name = "hayate-core"
+description = "HayateOffice command registry: the named/typed-arg surface palette/scripts/AI call (DESIGN 6.5/6.13)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hayate-ir.workspace = true
+hayate-model.workspace = true
+serde.workspace = true
+serde_json = "1"

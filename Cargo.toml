@@ -5,6 +5,7 @@ resolver = "2"
 members = [
     "crates/hayate-ir",
     "crates/hayate-model",
+    "crates/hayate-core",
     "crates/hayate-render",
     "crates/hayate-format",
     "crates/hayate-app",
