@@ -13,7 +13,11 @@ default:
 
 # Run core-crate tests (pure Rust; no gpui).
 test:
-    cargo test -p hayate-ir -p hayate-model -p hayate-render -p hayate-format
+    cargo test -p hayate-ir -p hayate-model -p hayate-core -p hayate-render -p hayate-format
+
+# Generate visual debug snapshots (gpui-free): runs edit scenarios and writes debug-shots/*.png.
+shots:
+    cargo run -p hayate-shot
 
 # Build the core crates (pure Rust).
 build:
@@ -31,6 +35,10 @@ check:
 # Compile the gpui app inside the Nix dev shell.
 build-app:
     nix develop --command cargo build -p hayate-app
+
+# Run the gpui interaction E2E tests (headless, inside the Nix dev shell).
+e2e:
+    nix develop --command cargo test -p hayate-app
 
 # Run the gpui app. Injects the host GPU driver (non-NixOS) via nix-gl-host.
 # Falls back to a plain run if nix-gl-host is unavailable (e.g. on NixOS).

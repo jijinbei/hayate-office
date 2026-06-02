@@ -2634,6 +2634,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "hayate-shot"
+version = "0.0.0"
+dependencies = [
+ "hayate-core",
+ "hayate-format-pptx",
+ "hayate-ir",
+ "hayate-model",
+ "hayate-render",
+ "serde_json",
+]
+
+[[package]]
 name = "heapless"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

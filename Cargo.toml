@@ -9,6 +9,7 @@ members = [
     "crates/hayate-render",
     "crates/hayate-format",
     "crates/hayate-format-pptx",
+    "crates/hayate-shot",
     "crates/hayate-app",
 ]
 

@@ -3,3 +3,4 @@
 Cargo.lock.bak
 *.hayate
 .DS_Store
+/debug-shots
