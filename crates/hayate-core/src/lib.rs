@@ -13,7 +13,9 @@
 
 use hayate_ir::color::{Color, Rgba, ThemeColorToken};
 use hayate_ir::frac::FracIndex;
+use hayate_ir::geom::{PointEmu, RectEmu, SizeEmu};
 use hayate_ir::paint::Fill;
+use hayate_ir::units::EMU_PER_PT;
 use hayate_ir::world::{CompKind, CompValue, Entity, World};
 use hayate_model::edit;
 use hayate_model::{Operation, Transaction};
@@ -193,6 +195,11 @@ fn arg_f64(args: &Value, key: &str) -> Option<f64> {
     args.get(key)?.as_f64()
 }
 
+/// Convert a measurement in points to EMU (rounding to the nearest EMU).
+fn pt_to_emu(pt: f64) -> hayate_ir::units::Emu {
+    (pt * EMU_PER_PT as f64).round() as hayate_ir::units::Emu
+}
+
 /// Parse a color from `args[key]`. Accepts either an `{ "r":.., "g":.., "b":.., "a"?:.. }`
 /// object or a hex string (`"#rrggbb"` / `"#rrggbbaa"`, leading `#` optional). Returns a
 /// literal-color `Fill::Solid`.
@@ -267,6 +274,82 @@ pub fn builtins() -> CommandRegistry {
                 arg_i64(args, "dy"),
             ) {
                 (Some(entity), Some(dx), Some(dy)) => edit::translate(world, entity, dx, dy).ops,
+                _ => vec![],
+            }
+        },
+    );
+
+    // shape.set_position — set the entity's frame origin to an absolute point (in points,
+    // converted to EMU), keeping its current size. Reads the current Frame from the World; an
+    // entity with no Frame yields no ops. Built directly as a SetComponent op.
+    reg.register(
+        CommandMeta::new("shape.set_position", "Set Position", "Shape"),
+        vec![
+            ParamSpec::new("entity", ParamType::Entity),
+            ParamSpec::new("x", ParamType::Float),
+            ParamSpec::new("y", ParamType::Float),
+        ],
+        |world, args| {
+            match (
+                arg_entity(args, "entity"),
+                arg_f64(args, "x"),
+                arg_f64(args, "y"),
+            ) {
+                (Some(entity), Some(x), Some(y)) => match world.get(entity, CompKind::Frame) {
+                    Some(CompValue::Frame(frame)) => {
+                        let origin_x = pt_to_emu(x);
+                        let origin_y = pt_to_emu(y);
+                        let rect = RectEmu {
+                            origin: PointEmu::new(origin_x, origin_y),
+                            size: frame.size,
+                        };
+                        vec![Operation::SetComponent {
+                            entity,
+                            value: CompValue::Frame(rect),
+                        }]
+                    }
+                    // No Frame to position: lenient no-op.
+                    _ => vec![],
+                },
+                _ => vec![],
+            }
+        },
+    );
+
+    // shape.set_size — set the entity's frame size to an absolute size (in points, converted
+    // to EMU; each dimension is floored at 1pt), keeping its current origin. Reads the current
+    // Frame from the World; an entity with no Frame yields no ops.
+    reg.register(
+        CommandMeta::new("shape.set_size", "Set Size", "Shape"),
+        vec![
+            ParamSpec::new("entity", ParamType::Entity),
+            ParamSpec::new("w", ParamType::Float),
+            ParamSpec::new("h", ParamType::Float),
+        ],
+        |world, args| {
+            match (
+                arg_entity(args, "entity"),
+                arg_f64(args, "w"),
+                arg_f64(args, "h"),
+            ) {
+                (Some(entity), Some(w), Some(h)) => match world.get(entity, CompKind::Frame) {
+                    Some(CompValue::Frame(frame)) => {
+                        // Convert to EMU and clamp each dimension to a minimum of 1pt.
+                        let min = EMU_PER_PT;
+                        let width = pt_to_emu(w).max(min);
+                        let height = pt_to_emu(h).max(min);
+                        let rect = RectEmu {
+                            origin: frame.origin,
+                            size: SizeEmu::new(width, height),
+                        };
+                        vec![Operation::SetComponent {
+                            entity,
+                            value: CompValue::Frame(rect),
+                        }]
+                    }
+                    // No Frame to resize: lenient no-op.
+                    _ => vec![],
+                },
                 _ => vec![],
             }
         },
@@ -842,5 +925,143 @@ mod tests {
             .filter_map(|c| c["id"].as_str())
             .collect();
         assert!(ids.contains(&"shape.set_rotation"));
+    }
+
+    #[test]
+    fn set_position_command_sets_origin_keeping_size() {
+        let (mut w, e) = world_with_framed_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        // x=100pt, y=50pt -> (1_270_000, 635_000) EMU; size (100, 50) preserved.
+        let tx = reg
+            .build(
+                "shape.set_position",
+                &json!({ "entity": e.0, "x": 100, "y": 50 }),
+                &w,
+            )
+            .expect("shape.set_position is registered");
+        assert_eq!(tx.label, "Set Position");
+        h.commit(&mut w, tx);
+
+        assert_eq!(
+            w.get(e, CompKind::Frame),
+            Some(CompValue::Frame(RectEmu::new(1_270_000, 635_000, 100, 50))),
+            "origin set in EMU, size unchanged"
+        );
+
+        // Undoable as one step (back to the original frame).
+        assert!(h.undo(&mut w));
+        assert_eq!(
+            w.get(e, CompKind::Frame),
+            Some(CompValue::Frame(RectEmu::new(10, 20, 100, 50)))
+        );
+    }
+
+    #[test]
+    fn set_size_command_sets_size_keeping_origin() {
+        let (mut w, e) = world_with_framed_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        // w=200pt, h=100pt -> (2_540_000, 1_270_000) EMU; origin (10, 20) preserved.
+        let tx = reg
+            .build(
+                "shape.set_size",
+                &json!({ "entity": e.0, "w": 200, "h": 100 }),
+                &w,
+            )
+            .expect("shape.set_size is registered");
+        assert_eq!(tx.label, "Set Size");
+        h.commit(&mut w, tx);
+
+        assert_eq!(
+            w.get(e, CompKind::Frame),
+            Some(CompValue::Frame(RectEmu::new(10, 20, 2_540_000, 1_270_000))),
+            "size set in EMU, origin unchanged"
+        );
+
+        // Undoable as one step (back to the original frame).
+        assert!(h.undo(&mut w));
+        assert_eq!(
+            w.get(e, CompKind::Frame),
+            Some(CompValue::Frame(RectEmu::new(10, 20, 100, 50)))
+        );
+    }
+
+    #[test]
+    fn set_size_floors_to_one_point() {
+        let (mut w, e) = world_with_framed_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        // Zero-ish dimensions are clamped to a minimum of 1pt (= EMU_PER_PT) each.
+        let tx = reg
+            .build(
+                "shape.set_size",
+                &json!({ "entity": e.0, "w": 0, "h": 0 }),
+                &w,
+            )
+            .unwrap();
+        h.commit(&mut w, tx);
+
+        assert_eq!(
+            w.get(e, CompKind::Frame),
+            Some(CompValue::Frame(RectEmu::new(10, 20, 12_700, 12_700))),
+            "each dimension floored at 1pt, origin unchanged"
+        );
+    }
+
+    #[test]
+    fn set_position_missing_entity_is_lenient() {
+        let reg = builtins();
+        let w = World::new();
+        let tx = reg
+            .build("shape.set_position", &json!({ "x": 100, "y": 50 }), &w)
+            .unwrap();
+        assert!(tx.ops.is_empty(), "no entity => no ops");
+    }
+
+    #[test]
+    fn set_position_no_frame_is_lenient() {
+        // An entity that exists but carries no Frame yields an empty transaction.
+        let mut w = World::new();
+        let e = w.spawn();
+        let reg = builtins();
+        let tx = reg
+            .build(
+                "shape.set_position",
+                &json!({ "entity": e.0, "x": 100, "y": 50 }),
+                &w,
+            )
+            .unwrap();
+        assert!(tx.ops.is_empty(), "no Frame => no ops");
+    }
+
+    #[test]
+    fn set_size_no_frame_is_lenient() {
+        let mut w = World::new();
+        let e = w.spawn();
+        let reg = builtins();
+        let tx = reg
+            .build(
+                "shape.set_size",
+                &json!({ "entity": e.0, "w": 200, "h": 100 }),
+                &w,
+            )
+            .unwrap();
+        assert!(tx.ops.is_empty(), "no Frame => no ops");
+    }
+
+    #[test]
+    fn manifest_includes_set_position_and_set_size() {
+        let reg = builtins();
+        let manifest = reg.manifest();
+        let ids: Vec<&str> = manifest
+            .iter()
+            .filter_map(|c| c["id"].as_str())
+            .collect();
+        assert!(ids.contains(&"shape.set_position"));
+        assert!(ids.contains(&"shape.set_size"));
     }
 }
