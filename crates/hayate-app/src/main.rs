@@ -211,6 +211,14 @@ struct HayateApp {
     resize: Option<ResizeDrag>,
     /// Copied shape components (Ctrl+C / Ctrl+V).
     clipboard: Option<Vec<CompValue>>,
+    /// In-canvas text editing state, if any.
+    text_edit: Option<TextEdit>,
+}
+
+struct TextEdit {
+    entity: Entity,
+    original: String,
+    buf: String,
 }
 
 struct ResizeDrag {
@@ -263,7 +271,119 @@ impl HayateApp {
             show_grid: false,
             resize: None,
             clipboard: None,
+            text_edit: None,
         }
+    }
+
+    fn first_run_text(&self, e: Entity) -> String {
+        self.pres
+            .world
+            .texts
+            .get(&e)
+            .and_then(|tb| tb.paragraphs.first())
+            .and_then(|p| p.runs.first())
+            .map(|r| r.text.clone())
+            .unwrap_or_default()
+    }
+
+    fn begin_text_edit(&mut self, e: Entity) {
+        let original = self.first_run_text(e);
+        self.text_edit = Some(TextEdit {
+            entity: e,
+            buf: original.clone(),
+            original,
+        });
+    }
+
+    /// Apply text to an entity's first run without recording history (live preview).
+    fn live_set_text(&mut self, e: Entity, text: String) {
+        let tx = edit::set_run_text(&self.pres.world, e, text);
+        for op in tx.ops {
+            op.apply(&mut self.pres.world);
+        }
+        self.rebuild();
+    }
+
+    fn text_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        let key = ev.keystroke.key.clone();
+        let mut live = false;
+        match key.as_str() {
+            "escape" => {
+                if let Some(te) = self.text_edit.take() {
+                    self.live_set_text(te.entity, te.original);
+                }
+            }
+            "enter" => {
+                if let Some(te) = self.text_edit.take() {
+                    // Revert the live edits, then commit the final text as one undo step.
+                    self.live_set_text(te.entity, te.original);
+                    let tx = edit::set_run_text(&self.pres.world, te.entity, te.buf);
+                    self.commit_tx(tx);
+                }
+            }
+            "backspace" => {
+                if let Some(te) = self.text_edit.as_mut() {
+                    te.buf.pop();
+                }
+                live = true;
+            }
+            "space" => {
+                if let Some(te) = self.text_edit.as_mut() {
+                    te.buf.push(' ');
+                }
+                live = true;
+            }
+            s if s.chars().count() == 1 => {
+                if let Some(te) = self.text_edit.as_mut() {
+                    te.buf.push_str(s);
+                }
+                live = true;
+            }
+            _ => {}
+        }
+        if live {
+            if let Some(te) = &self.text_edit {
+                let (e, buf) = (te.entity, te.buf.clone());
+                self.live_set_text(e, buf);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Add a new text box on the current slide and start editing it.
+    fn add_text_box(&mut self) {
+        let order = {
+            let kids = self.pres.children(self.slide);
+            let last = kids.last().and_then(|e| self.pres.world.order.get(e));
+            FracIndex::after(last)
+        };
+        let e = self.pres.world.reserve_id();
+        let frame = RectEmu::new(inch_f(1.0), inch_f(3.2), inch_f(5.0), inch_f(1.0));
+        let body = TextBody {
+            paragraphs: vec![Paragraph::new(vec![Run {
+                text: "Text".to_string(),
+                font: FontRef::Theme(ThemeFontSlot::Minor),
+                size: pt(24),
+                color: Color::theme(ThemeColorToken::Dk1),
+                bold: false,
+                italic: false,
+                underline: false,
+            }])],
+            autofit: false,
+        };
+        let tx = Transaction::new(
+            "add text",
+            vec![
+                Operation::Spawn { entity: e },
+                Operation::SetComponent { entity: e, value: CompValue::Parent(self.slide) },
+                Operation::SetComponent { entity: e, value: CompValue::Order(order) },
+                Operation::SetComponent { entity: e, value: CompValue::Frame(frame) },
+                Operation::SetComponent { entity: e, value: CompValue::Text(body) },
+            ],
+        );
+        self.commit_tx(tx);
+        self.selection = Some(e);
+        self.begin_text_edit(e);
     }
 
     fn set_zoom(&mut self, z: f32, cx: &mut Context<Self>) {
@@ -615,6 +735,10 @@ impl HayateApp {
             self.field_key(ev, cx);
             return;
         }
+        if self.text_edit.is_some() {
+            self.text_key(ev, cx);
+            return;
+        }
         let k = &ev.keystroke;
         let cmd = k.modifiers.platform || k.modifiers.control;
         match k.key.as_str() {
@@ -645,6 +769,16 @@ impl HayateApp {
             "r" if !cmd => {
                 self.add_rect();
                 cx.notify();
+            }
+            "t" if !cmd => {
+                self.add_text_box();
+                cx.notify();
+            }
+            "f2" => {
+                if let Some(e) = self.selection {
+                    self.begin_text_edit(e);
+                    cx.notify();
+                }
             }
             "d" if cmd => {
                 self.duplicate_selection();
@@ -1377,6 +1511,12 @@ impl Render for HayateApp {
                             cx.notify();
                         })),
                 )
+                .child(tool_button("edit_text", "Edit Text (F2)", cx, |t, _w, cx| {
+                    if let Some(e) = t.selection {
+                        t.begin_text_edit(e);
+                    }
+                    cx.notify();
+                }))
                 .child(tool_button("del", "Delete", cx, |t, _w, cx| {
                     t.delete_selection();
                     t.rebuild();
