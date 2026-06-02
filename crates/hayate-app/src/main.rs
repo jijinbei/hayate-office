@@ -32,7 +32,7 @@ use hayate_ir::world::Entity;
 use hayate_model::{edit, History, Operation, Transaction};
 use hayate_core::CommandRegistry;
 use hayate_render::scene::{Paint, Primitive, PxRect, PxSize, ResolvedRun, Scene, TextBlock};
-use hayate_render::{build_slide_scene, hit_test};
+use hayate_render::{alignment_guides, build_slide_scene, hit_test, Guide, GuideKind};
 
 const SELECTION: u32 = 0x3B82F6;
 const DOC_PATH: &str = "hayate-sample.hayate";
@@ -154,6 +154,8 @@ struct HayateApp {
     palette: Option<PaletteState>,
     /// Rotation numeric-entry buffer (Some while the angle field is being typed into).
     rot_edit: Option<String>,
+    /// Alignment guides shown while dragging (scene/px coords relative to the slide origin).
+    guides: Vec<Guide>,
 }
 
 struct PaletteState {
@@ -181,6 +183,7 @@ impl HayateApp {
             registry: hayate_core::builtins(),
             palette: None,
             rot_edit: None,
+            guides: Vec::new(),
         }
     }
 
@@ -360,10 +363,30 @@ impl HayateApp {
         let e = d.entity;
         self.pres.world.frames.insert(e, nf); // live preview, no history
         self.rebuild();
+        self.update_guides(e);
         cx.notify();
     }
 
+    /// Recompute alignment guides for the moving shape against the others (scene px coords).
+    fn update_guides(&mut self, moving_entity: Entity) {
+        let mut moving = None;
+        let mut others = Vec::new();
+        for n in &self.scene.nodes {
+            let r = prim_bounds(&n.prim);
+            if n.source == Some(moving_entity) {
+                moving = Some(r);
+            } else {
+                others.push(r);
+            }
+        }
+        self.guides = match moving {
+            Some(m) => alignment_guides(m, &others, 6.0),
+            None => Vec::new(),
+        };
+    }
+
     fn on_mouse_up(&mut self, _ev: &MouseUpEvent, cx: &mut Context<Self>) {
+        self.guides.clear();
         let Some(d) = self.drag.take() else { return };
         let Some(final_f) = self.pres.world.frames.get(&d.entity).copied() else {
             return;
@@ -711,6 +734,7 @@ impl Render for HayateApp {
         // Window resizing does not change zoom (use the zoom controls / Fit).
         let scene = self.scene.clone();
         let selection = self.selection;
+        let guides = self.guides.clone();
         let origin_cell = self.canvas_origin.clone();
         let (sw, sh) = (scene.size.w, scene.size.h);
         let title: SharedString = format!(
@@ -793,6 +817,34 @@ impl Render for HayateApp {
                                 window.paint_path(path, rgb(SELECTION));
                             }
                         }
+                    }
+                }
+                // Smart alignment guides (drawn while dragging).
+                for g in &guides {
+                    let color = Background::from(rgb(0xFF3DAA));
+                    match g.kind {
+                        GuideKind::Vertical => window.paint_quad(quad(
+                            Bounds {
+                                origin: point(o.x + px(g.pos - 0.5), o.y),
+                                size: size(px(1.0), px(scene.size.h)),
+                            },
+                            px(0.),
+                            color,
+                            px(0.),
+                            gpui::transparent_black(),
+                            Default::default(),
+                        )),
+                        GuideKind::Horizontal => window.paint_quad(quad(
+                            Bounds {
+                                origin: point(o.x, o.y + px(g.pos - 0.5)),
+                                size: size(px(scene.size.w), px(1.0)),
+                            },
+                            px(0.),
+                            color,
+                            px(0.),
+                            gpui::transparent_black(),
+                            Default::default(),
+                        )),
                     }
                 }
             },
