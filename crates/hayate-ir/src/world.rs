@@ -133,6 +133,16 @@ define_world! {
     speaker_notes: Notes: String,
     /// Placeholder link for inheriting geometry/style from layout/master.
     placeholders: Placeholder: PlaceholderRef,
+
+    // --- media & animation (DESIGN 6.15; data-only reserved seams) ---
+    /// Picture reference into embedded media; presence marks the entity as a picture.
+    pictures: Picture: crate::image::PictureRef,
+    /// Per-slide animation timeline (on slide entities).
+    timelines: Timeline: crate::anim::SlideTimeline,
+    /// Slide screen transition (on slide entities).
+    transitions: Transition: crate::anim::Transition,
+    /// Morph matching key; carried across slide duplication to pair shapes for Morph.
+    morph_keys: MorphKey: String,
 }
 
 impl World {
@@ -249,5 +259,83 @@ mod tests {
         assert_eq!(w.remove(e, CompKind::Frame), Some(v2));
         assert_eq!(w.get(e, CompKind::Frame), None);
         assert_eq!(w.remove(e, CompKind::Frame), None);
+    }
+
+    #[test]
+    fn picture_timeline_morph_set_get_roundtrip() {
+        use crate::anim::{
+            Anim, AnimKind, AnimStep, Easing, Effect, SlideTimeline, Transition, TransitionKind,
+            Trigger,
+        };
+        use crate::geom::SizeEmu;
+        use crate::image::PictureRef;
+
+        let mut w = World::new();
+        let e = w.spawn();
+
+        // Picture
+        let pic = CompValue::Picture(PictureRef {
+            media_key: "sha256:abc".to_string(),
+            natural: SizeEmu::new(640, 480),
+        });
+        assert_eq!(pic.kind(), CompKind::Picture);
+        assert_eq!(w.set(e, pic.clone()), None);
+        assert_eq!(w.get(e, CompKind::Picture), Some(pic));
+
+        // Timeline
+        let timeline = CompValue::Timeline(SlideTimeline {
+            steps: vec![AnimStep {
+                trigger: Trigger::AfterPrev { delay: 250 },
+                anims: vec![Anim {
+                    target: e,
+                    kind: AnimKind::Entrance(Effect::Fade),
+                    duration: 500,
+                    delay: 0,
+                    easing: Easing::EaseInOut,
+                }],
+            }],
+        });
+        assert_eq!(timeline.kind(), CompKind::Timeline);
+        assert_eq!(w.set(e, timeline.clone()), None);
+        assert_eq!(w.get(e, CompKind::Timeline), Some(timeline));
+
+        // Transition
+        let transition = CompValue::Transition(Transition {
+            kind: TransitionKind::Push,
+            duration: 300,
+        });
+        assert_eq!(transition.kind(), CompKind::Transition);
+        assert_eq!(w.set(e, transition.clone()), None);
+        assert_eq!(w.get(e, CompKind::Transition), Some(transition));
+
+        // Morph key
+        let morph = CompValue::MorphKey("logo".to_string());
+        assert_eq!(morph.kind(), CompKind::MorphKey);
+        assert_eq!(w.set(e, morph.clone()), None);
+        assert_eq!(w.get(e, CompKind::MorphKey), Some(morph));
+    }
+
+    #[test]
+    fn despawn_clears_new_components() {
+        use crate::anim::SlideTimeline;
+        use crate::geom::SizeEmu;
+        use crate::image::PictureRef;
+
+        let mut w = World::new();
+        let e = w.spawn();
+        w.pictures.insert(
+            e,
+            PictureRef {
+                media_key: "k".to_string(),
+                natural: SizeEmu::new(10, 20),
+            },
+        );
+        w.timelines.insert(e, SlideTimeline::default());
+        w.morph_keys.insert(e, "logo".to_string());
+
+        w.despawn(e);
+        assert!(!w.pictures.contains_key(&e));
+        assert!(!w.timelines.contains_key(&e));
+        assert!(!w.morph_keys.contains_key(&e));
     }
 }
