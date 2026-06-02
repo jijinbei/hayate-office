@@ -16,7 +16,7 @@ use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::{PointEmu, RectEmu, SizeEmu};
 use hayate_ir::paint::Fill;
-use hayate_ir::text::{Paragraph, Run, TextBody};
+use hayate_ir::text::{HAlign, Paragraph, Run, TextBody};
 use hayate_ir::units::{pt, EMU_PER_PT};
 use hayate_ir::world::{CompKind, CompValue, Entity, World};
 use hayate_model::align::{align, distribute, Align, Axis};
@@ -555,6 +555,110 @@ pub fn builtins() -> CommandRegistry {
         },
     );
 
+    // shape.set_font_size — set EVERY run's size to `pt` points (clamped to a minimum of 1pt),
+    // preserving all other formatting. Reads the current TextBody from the World; an entity with
+    // no text yields no ops. Built directly as a SetComponent op.
+    reg.register(
+        CommandMeta::new("shape.set_font_size", "Set Font Size", "Text"),
+        vec![
+            ParamSpec::new("entity", ParamType::Entity),
+            ParamSpec::new("pt", ParamType::Float),
+        ],
+        |world, args| match (arg_entity(args, "entity"), arg_i64(args, "pt")) {
+            (Some(entity), Some(points)) => match world.texts.get(&entity) {
+                Some(existing) => {
+                    // Clamp to a minimum of 1pt, then apply to every run.
+                    let size = pt(points.max(1));
+                    let mut body = existing.clone();
+                    for para in &mut body.paragraphs {
+                        for run in &mut para.runs {
+                            run.size = size;
+                        }
+                    }
+                    vec![Operation::SetComponent {
+                        entity,
+                        value: CompValue::Text(body),
+                    }]
+                }
+                // No text to size: lenient no-op.
+                None => vec![],
+            },
+            _ => vec![],
+        },
+    );
+
+    // shape.toggle_bold / shape.toggle_italic / shape.toggle_underline — flip the named run
+    // attribute across the whole text box. To keep the box consistent, the new value is the
+    // negation of the FIRST run's current value, then applied to every run. Reads the current
+    // TextBody from the World; an entity with no text yields no ops.
+    for (id, title, attr) in [
+        ("shape.toggle_bold", "Toggle Bold", RunAttr::Bold),
+        ("shape.toggle_italic", "Toggle Italic", RunAttr::Italic),
+        ("shape.toggle_underline", "Toggle Underline", RunAttr::Underline),
+    ] {
+        reg.register(
+            CommandMeta::new(id, title, "Text"),
+            vec![ParamSpec::new("entity", ParamType::Entity)],
+            move |world, args| match arg_entity(args, "entity") {
+                Some(entity) => match world.texts.get(&entity) {
+                    Some(existing) => {
+                        let mut body = existing.clone();
+                        // Negate the first run's current value (default false when no run exists).
+                        let first = body
+                            .paragraphs
+                            .first()
+                            .and_then(|p| p.runs.first())
+                            .map(|r| attr.get(r))
+                            .unwrap_or(false);
+                        let next = !first;
+                        for para in &mut body.paragraphs {
+                            for run in &mut para.runs {
+                                attr.set(run, next);
+                            }
+                        }
+                        vec![Operation::SetComponent {
+                            entity,
+                            value: CompValue::Text(body),
+                        }]
+                    }
+                    // No text to toggle: lenient no-op.
+                    None => vec![],
+                },
+                None => vec![],
+            },
+        );
+    }
+
+    // shape.align_text_left / _center / _right — set EVERY paragraph's horizontal alignment.
+    // Reads the current TextBody from the World; an entity with no text yields no ops.
+    for (id, title, halign) in [
+        ("shape.align_text_left", "Align Text Left", HAlign::Left),
+        ("shape.align_text_center", "Align Text Center", HAlign::Center),
+        ("shape.align_text_right", "Align Text Right", HAlign::Right),
+    ] {
+        reg.register(
+            CommandMeta::new(id, title, "Text"),
+            vec![ParamSpec::new("entity", ParamType::Entity)],
+            move |world, args| match arg_entity(args, "entity") {
+                Some(entity) => match world.texts.get(&entity) {
+                    Some(existing) => {
+                        let mut body = existing.clone();
+                        for para in &mut body.paragraphs {
+                            para.align = halign;
+                        }
+                        vec![Operation::SetComponent {
+                            entity,
+                            value: CompValue::Text(body),
+                        }]
+                    }
+                    // No text to align: lenient no-op.
+                    None => vec![],
+                },
+                None => vec![],
+            },
+        );
+    }
+
     // shape.fill_black / shape.fill_white — set the shape fill to a literal black/white. Unlike
     // the accent fills these use literals (not theme tokens), so they stay fixed across themes.
     for (id, title, rgba) in [
@@ -613,6 +717,35 @@ pub fn builtins() -> CommandRegistry {
     }
 
     reg
+}
+
+/// A boolean run-formatting attribute that the toggle commands flip uniformly across a text
+/// box. Lets the three toggles share one handler body via [`RunAttr::get`]/[`RunAttr::set`].
+#[derive(Clone, Copy)]
+enum RunAttr {
+    Bold,
+    Italic,
+    Underline,
+}
+
+impl RunAttr {
+    /// Read this attribute's current value off a run.
+    fn get(self, run: &Run) -> bool {
+        match self {
+            RunAttr::Bold => run.bold,
+            RunAttr::Italic => run.italic,
+            RunAttr::Underline => run.underline,
+        }
+    }
+
+    /// Set this attribute on a run.
+    fn set(self, run: &mut Run, value: bool) {
+        match self {
+            RunAttr::Bold => run.bold = value,
+            RunAttr::Italic => run.italic = value,
+            RunAttr::Underline => run.underline = value,
+        }
+    }
 }
 
 /// Which sibling extreme to move an entity to.
@@ -1375,5 +1508,214 @@ mod tests {
             .find(|c| c["id"] == "shapes.align_left")
             .unwrap();
         assert_eq!(al["category"], "Arrange");
+    }
+
+    /// Build a world with a single entity carrying a Frame and a TextBody with two runs in one
+    /// paragraph (so "all runs" behaviour is observable). Returns (world, entity).
+    fn world_with_text_shape() -> (World, Entity) {
+        use hayate_ir::text::{Paragraph, Run};
+        let (mut w, e) = world_with_framed_shape();
+        let body = TextBody {
+            paragraphs: vec![Paragraph::new(vec![default_run("Hello"), default_run("World")])],
+            autofit: false,
+        };
+        w.set(e, CompValue::Text(body));
+        (w, e)
+    }
+
+    /// Read the entity's TextBody out of the world.
+    fn text_of(w: &World, e: Entity) -> TextBody {
+        match w.get(e, CompKind::Text) {
+            Some(CompValue::Text(body)) => body,
+            other => panic!("expected a Text component, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn set_font_size_command_sets_all_runs() {
+        let (mut w, e) = world_with_text_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build(
+                "shape.set_font_size",
+                &json!({ "entity": e.0, "pt": 32 }),
+                &w,
+            )
+            .expect("shape.set_font_size is registered");
+        assert_eq!(tx.label, "Set Font Size");
+        h.commit(&mut w, tx);
+
+        let body = text_of(&w, e);
+        for run in &body.paragraphs[0].runs {
+            assert_eq!(run.size, pt(32), "every run sized to 32pt");
+        }
+
+        // Undoable as one step (back to the seeded 18pt).
+        assert!(h.undo(&mut w));
+        let body = text_of(&w, e);
+        assert_eq!(body.paragraphs[0].runs[0].size, pt(18));
+    }
+
+    #[test]
+    fn set_font_size_command_clamps_to_one_point() {
+        let (mut w, e) = world_with_text_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build("shape.set_font_size", &json!({ "entity": e.0, "pt": 0 }), &w)
+            .unwrap();
+        h.commit(&mut w, tx);
+
+        let body = text_of(&w, e);
+        assert_eq!(body.paragraphs[0].runs[0].size, pt(1), "floored at 1pt");
+    }
+
+    #[test]
+    fn toggle_bold_command_flips_all_runs() {
+        let (mut w, e) = world_with_text_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        // First toggle: false -> true on every run.
+        let tx = reg
+            .build("shape.toggle_bold", &json!({ "entity": e.0 }), &w)
+            .expect("shape.toggle_bold is registered");
+        assert_eq!(tx.label, "Toggle Bold");
+        h.commit(&mut w, tx);
+        let body = text_of(&w, e);
+        assert!(body.paragraphs[0].runs.iter().all(|r| r.bold));
+
+        // Second toggle: back to false on every run (based on first run's value).
+        let tx = reg
+            .build("shape.toggle_bold", &json!({ "entity": e.0 }), &w)
+            .unwrap();
+        h.commit(&mut w, tx);
+        let body = text_of(&w, e);
+        assert!(body.paragraphs[0].runs.iter().all(|r| !r.bold));
+    }
+
+    #[test]
+    fn toggle_italic_command_flips_all_runs() {
+        let (mut w, e) = world_with_text_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build("shape.toggle_italic", &json!({ "entity": e.0 }), &w)
+            .expect("shape.toggle_italic is registered");
+        assert_eq!(tx.label, "Toggle Italic");
+        h.commit(&mut w, tx);
+        let body = text_of(&w, e);
+        assert!(body.paragraphs[0].runs.iter().all(|r| r.italic));
+    }
+
+    #[test]
+    fn toggle_underline_command_flips_all_runs() {
+        let (mut w, e) = world_with_text_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build("shape.toggle_underline", &json!({ "entity": e.0 }), &w)
+            .expect("shape.toggle_underline is registered");
+        assert_eq!(tx.label, "Toggle Underline");
+        h.commit(&mut w, tx);
+        let body = text_of(&w, e);
+        assert!(body.paragraphs[0].runs.iter().all(|r| r.underline));
+    }
+
+    #[test]
+    fn toggle_bold_consistent_when_runs_differ() {
+        // When runs disagree, the whole box follows the FIRST run: first=false -> all true.
+        let (mut w, e) = world_with_text_shape();
+        let mut body = text_of(&w, e);
+        body.paragraphs[0].runs[1].bold = true; // second run already bold
+        w.set(e, CompValue::Text(body));
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build("shape.toggle_bold", &json!({ "entity": e.0 }), &w)
+            .unwrap();
+        h.commit(&mut w, tx);
+        let body = text_of(&w, e);
+        assert!(
+            body.paragraphs[0].runs.iter().all(|r| r.bold),
+            "first run was false, so the whole box becomes bold"
+        );
+    }
+
+    #[test]
+    fn align_text_commands_set_every_paragraph() {
+        for (id, expected) in [
+            ("shape.align_text_left", HAlign::Left),
+            ("shape.align_text_center", HAlign::Center),
+            ("shape.align_text_right", HAlign::Right),
+        ] {
+            let (mut w, e) = world_with_text_shape();
+            // Seed a second paragraph so "every paragraph" is observable.
+            let mut body = text_of(&w, e);
+            body.paragraphs
+                .push(Paragraph::new(vec![default_run("Second")]));
+            w.set(e, CompValue::Text(body));
+            let reg = builtins();
+            let mut h = History::new();
+
+            let tx = reg
+                .build(id, &json!({ "entity": e.0 }), &w)
+                .unwrap_or_else(|| panic!("{id} is registered"));
+            h.commit(&mut w, tx);
+
+            let body = text_of(&w, e);
+            for para in &body.paragraphs {
+                assert_eq!(para.align, expected, "{id} sets every paragraph");
+            }
+        }
+    }
+
+    #[test]
+    fn text_commands_no_text_is_lenient() {
+        // An entity that exists but carries no TextBody yields an empty transaction.
+        let (w, e) = world_with_framed_shape();
+        let reg = builtins();
+        for id in [
+            "shape.toggle_bold",
+            "shape.toggle_italic",
+            "shape.toggle_underline",
+            "shape.align_text_left",
+            "shape.align_text_center",
+            "shape.align_text_right",
+        ] {
+            let tx = reg.build(id, &json!({ "entity": e.0 }), &w).unwrap();
+            assert!(tx.ops.is_empty(), "{id}: no text => no ops");
+        }
+        let tx = reg
+            .build("shape.set_font_size", &json!({ "entity": e.0, "pt": 24 }), &w)
+            .unwrap();
+        assert!(tx.ops.is_empty(), "set_font_size: no text => no ops");
+    }
+
+    #[test]
+    fn manifest_includes_text_formatting_commands() {
+        let reg = builtins();
+        let manifest = reg.manifest();
+        let ids: Vec<&str> = manifest
+            .iter()
+            .filter_map(|c| c["id"].as_str())
+            .collect();
+        for id in [
+            "shape.set_font_size",
+            "shape.toggle_bold",
+            "shape.toggle_italic",
+            "shape.toggle_underline",
+            "shape.align_text_left",
+            "shape.align_text_center",
+            "shape.align_text_right",
+        ] {
+            assert!(ids.contains(&id), "manifest missing {id}");
+        }
     }
 }
