@@ -11,9 +11,9 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    App, Background, Bounds, ClickEvent, Context, ElementInputHandler, EntityInputHandler, Font,
-    FontStyle, FontWeight, Hsla, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, PathBuilder,
+    App, Background, Bounds, ClickEvent, Context, Corners, ElementInputHandler, EntityInputHandler,
+    Font, FontStyle, FontWeight, Hsla, Image, ImageFormat, KeyDownEvent, MouseButton,
+    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, PathPromptOptions,
     Pixels, Point, SharedString, TextRun, UTF16Selection, Window, WindowBounds, WindowOptions,
     canvas, div, point, prelude::*, px, quad, rgb, size,
 };
@@ -384,6 +384,31 @@ impl HayateApp {
                         cx.notify();
                     }))
                     .child(menu_divider())
+                    .child(menu_item("m_bold", "Bold", cx, |t, _w, cx| {
+                        t.run_on_selection("shape.toggle_bold");
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_italic", "Italic", cx, |t, _w, cx| {
+                        t.run_on_selection("shape.toggle_italic");
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_underline", "Underline", cx, |t, _w, cx| {
+                        t.run_on_selection("shape.toggle_underline");
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_align_l", "Align Left", cx, |t, _w, cx| {
+                        t.run_on_selection("shape.align_text_left");
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_align_c", "Align Center", cx, |t, _w, cx| {
+                        t.run_on_selection("shape.align_text_center");
+                        cx.notify();
+                    }))
+                    .child(menu_item("m_align_r", "Align Right", cx, |t, _w, cx| {
+                        t.run_on_selection("shape.align_text_right");
+                        cx.notify();
+                    }))
+                    .child(menu_divider())
                     .child(menu_item("m_front", "Bring to Front", cx, |t, _w, cx| {
                         t.run_on_selection("shape.bring_to_front");
                         cx.notify();
@@ -430,7 +455,7 @@ impl HayateApp {
                         cx.notify();
                     }))
                     .child(menu_item("m_add_image", "Insert Image", cx, |t, _w, cx| {
-                        t.insert_image();
+                        t.insert_image(cx);
                         cx.notify();
                     }))
                     .child(menu_divider())
@@ -450,9 +475,52 @@ impl HayateApp {
         v
     }
 
-    /// Insert a placeholder image (a Picture box) on the current slide.
-    fn insert_image(&mut self) {
-        let key = self.pres.add_media(b"hayate-placeholder-image".to_vec());
+    /// File extensions accepted by the "Insert Image" picker.
+    const IMAGE_EXTS: &'static [&'static str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+
+    /// Open a native file dialog and insert the chosen image on the current slide.
+    ///
+    /// gpui's file dialog is asynchronous: `App::prompt_for_paths` returns a
+    /// `oneshot::Receiver<Result<Option<Vec<PathBuf>>>>`. We drive it on the foreground
+    /// executor with `cx.spawn(...)`, read the file bytes, then update the entity to add the
+    /// Picture shape. If the dialog cannot be opened, we fall back to the `HAYATE_IMAGE`
+    /// environment variable so insertion still functions.
+    fn insert_image(&mut self, cx: &mut Context<Self>) {
+        let options = PathPromptOptions {
+            files: true,
+            directories: false,
+            multiple: false,
+            prompt: Some("Insert Image".into()),
+        };
+        let receiver = cx.prompt_for_paths(options);
+        cx.spawn(async move |this, cx| {
+            // Await the dialog result; on any error fall back to the env-var path.
+            let chosen: Option<std::path::PathBuf> = match receiver.await {
+                Ok(Ok(Some(paths))) => paths.into_iter().next(),
+                _ => std::env::var_os("HAYATE_IMAGE").map(std::path::PathBuf::from),
+            };
+            let Some(path) = chosen else { return };
+            // Only accept recognized image extensions.
+            let ok_ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .map(|e| Self::IMAGE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+                .unwrap_or(false);
+            if !ok_ext {
+                return;
+            }
+            let Ok(bytes) = std::fs::read(&path) else { return };
+            let _ = this.update(cx, |this, cx| {
+                this.insert_image_bytes(bytes);
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// Add a Picture shape backed by `bytes` to the current slide at a default frame.
+    fn insert_image_bytes(&mut self, bytes: Vec<u8>) {
+        let key = self.pres.add_media(bytes);
         let order = {
             let kids = self.pres.children(self.slide);
             let last = kids.last().and_then(|e| self.pres.world.order.get(e));
@@ -1083,7 +1151,7 @@ impl HayateApp {
                 cx.notify();
             }
             "i" if !cmd => {
-                self.insert_image();
+                self.insert_image(cx);
                 cx.notify();
             }
             "z" if cmd && k.modifiers.shift => {
@@ -1301,6 +1369,50 @@ impl HayateApp {
         }
     }
 
+    /// Like `run_on_selection`, but merges extra named fields into the command args
+    /// (e.g. `shape.set_font_size` needs a `pt` value alongside the `entity`).
+    fn run_on_selection_with(&mut self, id: &str, extra: serde_json::Value) {
+        if let Some(e) = self.selection {
+            let mut args = serde_json::json!({ "entity": e.0 });
+            if let (Some(obj), Some(extra)) = (args.as_object_mut(), extra.as_object()) {
+                for (k, v) in extra {
+                    obj.insert(k.clone(), v.clone());
+                }
+            }
+            if let Some(tx) = self.registry.build(id, &args, &self.pres.world) {
+                self.commit_tx(tx);
+            }
+        }
+    }
+
+    /// Current font size (in points) of the selected shape's first run, if any.
+    fn sel_font_size_pt(&self) -> Option<i64> {
+        let e = self.selection?;
+        self.pres
+            .world
+            .texts
+            .get(&e)
+            .and_then(|tb| tb.paragraphs.first())
+            .and_then(|p| p.runs.first())
+            .map(|r| r.size / hayate_ir::units::EMU_PER_PT)
+    }
+
+    /// Adjust the selected shape's font size by `delta_pt` points via `shape.set_font_size`.
+    /// Falls back to a fixed target size (32 up / 18 down) when the current size is unknown.
+    fn change_font_size(&mut self, delta_pt: i64) {
+        let target = match self.sel_font_size_pt() {
+            Some(cur) => (cur + delta_pt).clamp(8, 200),
+            None => {
+                if delta_pt >= 0 {
+                    32
+                } else {
+                    18
+                }
+            }
+        };
+        self.run_on_selection_with("shape.set_font_size", serde_json::json!({ "pt": target }));
+    }
+
     fn duplicate_selection(&mut self) {
         if let Some(src) = self.selection {
             let ne = self.pres.world.reserve_id();
@@ -1410,9 +1522,36 @@ fn rotate_pt(x: f32, y: f32, cx: f32, cy: f32, rad: f32) -> (f32, f32) {
     (cx + dx * c - dy * s, cy + dx * s + dy * c)
 }
 
+/// Guess an image's encoded format from its magic bytes (matches gpui's supported set).
+/// Returns `None` for unrecognized data, in which case the caller keeps the placeholder.
+fn guess_image_format(bytes: &[u8]) -> Option<ImageFormat> {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        Some(ImageFormat::Png)
+    } else if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        Some(ImageFormat::Jpeg)
+    } else if bytes.starts_with(b"GIF8") {
+        Some(ImageFormat::Gif)
+    } else if bytes.len() >= 12 && &bytes[0..4] == b"RIFF" && &bytes[8..12] == b"WEBP" {
+        Some(ImageFormat::Webp)
+    } else if bytes.starts_with(b"BM") {
+        Some(ImageFormat::Bmp)
+    } else {
+        None
+    }
+}
+
 /// Paint a Scene's background and shapes at `o` (window coords). Shared by the main view and
 /// the slide-list thumbnails. Rotated shapes are drawn as paths (quads carry no transform).
-fn paint_scene(scene: &Scene, o: Point<Pixels>, window: &mut Window, cx: &mut App) {
+///
+/// `media` resolves a `Primitive::Image`'s `media_key` to its encoded bytes so real images
+/// can be decoded and painted; when missing/undecodable a gray placeholder is drawn instead.
+fn paint_scene(
+    scene: &Scene,
+    o: Point<Pixels>,
+    media: &std::collections::BTreeMap<String, Vec<u8>>,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let bg: Background = rgb(rgb_u32(scene.background)).into();
     window.paint_quad(quad(
         Bounds {
@@ -1489,20 +1628,41 @@ fn paint_scene(scene: &Scene, o: Point<Pixels>, window: &mut Window, cx: &mut Ap
                     window.paint_path(path, rgb(rgb_u32(*c)));
                 }
             }
-            Primitive::Image { bounds: r, .. } => {
-                // Placeholder: a light-gray box (real image decoding is a follow-up).
+            Primitive::Image { bounds: r, media_key } => {
                 let b = Bounds {
                     origin: point(o.x + px(r.x), o.y + px(r.y)),
                     size: size(px(r.w), px(r.h)),
                 };
-                window.paint_quad(quad(
-                    b,
-                    px(0.),
-                    Background::from(rgb(0xCCCCCC)),
-                    px(1.),
-                    rgb(0x888888),
-                    Default::default(),
-                ));
+                // Try to decode and paint the real image; fall back to a placeholder.
+                let mut painted = false;
+                if let Some(bytes) = media.get(media_key) {
+                    if let Some(format) = guess_image_format(bytes) {
+                        let image = std::sync::Arc::new(Image::from_bytes(format, bytes.clone()));
+                        // gpui decodes asynchronously via its asset system; the first paint may
+                        // return None and schedule a re-render once the image is ready.
+                        if let Some(render) = image.use_render_image(window, cx) {
+                            let _ = window.paint_image(
+                                b,
+                                Corners::default(),
+                                render,
+                                0,
+                                false,
+                            );
+                            painted = true;
+                        }
+                    }
+                }
+                if !painted {
+                    // Placeholder: a light-gray box (bytes missing or not yet decoded).
+                    window.paint_quad(quad(
+                        b,
+                        px(0.),
+                        Background::from(rgb(0xCCCCCC)),
+                        px(1.),
+                        rgb(0x888888),
+                        Default::default(),
+                    ));
+                }
             }
             Primitive::Text(tb) => paint_text(tb, o.x, o.y, window, cx),
             _ => {}
@@ -1656,10 +1816,11 @@ impl Render for HayateApp {
                 h: f32::from(vp.height),
             };
             let pscene = build_slide_scene_at(&self.pres, self.slide, target, self.present_t);
+            let pmedia = self.pres.media.clone();
             let (pw, ph) = (pscene.size.w, pscene.size.h);
             let pcanvas = canvas(
                 |_, _, _| {},
-                move |b, _, window, cx| paint_scene(&pscene, b.origin, window, cx),
+                move |b, _, window, cx| paint_scene(&pscene, b.origin, &pmedia, window, cx),
             )
             .size_full();
             return div()
@@ -1677,6 +1838,7 @@ impl Render for HayateApp {
         // Document coordinates are absolute (points); on-screen size = slide_pt * zoom.
         // Window resizing does not change zoom (use the zoom controls / Fit).
         let scene = self.scene.clone();
+        let media = self.pres.media.clone();
         let selection = self.selection;
         let also = self.also.clone();
         let guides = self.guides.clone();
@@ -1727,7 +1889,7 @@ impl Render for HayateApp {
                     cx,
                 );
 
-                paint_scene(&scene, o, window, cx);
+                paint_scene(&scene, o, &media, window, cx);
 
                 if show_grid {
                     let g = grid_lines(scene.size, scene.size.w / 16.0);
@@ -1885,10 +2047,11 @@ impl Render for HayateApp {
         }));
         for (i, &s) in slides.iter().enumerate() {
             let tscene = build_slide_scene(&self.pres, s, PxSize { w: 176.0, h: 99.0 });
+            let tmedia = self.pres.media.clone();
             let is_cur = s == current;
             let tcanvas = canvas(
                 |_, _, _| {},
-                move |b, _, window, cx| paint_scene(&tscene, b.origin, window, cx),
+                move |b, _, window, cx| paint_scene(&tscene, b.origin, &tmedia, window, cx),
             )
             .size_full();
             sidebar = sidebar.child(
@@ -2046,6 +2209,53 @@ impl Render for HayateApp {
                         .child(tool_button("al_t", "T", cx, |t, _w, cx| { t.align("shapes.align_top"); cx.notify(); }))
                         .child(tool_button("al_m", "M", cx, |t, _w, cx| { t.align("shapes.align_vcenter"); cx.notify(); }))
                         .child(tool_button("al_b", "B", cx, |t, _w, cx| { t.align("shapes.align_bottom"); cx.notify(); })),
+                )
+                .child(div().child("Text"))
+                .child(
+                    // Character styling. These build registry commands by string id; they
+                    // simply no-op until the text-formatting commands are registered.
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_1()
+                        .child(tool_button("txt_bold", "B", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.toggle_bold");
+                            cx.notify();
+                        }))
+                        .child(tool_button("txt_italic", "I", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.toggle_italic");
+                            cx.notify();
+                        }))
+                        .child(tool_button("txt_underline", "U", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.toggle_underline");
+                            cx.notify();
+                        }))
+                        .child(tool_button("txt_aminus", "A-", cx, |t, _w, cx| {
+                            t.change_font_size(-4);
+                            cx.notify();
+                        }))
+                        .child(tool_button("txt_aplus", "A+", cx, |t, _w, cx| {
+                            t.change_font_size(4);
+                            cx.notify();
+                        })),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_1()
+                        .child(tool_button("txt_al_l", "Left", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.align_text_left");
+                            cx.notify();
+                        }))
+                        .child(tool_button("txt_al_c", "Center", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.align_text_center");
+                            cx.notify();
+                        }))
+                        .child(tool_button("txt_al_r", "Right", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.align_text_right");
+                            cx.notify();
+                        })),
                 )
                 .child(tool_button("anim_fade", "Animate: Fade In", cx, |t, _w, cx| {
                     t.add_fade_in();
@@ -2261,6 +2471,43 @@ mod e2e {
         app.update(cx, |a, _| a.duplicate_selection());
         let after = app.read_with(cx, |a, _| a.pres.children(a.slide).len());
         assert_eq!(after, before + 1, "Duplicate should add one shape to the slide");
+    }
+
+    #[gpui::test]
+    fn toggle_bold_command_flips_selected_text(cx: &mut TestAppContext) {
+        let app = cx.new(|cx| HayateApp::new(cx));
+        let title = app.read_with(cx, |a, _| a.pres.children(a.slide)[0]);
+        let bold_of = |a: &HayateApp| {
+            a.pres
+                .world
+                .texts
+                .get(&title)
+                .and_then(|tb| tb.paragraphs.first())
+                .and_then(|p| p.runs.first())
+                .map(|r| r.bold)
+                .unwrap_or(false)
+        };
+        let before = app.read_with(cx, |a, _| bold_of(a));
+        app.update(cx, |a, _| {
+            a.selection = Some(title);
+            a.run_on_selection("shape.toggle_bold");
+        });
+        let after = app.read_with(cx, |a, _| bold_of(a));
+        assert_ne!(before, after, "toggle_bold should flip the run's bold flag");
+    }
+
+    #[gpui::test]
+    fn insert_image_bytes_adds_a_picture(cx: &mut TestAppContext) {
+        let app = cx.new(|cx| HayateApp::new(cx));
+        let before = app.read_with(cx, |a, _| a.pres.children(a.slide).len());
+        let png = hayate_render::encode_png(&[255u8, 0, 0, 255], 1, 1);
+        app.update(cx, |a, _| a.insert_image_bytes(png));
+        let (after, has_pic) = app.read_with(cx, |a, _| {
+            let kids = a.pres.children(a.slide);
+            (kids.len(), kids.iter().any(|e| a.pres.world.pictures.contains_key(e)))
+        });
+        assert_eq!(after, before + 1, "inserting an image should add one shape");
+        assert!(has_pic, "the new shape should carry a picture component");
     }
 
     #[gpui::test]
