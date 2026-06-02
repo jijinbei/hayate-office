@@ -1,7 +1,7 @@
 //! Shape and document editing actions: selection, image insertion, alignment, animation,
 //! transforms, grouping, clipboard, font sizing, zoom, and the transaction commit helpers.
 
-use gpui::{Context, PathPromptOptions, Window};
+use gpui::{ClipboardEntry, Context, PathPromptOptions, Window};
 
 use hayate_ir::color::{Color, ThemeColorToken};
 use hayate_ir::font::{FontRef, ThemeFontSlot};
@@ -536,6 +536,23 @@ impl HayateApp {
 
     pub(crate) fn copy_selection(&mut self) {
         self.clipboard = self.selection.map(|e| self.pres.world.components_of(e));
+    }
+
+    /// Try to paste an image from the system clipboard. If the clipboard holds an image entry,
+    /// insert it as a Picture shape (via `insert_image_bytes`) and return `true` to signal the
+    /// paste was handled. Returns `false` when there is no clipboard image, so the caller can
+    /// fall back to the internal shape paste.
+    pub(crate) fn paste_clipboard_image(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some(item) = cx.read_from_clipboard() else {
+            return false;
+        };
+        for entry in item.entries() {
+            if let ClipboardEntry::Image(img) = entry {
+                self.insert_image_bytes(img.bytes.clone());
+                return true;
+            }
+        }
+        false
     }
 
     pub(crate) fn paste_clipboard(&mut self) {

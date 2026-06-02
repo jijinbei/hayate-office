@@ -9,7 +9,7 @@ use hayate_model::{edit, Operation, Transaction};
 use hayate_render::{alignment_guides, hit_test, resize_handles};
 
 use crate::util::{prim_bounds, resize_frame};
-use crate::{Drag, HayateApp, ResizeDrag};
+use crate::{Drag, HayateApp, LineDrag, ResizeDrag};
 
 impl HayateApp {
     /// Pixels per EMU (width-fit).
@@ -48,6 +48,38 @@ impl HayateApp {
                 }
                 cx.notify();
                 return;
+            }
+        }
+        // Grab a line endpoint? A line is moved by its two endpoints, which lets it point in any
+        // direction (the frame size may become negative).
+        if let Some(sel) = self.selection {
+            if let Some(node) = self.scene.nodes.iter().find(|n| n.source == Some(sel)) {
+                if let hayate_render::scene::Primitive::Line { from, to, .. } = &node.prim {
+                    let near = |hx: f32, hy: f32| (x - hx).hypot(y - hy) < 8.0;
+                    let on_from = near(from.0, from.1);
+                    let on_to = near(to.0, to.1);
+                    if on_from || on_to {
+                        if let Some(f) = self.pres.world.frames.get(&sel).copied() {
+                            // World endpoints: from = origin, to = origin + size (signed).
+                            let from_w = f.origin;
+                            let to_w = hayate_ir::geom::PointEmu::new(
+                                f.origin.x + f.size.w,
+                                f.origin.y + f.size.h,
+                            );
+                            // Grabbing the END drags `to`; the START (`from`) stays fixed.
+                            let drag_end = on_to && !on_from;
+                            let fixed = if drag_end { from_w } else { to_w };
+                            self.line_drag = Some(LineDrag {
+                                entity: sel,
+                                drag_end,
+                                fixed,
+                                start_frame: f,
+                            });
+                            cx.notify();
+                            return;
+                        }
+                    }
+                }
             }
         }
         // Grab a resize handle on the current (axis-aligned) selection?
@@ -120,6 +152,31 @@ impl HayateApp {
     }
 
     pub(crate) fn on_mouse_move(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        // Dragging a line endpoint: keep the fixed end, move the other to the cursor. The frame
+        // size may go negative, so the line can point in any of the 360 degrees.
+        if let Some(ld) = self.line_drag.clone() {
+            let scale = self.scale();
+            if scale <= 0.0 {
+                return;
+            }
+            let o = self.canvas_origin.get();
+            let cx_emu = (f32::from(ev.position.x - o.x) as f64 / scale) as i64;
+            let cy_emu = (f32::from(ev.position.y - o.y) as f64 / scale) as i64;
+            let cursor = PointEmu::new(cx_emu, cy_emu);
+            let (from, to) = if ld.drag_end {
+                (ld.fixed, cursor)
+            } else {
+                (cursor, ld.fixed)
+            };
+            let nf = RectEmu {
+                origin: from,
+                size: hayate_ir::geom::SizeEmu::new(to.x - from.x, to.y - from.y),
+            };
+            self.pres.world.frames.insert(ld.entity, nf);
+            self.rebuild();
+            cx.notify();
+            return;
+        }
         // While a marquee is active, just track the current corner.
         if let Some((sx, sy, _, _)) = self.marquee {
             let o = self.canvas_origin.get();
@@ -246,6 +303,18 @@ impl HayateApp {
     }
 
     pub(crate) fn on_mouse_up(&mut self, _ev: &MouseUpEvent, cx: &mut Context<Self>) {
+        // Commit a line endpoint drag as one undoable step (revert the live preview first).
+        if let Some(ld) = self.line_drag.take() {
+            if let Some(final_f) = self.pres.world.frames.get(&ld.entity).copied() {
+                if final_f != ld.start_frame {
+                    self.pres.world.frames.insert(ld.entity, ld.start_frame);
+                    let tx = edit::set_frame(ld.entity, final_f);
+                    self.commit_tx(tx);
+                }
+            }
+            cx.notify();
+            return;
+        }
         // Finalize a marquee: select every shape whose bounds intersect the rect.
         if let Some((sx, sy, cx0, cy0)) = self.marquee.take() {
             let rx = sx.min(cx0);

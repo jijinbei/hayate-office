@@ -465,7 +465,9 @@ impl HayateApp {
             }
             "c" if cmd => self.copy_selection(),
             "v" if cmd => {
-                self.paste_clipboard();
+                if !self.paste_clipboard_image(cx) {
+                    self.paste_clipboard();
+                }
                 cx.notify();
             }
             "escape" => {

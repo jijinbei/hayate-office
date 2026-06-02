@@ -605,3 +605,46 @@ fn arrow_heads_and_stroke_width_edit(cx: &mut TestAppContext) {
     app.update(cx, |s, _| s.set_stroke_width(6));
     assert_eq!(app.read_with(cx, |s, _| s.sel_stroke_pt()), Some(6));
 }
+
+#[gpui::test]
+fn line_endpoint_drag_allows_any_direction(cx: &mut TestAppContext) {
+    use hayate_render::scene::Primitive;
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| s.add_line(true));
+    let sel = app.read_with(cx, |s, _| s.selection.unwrap());
+    // Scene endpoints of the line.
+    let (from_px, to_px) = app.read_with(cx, |s, _| {
+        let n = s
+            .scene
+            .nodes
+            .iter()
+            .find(|n| n.source == Some(sel))
+            .unwrap();
+        match &n.prim {
+            Primitive::Line { from, to, .. } => (*from, *to),
+            _ => panic!("expected a line"),
+        }
+    });
+    // Grab the END endpoint, then drag it up-left past the start.
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, to_px.0, to_px.1), cx)
+    });
+    assert!(
+        app.read_with(cx, |s, _| s.line_drag.is_some()),
+        "grabbing an endpoint starts a line drag"
+    );
+    app.update(cx, |s, cx| {
+        s.on_mouse_move(&mouse_move(from_px.0 - 60.0, from_px.1 - 60.0), cx)
+    });
+    app.update(cx, |s, cx| {
+        s.on_mouse_up(&mouse_up(from_px.0 - 60.0, from_px.1 - 60.0), cx)
+    });
+    let size = app.read_with(cx, |s, _| {
+        let f = s.pres.world.frames.get(&sel).unwrap();
+        (f.size.w, f.size.h)
+    });
+    assert!(
+        size.0 < 0 && size.1 < 0,
+        "line should point up-left (negative frame size): {size:?}"
+    );
+}

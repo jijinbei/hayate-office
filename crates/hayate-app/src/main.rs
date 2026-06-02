@@ -125,6 +125,19 @@ struct Drag {
     start_cursor: Point<Pixels>,
 }
 
+/// Dragging one endpoint of a line/arrow. The other endpoint stays fixed, so the line can be
+/// aimed in any direction (the frame's size may go negative). `drag_end` is true when the END
+/// point (`to`) follows the cursor, false for the START (`from`).
+#[derive(Clone)]
+struct LineDrag {
+    entity: Entity,
+    drag_end: bool,
+    /// The fixed endpoint in slide coordinates (EMU).
+    fixed: hayate_ir::geom::PointEmu,
+    /// Frame at the start of the drag, for one undoable commit.
+    start_frame: RectEmu,
+}
+
 struct HayateApp {
     pres: Presentation,
     slide: Entity,
@@ -170,6 +183,8 @@ struct HayateApp {
     left_tab: LeftTab,
     /// Layer being renamed in the Layers panel: (entity, edit buffer).
     renaming: Option<(Entity, String)>,
+    /// Active line endpoint drag, if any.
+    line_drag: Option<LineDrag>,
     /// Active marquee (rubber-band) selection rect in scene px: (start_x, start_y, cur_x, cur_y).
     marquee: Option<(f32, f32, f32, f32)>,
     /// Last window viewport size; used to refit the slide when the window is resized.
@@ -284,6 +299,7 @@ impl HayateApp {
             font_picker: false,
             left_tab: LeftTab::Slides,
             renaming: None,
+            line_drag: None,
             marquee: None,
             last_viewport: None,
         }
