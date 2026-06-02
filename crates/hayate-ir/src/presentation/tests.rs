@@ -113,6 +113,29 @@ fn children_are_ordered() {
 }
 
 #[test]
+fn container_resolvers_match_slide_resolvers() {
+    let (mut p, s1, _) = small_deck();
+    let layout = p.layout_of(s1).unwrap();
+    let master = p.master_of(s1).unwrap();
+    // owning_master resolves for every container kind.
+    assert_eq!(p.owning_master(s1), Some(master));
+    assert_eq!(p.owning_master(layout), Some(master));
+    assert_eq!(p.owning_master(master), Some(master));
+    // container_theme(slide) is the same theme as theme_of(slide).
+    assert!(std::ptr::eq(
+        p.container_theme(s1).unwrap(),
+        p.theme_of(s1).unwrap()
+    ));
+    // Background set on the master is seen by every container in the chain.
+    p.world
+        .backgrounds
+        .insert(master, Fill::Solid(Color::theme(ThemeColorToken::Lt1)));
+    assert!(p.container_background(s1).is_some());
+    assert!(p.container_background(layout).is_some());
+    assert!(p.container_background(master).is_some());
+}
+
+#[test]
 fn inheritance_resolves_to_master_and_theme() {
     let (mut p, s1, _) = small_deck();
     let master = p.master_of(s1).unwrap();

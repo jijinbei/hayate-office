@@ -148,6 +148,49 @@ impl Presentation {
         Some(self.world.slide_info.get(&slide)?.layout)
     }
 
+    /// The master that owns any container: a master is itself, a layout points at its master,
+    /// and a slide resolves via its layout. Used to render/edit layouts and masters directly.
+    pub fn owning_master(&self, container: Entity) -> Option<Entity> {
+        if self.world.master_info.contains_key(&container) {
+            return Some(container);
+        }
+        if let Some(li) = self.world.layout_info.get(&container) {
+            return Some(li.master);
+        }
+        let si = self.world.slide_info.get(&container)?;
+        self.world.layout_info.get(&si.layout).map(|l| l.master)
+    }
+
+    /// Theme in effect for any container (slide/layout/master), via its owning master.
+    /// `container_theme(slide)` equals `theme_of(slide)`.
+    pub fn container_theme(&self, container: Entity) -> Option<&Theme> {
+        let master = self.owning_master(container)?;
+        self.world.master_info.get(&master).map(|m| &m.theme)
+    }
+
+    /// Background resolved for any container, walking its inheritance chain up to the master.
+    pub fn container_background(&self, container: Entity) -> Option<Fill> {
+        if let Some(f) = self.world.backgrounds.get(&container) {
+            return Some(*f);
+        }
+        if let Some(si) = self.world.slide_info.get(&container) {
+            return self.background_of_layout_chain(si.layout);
+        }
+        if let Some(li) = self.world.layout_info.get(&container) {
+            return self.world.backgrounds.get(&li.master).copied();
+        }
+        None // a master only has its own background (already checked above)
+    }
+
+    /// Background fallback from a layout up to its master.
+    fn background_of_layout_chain(&self, layout: Entity) -> Option<Fill> {
+        if let Some(f) = self.world.backgrounds.get(&layout) {
+            return Some(*f);
+        }
+        let master = self.world.layout_info.get(&layout)?.master;
+        self.world.backgrounds.get(&master).copied()
+    }
+
     /// Direct children of `container` that carry a `Placeholder` component, in order.
     pub fn placeholder_shapes(&self, container: Entity) -> Vec<Entity> {
         self.children(container)
