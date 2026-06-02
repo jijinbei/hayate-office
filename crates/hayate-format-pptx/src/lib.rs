@@ -43,12 +43,54 @@ pub fn export_pptx(
 
     let slides = pres.slides();
 
+    // --- Plan embedded image parts ---
+    // Walk every slide's pictures, assigning each unique media key a package image part
+    // (`ppt/media/imageN.<ext>`). The same media key is shared across slides (one part).
+    let mut media_plan: std::collections::BTreeMap<String, MediaPart> =
+        std::collections::BTreeMap::new();
+    let mut media_order: Vec<String> = Vec::new();
+    for slide in &slides {
+        for child in pres.children(*slide) {
+            let pic = match pres.world.pictures.get(&child) {
+                Some(p) => p,
+                None => continue,
+            };
+            if media_plan.contains_key(&pic.media_key) {
+                continue;
+            }
+            let bytes = match pres.get_media(&pic.media_key) {
+                Some(b) => b,
+                None => continue,
+            };
+            let ext = image_ext(bytes);
+            let n = media_plan.len() + 1;
+            media_plan.insert(
+                pic.media_key.clone(),
+                MediaPart {
+                    part: format!("ppt/media/image{n}.{ext}"),
+                    ext,
+                },
+            );
+            media_order.push(pic.media_key.clone());
+        }
+    }
+    // The distinct image extensions needing a `<Default>` content type entry.
+    let mut image_exts: Vec<&'static str> = media_plan.values().map(|m| m.ext).collect();
+    image_exts.sort_unstable();
+    image_exts.dedup();
+
     // --- [Content_Types].xml ---
     let mut ct = String::new();
     ct.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     ct.push_str(r#"<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">"#);
     ct.push_str(r#"<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>"#);
     ct.push_str(r#"<Default Extension="xml" ContentType="application/xml"/>"#);
+    for ext in &image_exts {
+        ct.push_str(&format!(
+            r#"<Default Extension="{ext}" ContentType="{}"/>"#,
+            image_content_type(ext)
+        ));
+    }
     ct.push_str(r#"<Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>"#);
     ct.push_str(r#"<Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>"#);
     ct.push_str(r#"<Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>"#);
@@ -60,6 +102,13 @@ pub fn export_pptx(
     }
     ct.push_str("</Types>");
     write_part(&mut zip, opts, "[Content_Types].xml", &ct)?;
+
+    // --- ppt/media/imageN.<ext> (embedded image bytes) ---
+    for key in &media_order {
+        if let (Some(part), Some(bytes)) = (media_plan.get(key), pres.get_media(key)) {
+            write_binary_part(&mut zip, opts, &part.part, bytes)?;
+        }
+    }
 
     // --- _rels/.rels (package -> presentation) ---
     let rels = format!(
@@ -155,15 +204,27 @@ pub fn export_pptx(
     for (idx, slide) in slides.iter().enumerate() {
         let n = idx + 1;
         let slide_theme = pres.theme_of(*slide).cloned().unwrap_or_default();
-        let xml = slide_xml(pres, *slide, &slide_theme);
+        // Image relationships for this slide, collected as the slide xml is built. Each entry is
+        // (rel id, target path relative to the slide part).
+        let mut image_rels: Vec<(String, String)> = Vec::new();
+        let xml = slide_xml(pres, *slide, &slide_theme, &media_plan, &mut image_rels);
         write_part(&mut zip, opts, &format!("ppt/slides/slide{n}.xml"), &xml)?;
 
-        let srels = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/></Relationships>"#;
+        let mut srels = String::new();
+        srels.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
+        srels.push_str(r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">"#);
+        srels.push_str(r#"<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" Target="../slideLayouts/slideLayout1.xml"/>"#);
+        for (rid, target) in &image_rels {
+            srels.push_str(&format!(
+                r#"<Relationship Id="{rid}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="{target}"/>"#
+            ));
+        }
+        srels.push_str("</Relationships>");
         write_part(
             &mut zip,
             opts,
             &format!("ppt/slides/_rels/slide{n}.xml.rels"),
-            srels,
+            &srels,
         )?;
     }
 
@@ -195,6 +256,14 @@ pub fn import_pptx(
         Some(buf)
     };
 
+    // Read a named entry into raw bytes, if it exists (for embedded media).
+    let read_bytes = |zip: &mut zip::ZipArchive<std::fs::File>, name: &str| -> Option<Vec<u8>> {
+        let mut e = zip.by_name(name).ok()?;
+        let mut buf = Vec::new();
+        e.read_to_end(&mut buf).ok()?;
+        Some(buf)
+    };
+
     // --- presentation.xml: slide size + ordered slide relationship ids ---
     let pres_xml = read_entry(&mut zip, "ppt/presentation.xml")
         .ok_or("missing ppt/presentation.xml")?;
@@ -223,8 +292,26 @@ pub fn import_pptx(
             Some(s) => s,
             None => continue,
         };
+
+        // Read the slide's own rels (e.g. ppt/slides/_rels/slide1.xml.rels) so picture blip
+        // embeds can be resolved to media parts, and pre-read the referenced image bytes
+        // (keyed by relationship id) before parsing the slide xml.
+        let rels_part = slide_rels_part(&part);
+        let slide_rels = read_entry(&mut zip, &rels_part)
+            .map(|x| parse_rels(&x))
+            .unwrap_or_default();
+        let mut media_by_rid: std::collections::BTreeMap<String, Vec<u8>> =
+            std::collections::BTreeMap::new();
+        for (rel_id, rel_target) in &slide_rels {
+            // Image targets are relative to the slide part's directory (e.g. ../media/x.png).
+            let media_part = resolve_relative(&part, rel_target);
+            if let Some(bytes) = read_bytes(&mut zip, &media_part) {
+                media_by_rid.insert(rel_id.clone(), bytes);
+            }
+        }
+
         let slide = pres.add_slide(layout);
-        parse_slide_into(&slide_xml, &mut pres, slide);
+        parse_slide_into(&slide_xml, &mut pres, slide, &media_by_rid);
     }
 
     Ok(pres)
@@ -316,8 +403,49 @@ fn normalize_part_path(target: &str) -> String {
     }
 }
 
+/// The `.rels` part path for a part, e.g. `ppt/slides/slide1.xml` ->
+/// `ppt/slides/_rels/slide1.xml.rels`.
+fn slide_rels_part(part: &str) -> String {
+    match part.rsplit_once('/') {
+        Some((dir, file)) => format!("{dir}/_rels/{file}.rels"),
+        None => format!("_rels/{part}.rels"),
+    }
+}
+
+/// Resolve a relationship `Target` against the directory of `from_part`, collapsing `../`
+/// segments. E.g. `from_part = "ppt/slides/slide1.xml"`, `target = "../media/image1.png"` ->
+/// `"ppt/media/image1.png"`.
+fn resolve_relative(from_part: &str, target: &str) -> String {
+    if let Some(abs) = target.strip_prefix('/') {
+        return abs.to_string();
+    }
+    let mut base: Vec<&str> = match from_part.rsplit_once('/') {
+        Some((dir, _)) => dir.split('/').collect(),
+        None => Vec::new(),
+    };
+    let mut t = target;
+    while let Some(rest) = t.strip_prefix("../") {
+        base.pop();
+        t = rest;
+    }
+    t = t.strip_prefix("./").unwrap_or(t);
+    if base.is_empty() {
+        t.to_string()
+    } else {
+        format!("{}/{}", base.join("/"), t)
+    }
+}
+
 /// Parse one `ppt/slides/slideN.xml` and add its autoshapes to `pres` under `slide`.
-fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
+///
+/// `media_by_rid` maps a slide relationship id to the bytes of the embedded image part it
+/// targets, so `<p:pic>` blip embeds can be reconstructed into picture components.
+fn parse_slide_into(
+    xml: &str,
+    pres: &mut Presentation,
+    slide: Entity,
+    media_by_rid: &std::collections::BTreeMap<String, Vec<u8>>,
+) {
     use quick_xml::events::Event;
     use quick_xml::reader::Reader;
 
@@ -329,7 +457,11 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
         off: Option<(Emu, Emu)>,
         ext: Option<(Emu, Emu)>,
         rotation: Option<f32>,
-        geometry: Option<Geometry>,
+        /// The `prst` preset name from `<a:prstGeom>`, resolved to a `Geometry` at commit time
+        /// (so the round-rect `adj` and the frame are both available).
+        preset: Option<String>,
+        /// The `<a:gd name="adj" fmla="val N">` value, if present, for round-rect radius.
+        adj: Option<i64>,
         fill: Option<Color>,
         paras: Vec<ParsedPara>,
         /// Run properties accumulated from the current `<a:rPr>`, applied to the next `<a:t>`.
@@ -341,7 +473,8 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
                 off: None,
                 ext: None,
                 rotation: None,
-                geometry: None,
+                preset: None,
+                adj: None,
                 fill: None,
                 paras: Vec::new(),
                 pending: ParsedRun::default(),
@@ -349,13 +482,55 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
         }
     }
 
+    // State accumulated for the picture currently being parsed (between <p:pic> and </p:pic>).
+    #[derive(Default)]
+    struct PicState {
+        off: Option<(Emu, Emu)>,
+        ext: Option<(Emu, Emu)>,
+        rotation: Option<f32>,
+        /// The relationship id from `<a:blip r:embed="rIdN"/>`.
+        embed: Option<String>,
+    }
+
     let mut state: Option<ShapeState> = None;
+    let mut pic: Option<PicState> = None;
     // Whether we are inside a <a:t> element (so the next Text event is run text).
     let mut in_text = false;
     // Track whether we are inside a solidFill, so a nested srgbClr is taken as a color.
     let mut solidfill_depth: i32 = 0;
     // Whether we are inside a run's <a:rPr> (so a nested solidFill is the text color).
     let mut in_rpr = false;
+
+    // Apply an element's geometry/blip attributes to the current picture state (if any).
+    fn apply_pic_attrs(pic: &mut Option<PicState>, name: &str, e: &quick_xml::events::BytesStart) {
+        let p = match pic.as_mut() {
+            Some(p) => p,
+            None => return,
+        };
+        match name {
+            "off" => {
+                if let (Some(x), Some(y)) = (attr_i64(e, b"x"), attr_i64(e, b"y")) {
+                    p.off = Some((x, y));
+                }
+            }
+            "ext" => {
+                if let (Some(cx), Some(cy)) = (attr_i64(e, b"cx"), attr_i64(e, b"cy")) {
+                    p.ext = Some((cx, cy));
+                }
+            }
+            "xfrm" => {
+                if let Some(rot) = attr_i64(e, b"rot") {
+                    p.rotation = Some(rot as f32 / 60_000.0);
+                }
+            }
+            "blip" => {
+                if let Some(id) = attr_str(e, b"r:embed") {
+                    p.embed = Some(id);
+                }
+            }
+            _ => {}
+        }
+    }
 
     // Handle the attributes of an element start (shared by Start and Empty events). The
     // depth-tracking elements (`sp`, `solidFill`, `t`, `rPr`) are handled by the caller, since
@@ -390,7 +565,19 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
             }
             "prstGeom" => {
                 if let Some(prst) = attr_str(e, b"prst") {
-                    s.geometry = preset_to_geometry(&prst);
+                    s.preset = Some(prst);
+                }
+            }
+            "gd" => {
+                // Round-rect corner radius guide: <a:gd name="adj" fmla="val N"/>.
+                if attr_str(e, b"name").as_deref() == Some("adj") {
+                    if let Some(fmla) = attr_str(e, b"fmla") {
+                        if let Some(val) = fmla.strip_prefix("val ") {
+                            if let Ok(n) = val.trim().parse::<i64>() {
+                                s.adj = Some(n);
+                            }
+                        }
+                    }
                 }
             }
             "pPr" => {
@@ -430,6 +617,7 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
                 let name = local_name(e.name().as_ref());
                 match name.as_str() {
                     "sp" => state = Some(ShapeState::new()),
+                    "pic" => pic = Some(PicState::default()),
                     "solidFill" => solidfill_depth += 1,
                     "t" => in_text = true,
                     "rPr" => {
@@ -444,13 +632,17 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
                             });
                         }
                     }
-                    other => apply_attrs(&mut state, solidfill_depth, in_rpr, other, &e),
+                    other => {
+                        apply_attrs(&mut state, solidfill_depth, in_rpr, other, &e);
+                        apply_pic_attrs(&mut pic, other, &e);
+                    }
                 }
             }
             Ok(Event::Empty(e)) => {
                 // Self-closing variants, e.g. <a:off .../>, <a:srgbClr .../>, <a:rPr .../>.
                 let name = local_name(e.name().as_ref());
                 apply_attrs(&mut state, solidfill_depth, in_rpr, &name, &e);
+                apply_pic_attrs(&mut pic, &name, &e);
             }
             Ok(Event::Text(t)) if in_text => {
                 if let (Some(s), Ok(txt)) = (state.as_mut(), t.unescape()) {
@@ -474,7 +666,16 @@ fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
                     "solidFill" => solidfill_depth = solidfill_depth.saturating_sub(1),
                     "sp" => {
                         if let Some(s) = state.take() {
-                            commit_shape(pres, slide, s.off, s.ext, s.rotation, s.geometry, s.fill, s.paras);
+                            // Resolve geometry now that both the preset and frame are known.
+                            let geometry = s.preset.as_deref().and_then(|prst| {
+                                preset_to_geometry(prst, s.adj, s.off.zip(s.ext))
+                            });
+                            commit_shape(pres, slide, s.off, s.ext, s.rotation, geometry, s.fill, s.paras);
+                        }
+                    }
+                    "pic" => {
+                        if let Some(p) = pic.take() {
+                            commit_picture(pres, slide, p.off, p.ext, p.rotation, p.embed.as_deref(), media_by_rid);
                         }
                     }
                     _ => {}
@@ -503,6 +704,48 @@ struct ParsedRun {
 struct ParsedPara {
     align: hayate_ir::text::HAlign,
     runs: Vec<ParsedRun>,
+}
+
+/// Build a picture entity under `slide` from accumulated `<p:pic>` parse state.
+///
+/// Resolves the blip embed (`embed`) to image bytes via `media_by_rid`, stores them in the
+/// presentation media store, and attaches a `PictureRef` plus the picture's frame.
+fn commit_picture(
+    pres: &mut Presentation,
+    slide: Entity,
+    off: Option<(Emu, Emu)>,
+    ext: Option<(Emu, Emu)>,
+    rotation: Option<f32>,
+    embed: Option<&str>,
+    media_by_rid: &std::collections::BTreeMap<String, Vec<u8>>,
+) {
+    use hayate_ir::geom::SizeEmu;
+    use hayate_ir::image::PictureRef;
+
+    let bytes = match embed.and_then(|rid| media_by_rid.get(rid)) {
+        Some(b) => b.clone(),
+        None => return, // no resolvable image; skip
+    };
+    let key = pres.add_media(bytes);
+
+    let e = pres.add_shape(slide);
+    if let (Some((x, y)), Some((cx, cy))) = (off, ext) {
+        pres.world.frames.insert(e, RectEmu::new(x, y, cx, cy));
+    }
+    if let Some(r) = rotation {
+        pres.world.rotations.insert(e, r);
+    }
+    // The natural size is not recorded in the package; fall back to the frame extent.
+    let natural = ext
+        .map(|(cx, cy)| SizeEmu::new(cx, cy))
+        .unwrap_or_else(|| SizeEmu::new(0, 0));
+    pres.world.pictures.insert(
+        e,
+        PictureRef {
+            media_key: key,
+            natural,
+        },
+    );
 }
 
 /// Build a shape entity under `slide` from accumulated parse state.
@@ -584,10 +827,20 @@ fn algn_to_halign(algn: &str) -> hayate_ir::text::HAlign {
 }
 
 /// Map an OOXML `prst` preset name to a `Geometry` (only the shapes we export).
-fn preset_to_geometry(prst: &str) -> Option<Geometry> {
+///
+/// For `roundRect`, the corner radius is reconstructed from the `adj` guide (`adj`) relative to
+/// the shape frame (`off_ext`), inverting the value emitted on export.
+fn preset_to_geometry(
+    prst: &str,
+    adj: Option<i64>,
+    off_ext: Option<((Emu, Emu), (Emu, Emu))>,
+) -> Option<Geometry> {
     match prst {
         "rect" => Some(Geometry::Rect),
-        "roundRect" => Some(Geometry::RoundRect { radius: 0 }),
+        "roundRect" => {
+            let radius = round_rect_radius(adj.unwrap_or(0), off_ext);
+            Some(Geometry::RoundRect { radius })
+        }
         "ellipse" => Some(Geometry::Ellipse),
         _ => None,
     }
@@ -641,8 +894,57 @@ fn write_part<W: Write + std::io::Seek>(
     Ok(())
 }
 
+/// Write one ZIP entry from raw bytes (used for embedded media parts).
+fn write_binary_part<W: Write + std::io::Seek>(
+    zip: &mut ZipWriter<W>,
+    opts: SimpleFileOptions,
+    name: &str,
+    content: &[u8],
+) -> Result<(), Box<dyn std::error::Error>> {
+    zip.start_file(name, opts)?;
+    zip.write_all(content)?;
+    Ok(())
+}
+
+/// A planned package image part for an embedded media key.
+struct MediaPart {
+    /// Full package part path, e.g. `ppt/media/image1.png`.
+    part: String,
+    /// File extension (`png` / `jpeg`), used for the content-type `<Default>` entry.
+    ext: &'static str,
+}
+
+/// Guess an image file extension from the leading magic bytes. Defaults to `png`.
+fn image_ext(bytes: &[u8]) -> &'static str {
+    if bytes.starts_with(&[0x89, b'P', b'N', b'G']) {
+        "png"
+    } else if bytes.starts_with(&[0xFF, 0xD8]) {
+        "jpeg"
+    } else {
+        "png"
+    }
+}
+
+/// The OOXML content type for an image extension produced by [`image_ext`].
+fn image_content_type(ext: &str) -> &'static str {
+    match ext {
+        "jpeg" | "jpg" => "image/jpeg",
+        _ => "image/png",
+    }
+}
+
 /// Build a slide part (`ppt/slides/slideN.xml`).
-fn slide_xml(pres: &Presentation, slide: Entity, theme: &Theme) -> String {
+///
+/// `media_plan` maps a picture's media key to its package image part; any pictures encountered
+/// are emitted as `<p:pic>` and their slide-relative image relationships are pushed into
+/// `image_rels` as `(rel id, target)` for the caller to write into the slide `.rels`.
+fn slide_xml(
+    pres: &Presentation,
+    slide: Entity,
+    theme: &Theme,
+    media_plan: &std::collections::BTreeMap<String, MediaPart>,
+    image_rels: &mut Vec<(String, String)>,
+) -> String {
     let mut s = String::new();
     s.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     s.push_str(r#"<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">"#);
@@ -659,6 +961,45 @@ fn slide_xml(pres: &Presentation, slide: Entity, theme: &Theme) -> String {
             Some(f) => *f,
             None => continue, // shapes without a frame have no position; skip
         };
+        let rotation = pres.world.rotations.get(&child).copied().unwrap_or(0.0);
+
+        // Pictures are emitted as `<p:pic>` referencing an embedded image part via a slide rel.
+        if let Some(pic) = pres.world.pictures.get(&child) {
+            if let Some(mp) = media_plan.get(&pic.media_key) {
+                let rid = format!("rId{}", image_rels.len() + 2); // rId1 is the layout
+                // The slide-relative target: ppt/media/imageN.ext -> ../media/imageN.ext.
+                let target = mp.part.strip_prefix("ppt/").map(|t| format!("../{t}"))
+                    .unwrap_or_else(|| mp.part.clone());
+                image_rels.push((rid.clone(), target));
+                let name = pres
+                    .world
+                    .names
+                    .get(&child)
+                    .cloned()
+                    .unwrap_or_else(|| format!("Picture {shape_id}"));
+                s.push_str("<p:pic>");
+                s.push_str("<p:nvPicPr>");
+                s.push_str(&format!(
+                    r#"<p:cNvPr id="{shape_id}" name="{}"/>"#,
+                    escape_xml(&name)
+                ));
+                s.push_str(r#"<p:cNvPicPr/>"#);
+                s.push_str("<p:nvPr/>");
+                s.push_str("</p:nvPicPr>");
+                s.push_str("<p:blipFill>");
+                s.push_str(&format!(r#"<a:blip r:embed="{rid}"/>"#));
+                s.push_str(r#"<a:stretch><a:fillRect/></a:stretch>"#);
+                s.push_str("</p:blipFill>");
+                s.push_str("<p:spPr>");
+                s.push_str(&xfrm_xml(frame, rotation));
+                s.push_str(r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#);
+                s.push_str("</p:spPr>");
+                s.push_str("</p:pic>");
+                shape_id += 1;
+                continue;
+            }
+        }
+
         let text = pres.world.texts.get(&child);
         let geom = pres.world.geometries.get(&child);
         // Only emit shapes that are either vector geometry or text boxes.
@@ -666,7 +1007,6 @@ fn slide_xml(pres: &Presentation, slide: Entity, theme: &Theme) -> String {
             continue;
         }
 
-        let rotation = pres.world.rotations.get(&child).copied().unwrap_or(0.0);
         let fill = pres.world.fills.get(&child);
         let name = pres
             .world
@@ -700,8 +1040,17 @@ fn slide_xml(pres: &Presentation, slide: Entity, theme: &Theme) -> String {
             Some(Geometry::Ellipse) => "ellipse",
             None => "rect",
         };
+        // For a round rect, emit the corner radius as the `adj` guide so it round-trips.
+        // OOXML expresses `adj` in thousandths of the shape's smaller dimension.
+        let av_lst = match geom {
+            Some(Geometry::RoundRect { radius }) => {
+                let adj = round_rect_adj(*radius, frame);
+                format!(r#"<a:avLst><a:gd name="adj" fmla="val {adj}"/></a:avLst>"#)
+            }
+            _ => "<a:avLst/>".to_string(),
+        };
         s.push_str(&format!(
-            r#"<a:prstGeom prst="{preset}"><a:avLst/></a:prstGeom>"#
+            r#"<a:prstGeom prst="{preset}">{av_lst}</a:prstGeom>"#
         ));
         // Solid fill (resolved to literal RGB) when present.
         if let Some(Fill::Solid(color)) = fill {
@@ -729,6 +1078,33 @@ fn slide_xml(pres: &Presentation, slide: Entity, theme: &Theme) -> String {
     s.push_str(r#"<p:clrMapOvr><a:overrideClrMapping/></p:clrMapOvr>"#);
     s.push_str("</p:sld>");
     s
+}
+
+/// Compute the OOXML `roundRect` `adj` guide value from a corner radius and the shape frame.
+///
+/// `adj` is expressed in thousandths of the shape's smaller dimension; PowerPoint clamps it to
+/// `[0, 50000]` (50000 = fully rounded). Returns 0 when the smaller dimension is non-positive.
+fn round_rect_adj(radius: Emu, frame: RectEmu) -> i64 {
+    let min_dim = frame.size.w.max(0).min(frame.size.h.max(0));
+    if min_dim <= 0 {
+        return 0;
+    }
+    let adj = radius.saturating_mul(100_000) / min_dim;
+    adj.clamp(0, 50_000)
+}
+
+/// Reconstruct a corner radius (EMU) from a `roundRect` `adj` guide value and the shape frame,
+/// inverting [`round_rect_adj`].
+fn round_rect_radius(adj: i64, off_ext: Option<((Emu, Emu), (Emu, Emu))>) -> Emu {
+    let ((_, _), (cx, cy)) = match off_ext {
+        Some(v) => v,
+        None => return 0,
+    };
+    let min_dim = cx.max(0).min(cy.max(0));
+    if min_dim <= 0 {
+        return 0;
+    }
+    adj.max(0).saturating_mul(min_dim) / 100_000
 }
 
 /// `<a:xfrm>` with offset, extent and optional rotation (OOXML rot is 60000ths of a degree).
@@ -1163,6 +1539,108 @@ mod tests {
                 .unwrap_or(false)),
             "text should round-trip"
         );
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn round_rect_radius_roundtrips() {
+        // A round rect whose corner radius is a fraction of its smaller dimension should
+        // survive export+import within the EMU<->adj quantization tolerance.
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        let slide = p.add_slide(layout);
+
+        // Frame: 4,000,000 x 2,000,000 EMU. min(w,h) = 2,000,000. radius = 500,000 -> adj 25000.
+        let frame = RectEmu::new(914_400, 457_200, 4_000_000, 2_000_000);
+        let radius: i64 = 500_000;
+        let rr = p.add_shape(slide);
+        p.world.frames.insert(rr, frame);
+        p.world
+            .geometries
+            .insert(rr, Geometry::RoundRect { radius });
+        p.world
+            .fills
+            .insert(rr, Fill::Solid(Color::literal(Rgba::rgb(0x10, 0x20, 0x30))));
+
+        let path = unique_temp_path("roundrect");
+        let _ = std::fs::remove_file(&path);
+        export_pptx(&p, &path).expect("export should succeed");
+        let imported = import_pptx(&path).expect("import should succeed");
+
+        let first = imported.slides()[0];
+        let got = imported
+            .children(first)
+            .iter()
+            .find_map(|c| match imported.world.geometries.get(c) {
+                Some(Geometry::RoundRect { radius }) => Some(*radius),
+                _ => None,
+            })
+            .expect("expected a round-rect geometry after import");
+
+        // Tolerance: adj has 1/100000 granularity of min_dim => up to ~20 EMU here.
+        let tol = 2_000_000 / 100_000 + 1;
+        assert!(
+            (got - radius).abs() <= tol,
+            "round-rect radius should round-trip: got {got}, expected ~{radius}"
+        );
+        assert!(got > 0, "radius must not collapse to zero");
+
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn embedded_image_roundtrips() {
+        // A deck with a single embedded PNG picture should round-trip: after import there is a
+        // shape carrying a picture whose media bytes match the original.
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        let slide = p.add_slide(layout);
+
+        // A tiny fake PNG: just needs the PNG magic so the exporter picks the png extension.
+        let png_bytes: Vec<u8> = vec![
+            0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 1, 2, 3, 4, 5, 6, 7, 8,
+        ];
+        let key = p.add_media(png_bytes.clone());
+
+        let frame = RectEmu::new(914_400, 457_200, 2_000_000, 1_500_000);
+        let pic = p.add_shape(slide);
+        p.world.frames.insert(pic, frame);
+        p.world.pictures.insert(
+            pic,
+            hayate_ir::image::PictureRef {
+                media_key: key,
+                natural: hayate_ir::geom::SizeEmu::new(2_000_000, 1_500_000),
+            },
+        );
+
+        let path = unique_temp_path("image");
+        let _ = std::fs::remove_file(&path);
+        export_pptx(&p, &path).expect("export should succeed");
+        let imported = import_pptx(&path).expect("import should succeed");
+
+        let first = imported.slides()[0];
+        let pic_child = imported
+            .children(first)
+            .into_iter()
+            .find(|c| imported.world.pictures.contains_key(c))
+            .expect("expected a shape with a picture after import");
+
+        // The picture's frame round-trips.
+        assert_eq!(
+            imported.world.frames.get(&pic_child).copied(),
+            Some(frame),
+            "picture frame should round-trip"
+        );
+
+        // The media bytes resolve and match the original.
+        let pref = imported.world.pictures.get(&pic_child).unwrap();
+        let got = imported
+            .get_media(&pref.media_key)
+            .expect("imported media bytes should exist");
+        assert_eq!(got, &png_bytes, "embedded image bytes should round-trip");
 
         let _ = std::fs::remove_file(&path);
     }
