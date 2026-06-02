@@ -176,29 +176,24 @@ pub fn duplicate(world: &World, src: Entity, new_id: Entity) -> Transaction {
 /// paragraphs/runs, a minimal default-run paragraph carrying `text` is inserted. If the
 /// entity has no `TextBody` at all, a new one is created. Always emits `SetComponent(Text)`.
 pub fn set_run_text(world: &World, e: Entity, text: String) -> Transaction {
-    let new_body = match world.texts.get(&e) {
-        Some(existing) => {
-            let mut body = existing.clone();
-            if let Some(para) = body.paragraphs.first_mut() {
-                if let Some(run) = para.runs.first_mut() {
-                    // Preserve formatting; replace only the text.
-                    run.text = text;
-                } else {
-                    // Paragraph with no runs: give it a minimal default run.
-                    para.runs.push(default_run(text));
-                }
-            } else {
-                // Body with no paragraphs: create one minimal paragraph.
-                body.paragraphs
-                    .push(Paragraph::new(vec![default_run(text)]));
-            }
-            body
-        }
-        // No TextBody at all: create a fresh one.
-        None => TextBody {
-            paragraphs: vec![Paragraph::new(vec![default_run(text)])],
-            autofit: false,
-        },
+    // The in-canvas editor treats a text box as a single string buffer, so the resulting body
+    // is a single paragraph with a single run. Any extra runs/paragraphs are collapsed — this
+    // also prevents stale leftover runs from rendering alongside the edited text. The first
+    // run's character formatting and the first paragraph's alignment are preserved.
+    let existing = world.texts.get(&e);
+    let mut run = existing
+        .and_then(|b| b.paragraphs.first())
+        .and_then(|p| p.runs.first())
+        .cloned()
+        .unwrap_or_else(|| default_run(String::new()));
+    run.text = text;
+    let mut para = Paragraph::new(vec![run]);
+    if let Some(first) = existing.and_then(|b| b.paragraphs.first()) {
+        para.align = first.align;
+    }
+    let new_body = TextBody {
+        paragraphs: vec![para],
+        autofit: existing.map(|b| b.autofit).unwrap_or(false),
     };
     Transaction::new(
         "set run text",

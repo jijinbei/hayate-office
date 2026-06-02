@@ -84,19 +84,17 @@ pub(crate) fn paint_text(
         if runs.is_empty() {
             continue;
         }
-        // Pass the text box width so Center/Right alignment has a box to align within.
-        let wrap_width = px(tb.bounds.w);
-        let shaped = window.text_system().shape_line(
-            SharedString::from(text),
-            font_size,
-            &runs,
-            Some(wrap_width),
-        );
+        // Shape at natural width (force_width = None; passing the box width here would stretch
+        // the glyphs across the box). Alignment uses the box width via paint's `align_width`.
+        let shaped =
+            window
+                .text_system()
+                .shape_line(SharedString::from(text), font_size, &runs, None);
         let _ = shaped.paint(
             point(left, top),
             line_height,
             align,
-            Some(wrap_width),
+            Some(px(tb.bounds.w)),
             window,
             cx,
         );
