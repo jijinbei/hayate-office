@@ -16,7 +16,7 @@ use crate::util::{
 use crate::{pt_to_emu, FieldEdit, FieldKind, HayateApp, PaletteState, TextEdit};
 
 use hayate_ir::geom::RectEmu;
-use hayate_ir::world::{CompValue, Entity};
+use hayate_ir::world::{CompKind, CompValue, Entity};
 use hayate_model::{Operation, Transaction};
 
 impl HayateApp {
@@ -168,6 +168,50 @@ impl HayateApp {
     }
 
     /// Handle a key while a numeric field is being edited (digits / . / -).
+    /// Handle a key while renaming a layer. Enter commits the name (empty clears it back to the
+    /// auto label), Escape cancels. Character input is taken directly (no IME) since there is no
+    /// platform input handler over the Layers panel.
+    pub(crate) fn rename_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        let key = ev.keystroke.key.clone();
+        match key.as_str() {
+            "escape" => self.renaming = None,
+            "enter" => {
+                if let Some((e, buf)) = self.renaming.take() {
+                    let trimmed = buf.trim().to_string();
+                    let op = if trimmed.is_empty() {
+                        Operation::RemoveComponent {
+                            entity: e,
+                            kind: CompKind::Name,
+                        }
+                    } else {
+                        Operation::SetComponent {
+                            entity: e,
+                            value: CompValue::Name(trimmed),
+                        }
+                    };
+                    self.commit_tx(Transaction::new("rename layer", vec![op]));
+                }
+            }
+            "backspace" => {
+                if let Some((_, buf)) = self.renaming.as_mut() {
+                    buf.pop();
+                }
+            }
+            "space" => {
+                if let Some((_, buf)) = self.renaming.as_mut() {
+                    buf.push(' ');
+                }
+            }
+            s if s.chars().count() == 1 => {
+                if let Some((_, buf)) = self.renaming.as_mut() {
+                    buf.push_str(s);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
     pub(crate) fn field_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.clone();
         match key.as_str() {
@@ -303,6 +347,10 @@ impl HayateApp {
         if self.context_menu.is_some() && ev.keystroke.key.as_str() == "escape" {
             self.context_menu = None;
             cx.notify();
+            return;
+        }
+        if self.renaming.is_some() {
+            self.rename_key(ev, cx);
             return;
         }
         if self.palette.is_some() {

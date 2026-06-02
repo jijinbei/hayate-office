@@ -75,13 +75,13 @@ impl HayateApp {
                     // Members of this group, front-to-back, indented under the header.
                     for &m in &members {
                         let lbl = labels.get(&m).cloned().unwrap_or_default();
-                        panel = panel.child(self.layer_row(lbl, m, index, true, cx));
+                        panel = panel.child(self.layer_row(lbl, m, index, 1, cx));
                         index += 1;
                     }
                 }
                 None => {
                     let lbl = labels.get(&e).cloned().unwrap_or_default();
-                    panel = panel.child(self.layer_row(lbl, e, index, false, cx));
+                    panel = panel.child(self.layer_row(lbl, e, index, 0, cx));
                     index += 1;
                 }
             }
@@ -90,41 +90,60 @@ impl HayateApp {
         panel.into_any_element()
     }
 
-    /// One clickable layer row for entity `e` with the given `label`. `indented` nests it
-    /// under a group header.
+    /// One clickable layer row for entity `e` with the given `label`. `depth` indents it under
+    /// group headers. Single-click selects (expanding to the group); double-click renames it.
     fn layer_row(
         &self,
         label: String,
         e: Entity,
         index: usize,
-        indented: bool,
+        depth: usize,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let selected = self.selection == Some(e) || self.also.contains(&e);
+        let editing = matches!(&self.renaming, Some((re, _)) if *re == e);
+        let initial = label.clone();
+
+        let shown = if editing {
+            let buf = self
+                .renaming
+                .as_ref()
+                .map(|(_, b)| b.clone())
+                .unwrap_or_default();
+            format!("{buf}|")
+        } else {
+            label
+        };
 
         let mut row = div()
             .id(("layer", index))
-            .px_2()
             .py_1()
+            .pr_2()
+            // Indentation conveys nesting depth (each level adds a step).
+            .pl(px(8.0 + depth as f32 * 16.0))
             .text_sm()
             .rounded_md()
             .hover(|s| s.bg(rgb(0x2f2f2f)))
-            .child(label);
+            .child(shown);
 
-        if indented {
-            row = row.pl_3();
-        }
-        if selected {
+        if editing {
+            row = row.bg(rgb(0x1f3a5f));
+        } else if selected {
             row = row.bg(rgb(crate::SELECTION));
         }
 
-        row.on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+        row.on_click(cx.listener(move |this, ev: &ClickEvent, window, cx| {
             window.focus(&this.focus, cx);
-            this.selection = Some(e);
-            this.also = group_members(&this.pres.world, e)
-                .into_iter()
-                .filter(|&m| m != e)
-                .collect();
+            if ev.click_count() >= 2 {
+                // Double-click: start renaming this layer, pre-filled with its current name.
+                this.renaming = Some((e, initial.clone()));
+            } else {
+                this.selection = Some(e);
+                this.also = group_members(&this.pres.world, e)
+                    .into_iter()
+                    .filter(|&m| m != e)
+                    .collect();
+            }
             cx.notify();
         }))
         .into_any_element()
@@ -136,6 +155,13 @@ impl HayateApp {
         let mut labels = HashMap::new();
         let (mut rect, mut ell, mut img, mut txt) = (0u32, 0u32, 0u32, 0u32);
         for &e in children {
+            // A user-set name (via the Layers panel) always wins.
+            if let Some(name) = self.pres.world.names.get(&e) {
+                if !name.trim().is_empty() {
+                    labels.insert(e, name.clone());
+                    continue;
+                }
+            }
             let label = if let Some(body) = self.pres.world.texts.get(&e) {
                 txt += 1;
                 let content = body

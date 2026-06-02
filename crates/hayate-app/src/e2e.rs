@@ -414,3 +414,64 @@ fn menu_open_click_keeps_selection(cx: &mut TestAppContext) {
     });
     assert!(grouped, "Group should succeed after the menu-dismiss click");
 }
+
+/// A mouse-down with an explicit click count (1 = single, 2 = double).
+fn mouse_n(button: MouseButton, x: f32, y: f32, clicks: usize) -> MouseDownEvent {
+    MouseDownEvent {
+        button,
+        position: point(px(x), px(y)),
+        click_count: clicks,
+        ..Default::default()
+    }
+}
+
+#[gpui::test]
+fn rename_layer_sets_name(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let r = app.read_with(cx, |s, _| s.pres.children(s.slide)[1]);
+    // Start renaming and type "box", then commit.
+    app.update(cx, |s, _| s.renaming = Some((r, String::new())));
+    for ch in ["b", "o", "x"] {
+        app.update(cx, |s, cx| s.on_key_down(&keydown(ch), cx));
+    }
+    app.update(cx, |s, cx| s.on_key_down(&keydown("enter"), cx));
+    let name = app.read_with(cx, |s, _| s.pres.world.names.get(&r).cloned());
+    assert_eq!(
+        name.as_deref(),
+        Some("box"),
+        "rename should set the name component"
+    );
+    assert!(
+        app.read_with(cx, |s, _| s.renaming.is_none()),
+        "rename should end on Enter"
+    );
+}
+
+#[gpui::test]
+fn double_click_drills_into_group(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let (a, b) = app.read_with(cx, |s, _| {
+        let k = s.pres.children(s.slide);
+        (k[1], k[2])
+    });
+    app.update(cx, |s, _| {
+        s.selection = Some(a);
+        s.also = vec![b];
+        s.group_selection();
+    });
+    // Double-click member `a`: selection becomes just `a` (drilled into the group).
+    let (x, y) = app.read_with(cx, |s, _| {
+        let n = s.scene.nodes.iter().find(|n| n.source == Some(a)).unwrap();
+        let r = prim_bounds(&n.prim);
+        (r.x + r.w * 0.5, r.y + r.h * 0.5)
+    });
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse_n(MouseButton::Left, x, y, 2), cx)
+    });
+    let (sel, also_len) = app.read_with(cx, |s, _| (s.selection, s.also.len()));
+    assert_eq!(sel, Some(a), "double-click should select just the member");
+    assert_eq!(
+        also_len, 0,
+        "double-click should drop the rest of the group"
+    );
+}

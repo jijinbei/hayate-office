@@ -168,6 +168,8 @@ struct HayateApp {
     font_picker: bool,
     /// Which list the left panel shows (slide thumbnails vs. layers).
     left_tab: LeftTab,
+    /// Layer being renamed in the Layers panel: (entity, edit buffer).
+    renaming: Option<(Entity, String)>,
     /// Active marquee (rubber-band) selection rect in scene px: (start_x, start_y, cur_x, cur_y).
     marquee: Option<(f32, f32, f32, f32)>,
     /// Last window viewport size; used to refit the slide when the window is resized.
@@ -280,6 +282,7 @@ impl HayateApp {
             context_menu: None,
             font_picker: false,
             left_tab: LeftTab::Slides,
+            renaming: None,
             marquee: None,
             last_viewport: None,
         }

@@ -29,16 +29,18 @@ impl HayateApp {
         let o = self.canvas_origin.get();
         let x = f32::from(ev.position.x - o.x);
         let y = f32::from(ev.position.y - o.y);
-        // Double-click enters in-canvas text editing on the shape under the cursor.
+        // Double-click drills into a group: select just the shape under the cursor (clearing the
+        // group/multi-selection) so it can be moved or edited on its own. For a text shape it
+        // also starts in-canvas text editing.
         if ev.click_count >= 2 {
             if let Some(e) = hit_test(&self.scene, x, y) {
+                self.selection = Some(e);
+                self.also.clear();
                 if self.pres.world.texts.contains_key(&e) {
-                    self.selection = Some(e);
-                    self.also.clear();
                     self.begin_text_edit(e);
-                    cx.notify();
-                    return;
                 }
+                cx.notify();
+                return;
             }
         }
         // Grab a resize handle on the current (axis-aligned) selection?
