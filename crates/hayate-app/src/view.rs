@@ -2,9 +2,9 @@
 //! selection outlines, resize handles, alignment guides), slide sidebar, and the Format pane.
 
 use gpui::{
-    canvas, div, point, prelude::*, px, quad, rgb, size, Background, Bounds, ClickEvent, Context,
-    ElementInputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    PathBuilder, Render, SharedString, TextRun, Window,
+    canvas, div, point, prelude::*, px, quad, rgb, rgba, size, Background, Bounds, ClickEvent,
+    Context, ElementInputHandler, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PathBuilder, Render, SharedString, TextRun, Window,
 };
 
 use hayate_ir::color::ThemeColorToken;
@@ -522,10 +522,18 @@ impl Render for HayateApp {
                 LeftTab::Layers,
                 left_tab == LeftTab::Layers,
                 cx,
+            ))
+            .child(tab(
+                "tab_master",
+                "Master",
+                LeftTab::Master,
+                left_tab == LeftTab::Master,
+                cx,
             ));
         let content: gpui::AnyElement = match left_tab {
             LeftTab::Slides => slide_list.into_any_element(),
             LeftTab::Layers => self.layers_panel(cx),
+            LeftTab::Master => self.master_panel(cx),
         };
         let sidebar = div()
             .flex()
@@ -932,6 +940,7 @@ impl Render for HayateApp {
             )
             .children(self.menu_overlay(cx))
             .children(self.font_overlay(window, cx))
+            .children(self.save_overlay(cx))
             .into_any_element()
     }
 }
@@ -988,5 +997,169 @@ impl HayateApp {
             );
         }
         Some(list.into_any_element())
+    }
+
+    /// The Master tab: pick the current slide's layout, create layouts, and add placeholders to
+    /// the active layout. Placeholders added here render on every slide that uses that layout.
+    fn master_panel(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        use hayate_ir::doc::PlaceholderType as PT;
+        let active = self.active_layout();
+        let slide_layout = self.pres.layout_of(self.slide);
+
+        // A small clickable button row.
+        let btn =
+            |id: &'static str, label: String, cx: &mut Context<Self>, f: fn(&mut HayateApp)| {
+                div()
+                    .id(id)
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .text_sm()
+                    .bg(rgb(0x3a3a3a))
+                    .hover(|s| s.bg(rgb(0x4a4a4a)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                        window.focus(&this.focus, cx);
+                        f(this);
+                        cx.notify();
+                    }))
+            };
+
+        let mut col = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .text_color(rgb(0xdddddd))
+            .child(div().text_sm().text_color(rgb(0x888888)).child("Layouts"));
+
+        // Layout list: click to apply to the current slide and edit.
+        for layout in self.master_layouts() {
+            let name = self
+                .pres
+                .world
+                .layout_info
+                .get(&layout)
+                .map(|li| li.name.clone())
+                .unwrap_or_else(|| "Layout".to_string());
+            let is_active = active == Some(layout);
+            let is_slide = slide_layout == Some(layout);
+            let label = format!("{}{}", if is_slide { "● " } else { "○ " }, name);
+            col = col.child(
+                div()
+                    .id(("layout", layout.0 as usize))
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .text_sm()
+                    .bg(if is_active {
+                        rgb(0x1f3a5f)
+                    } else {
+                        rgb(0x2f2f2f)
+                    })
+                    .hover(|s| s.bg(rgb(0x094771)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                        window.focus(&this.focus, cx);
+                        this.master_layout = Some(layout);
+                        this.set_current_slide_layout(layout);
+                        cx.notify();
+                    })),
+            );
+        }
+        col = col.child(btn(
+            "new_layout",
+            "+ New Layout".to_string(),
+            cx,
+            HayateApp::add_layout,
+        ));
+
+        // Placeholders on the active layout, plus add buttons.
+        col = col.child(
+            div()
+                .mt_2()
+                .text_sm()
+                .text_color(rgb(0x888888))
+                .child("Placeholders on this layout"),
+        );
+        if let Some(layout) = active {
+            for ph in self.pres.placeholder_shapes(layout) {
+                if let Some(r) = self.pres.world.placeholders.get(&ph) {
+                    col = col.child(
+                        div()
+                            .px_2()
+                            .py_1()
+                            .text_sm()
+                            .text_color(rgb(0xbbbbbb))
+                            .child(format!("{:?} #{}", r.ph_type, r.idx)),
+                    );
+                }
+            }
+        }
+        col = col.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .child(btn("ph_title", "+ Title".to_string(), cx, |a| {
+                    a.add_layout_placeholder(PT::Title)
+                }))
+                .child(btn("ph_subtitle", "+ Subtitle".to_string(), cx, |a| {
+                    a.add_layout_placeholder(PT::Subtitle)
+                }))
+                .child(btn("ph_body", "+ Body".to_string(), cx, |a| {
+                    a.add_layout_placeholder(PT::Body)
+                })),
+        );
+        col.into_any_element()
+    }
+
+    /// The "Save As" dialog: a centered modal over a dimmed backdrop with an editable filename.
+    /// Enter saves, Esc cancels (both handled by `save_modal_key`); clicking the backdrop cancels.
+    fn save_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let m = self.save_modal.as_ref()?;
+        let field = div()
+            .w_full()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .bg(rgb(0x1f1f1f))
+            .border_1()
+            .border_color(rgb(0x3b82f6))
+            .text_color(rgb(0xffffff))
+            .child(format!("{}|", m.buf));
+        let dialog = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w(px(420.))
+            .p_4()
+            .bg(rgb(0x2b2b2b))
+            .border_1()
+            .border_color(rgb(0x555555))
+            .rounded_lg()
+            .shadow_lg()
+            .text_color(rgb(0xffffff))
+            .child(div().text_sm().text_color(rgb(0xaaaaaa)).child("Save As"))
+            .child(field)
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(rgb(0x888888))
+                    .child("Enter to save · Esc to cancel"),
+            );
+        let backdrop = div()
+            .id("save_backdrop")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x00000088))
+            .on_click(cx.listener(|this, _ev: &ClickEvent, _window, cx| {
+                this.save_modal = None;
+                cx.notify();
+            }))
+            .child(dialog);
+        Some(backdrop.into_any_element())
     }
 }

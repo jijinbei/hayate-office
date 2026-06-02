@@ -185,6 +185,13 @@ struct HayateApp {
     renaming: Option<(Entity, String)>,
     /// Active line endpoint drag, if any.
     line_drag: Option<LineDrag>,
+    /// Path the document saves to (editable via the Save dialog).
+    doc_path: String,
+    /// Open "Save As" dialog with its editable filename buffer, if any.
+    save_modal: Option<SaveModal>,
+    /// Layout currently being edited in the Master tab (its placeholders apply to every slide
+    /// that uses it). `None` = no layout selected for editing.
+    master_layout: Option<Entity>,
     /// Active marquee (rubber-band) selection rect in scene px: (start_x, start_y, cur_x, cur_y).
     marquee: Option<(f32, f32, f32, f32)>,
     /// Last window viewport size; used to refit the slide when the window is resized.
@@ -203,6 +210,7 @@ enum MenuTarget {
 enum LeftTab {
     Slides,
     Layers,
+    Master,
 }
 
 struct ContextMenu {
@@ -301,10 +309,18 @@ impl HayateApp {
             left_tab: LeftTab::Slides,
             renaming: None,
             line_drag: None,
+            doc_path: DOC_PATH.to_string(),
+            save_modal: None,
+            master_layout: None,
             marquee: None,
             last_viewport: None,
         }
     }
+}
+
+/// "Save As" dialog state: an editable filename buffer.
+struct SaveModal {
+    buf: String,
 }
 
 /// Embedded application logo, used for the window/taskbar icon.

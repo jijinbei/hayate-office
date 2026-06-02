@@ -2,7 +2,7 @@
 
 use hayate_model::History;
 
-use crate::{HayateApp, DOC_PATH};
+use crate::HayateApp;
 
 impl HayateApp {
     pub(crate) fn export_pptx(&self) {
@@ -36,24 +36,46 @@ impl HayateApp {
         }
     }
 
+    /// Save to the current document path.
     pub(crate) fn save(&self) {
-        match hayate_format::save(&self.pres, DOC_PATH) {
-            Ok(()) => eprintln!("saved to {DOC_PATH}"),
+        let path = self.doc_path.clone();
+        match hayate_format::save(&self.pres, &path) {
+            Ok(()) => eprintln!("saved to {path}"),
             Err(e) => eprintln!("save error: {e}"),
         }
     }
 
+    /// Export every slide to a multi-page PDF next to the document (raster pages at ~2x so text
+    /// stays crisp). The output file is the document path with a `.pdf` extension.
+    pub(crate) fn export_pdf(&self) {
+        let bytes = hayate_render::export_pdf(&self.pres, 2.0);
+        let path = pdf_path(&self.doc_path);
+        match std::fs::write(&path, bytes) {
+            Ok(()) => eprintln!("exported {path}"),
+            Err(e) => eprintln!("pdf export error: {e}"),
+        }
+    }
+
     pub(crate) fn open(&mut self) {
-        match hayate_format::load(DOC_PATH) {
+        let path = self.doc_path.clone();
+        match hayate_format::load(&path) {
             Ok(p) => {
                 self.pres = p;
                 self.slide = self.pres.slides().first().copied().unwrap_or(self.slide);
                 self.history = History::new();
                 self.selection = None;
                 self.rebuild();
-                eprintln!("opened {DOC_PATH}");
+                eprintln!("opened {path}");
             }
             Err(e) => eprintln!("open error: {e}"),
         }
+    }
+}
+
+/// Replace (or append) a `.pdf` extension on the document path.
+fn pdf_path(doc: &str) -> String {
+    match doc.rsplit_once('.') {
+        Some((stem, _ext)) => format!("{stem}.pdf"),
+        None => format!("{doc}.pdf"),
     }
 }

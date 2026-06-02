@@ -14,7 +14,7 @@ use hayate_ir::world::{CompValue, Entity};
 use hayate_model::{edit, Operation, Transaction};
 use hayate_render::build_slide_scene;
 
-use crate::{view_px, HayateApp, DOC_PATH};
+use crate::{view_px, HayateApp};
 
 impl HayateApp {
     /// All currently-selected entities (primary + additional).
@@ -133,6 +133,121 @@ impl HayateApp {
         self.also.clear();
     }
 
+    /// The layout the Master tab is editing: the explicit `master_layout`, else the current
+    /// slide's layout.
+    pub(crate) fn active_layout(&self) -> Option<Entity> {
+        self.master_layout
+            .or_else(|| self.pres.layout_of(self.slide))
+    }
+
+    /// All layouts belonging to the current slide's master, in id order.
+    pub(crate) fn master_layouts(&self) -> Vec<Entity> {
+        let Some(master) = self.pres.master_of(self.slide) else {
+            return Vec::new();
+        };
+        let mut v: Vec<Entity> = self
+            .pres
+            .world
+            .iter()
+            .filter(|e| {
+                self.pres
+                    .world
+                    .layout_info
+                    .get(e)
+                    .is_some_and(|li| li.master == master)
+            })
+            .collect();
+        v.sort_by_key(|e| e.0);
+        v
+    }
+
+    /// Add a new (empty) layout under the current master and select it for editing.
+    pub(crate) fn add_layout(&mut self) {
+        let Some(master) = self.pres.master_of(self.slide) else {
+            return;
+        };
+        let n = self.master_layouts().len() + 1;
+        let layout = self.pres.add_layout(master, format!("Layout {n}"));
+        self.master_layout = Some(layout);
+    }
+
+    /// Point the current slide at `layout` (undoable). Inherited placeholders update immediately.
+    pub(crate) fn set_current_slide_layout(&mut self, layout: Entity) {
+        let tx = edit::set_slide_layout(self.slide, layout);
+        self.commit_tx(tx);
+    }
+
+    /// Add a placeholder of `ph_type` to the layout the Master tab is editing, with a sensible
+    /// default frame and prompt text. It then renders on every slide using that layout.
+    pub(crate) fn add_layout_placeholder(&mut self, ph_type: hayate_ir::doc::PlaceholderType) {
+        use hayate_ir::doc::{PlaceholderRef, PlaceholderType as PT};
+        let Some(layout) = self.active_layout() else {
+            return;
+        };
+        // Next free idx for this type on the layout.
+        let idx = self
+            .pres
+            .placeholder_shapes(layout)
+            .iter()
+            .filter_map(|e| self.pres.world.placeholders.get(e))
+            .filter(|p| p.ph_type == ph_type)
+            .map(|p| p.idx + 1)
+            .max()
+            .unwrap_or(0);
+        let (frame, label, size_pt, slot) = match ph_type {
+            PT::Title | PT::CenteredTitle => (
+                RectEmu::new(inch_f(0.5), inch_f(0.3), inch_f(12.33), inch_f(1.2)),
+                "Title",
+                40,
+                ThemeFontSlot::Major,
+            ),
+            PT::Subtitle => (
+                RectEmu::new(inch_f(0.5), inch_f(1.6), inch_f(12.33), inch_f(1.0)),
+                "Subtitle",
+                28,
+                ThemeFontSlot::Minor,
+            ),
+            PT::Body => (
+                RectEmu::new(inch_f(0.5), inch_f(1.8), inch_f(12.33), inch_f(5.0)),
+                "Body text",
+                24,
+                ThemeFontSlot::Minor,
+            ),
+            _ => (
+                RectEmu::new(inch_f(1.0), inch_f(1.0), inch_f(4.0), inch_f(1.0)),
+                "Placeholder",
+                24,
+                ThemeFontSlot::Minor,
+            ),
+        };
+        let body = TextBody {
+            paragraphs: vec![Paragraph::new(vec![Run {
+                text: label.to_string(),
+                font: FontRef::Theme(slot),
+                size: pt(size_pt),
+                color: Color::theme(ThemeColorToken::Dk1),
+                bold: matches!(ph_type, PT::Title | PT::CenteredTitle),
+                italic: false,
+                underline: false,
+            }])],
+            autofit: false,
+        };
+        let order = {
+            let kids = self.pres.children(layout);
+            FracIndex::after(kids.last().and_then(|e| self.pres.world.order.get(e)))
+        };
+        let reserved = self.pres.world.reserve_id();
+        let tx = edit::create_placeholder(
+            reserved,
+            layout,
+            order,
+            PlaceholderRef { ph_type, idx },
+            frame,
+            Some(body),
+        );
+        self.commit_tx(tx);
+    }
+
     /// Align the current multi-selection using a registry command.
     pub(crate) fn align(&mut self, cmd_id: &str) {
         let ids: Vec<u64> = self.selected_all().iter().map(|e| e.0).collect();
@@ -234,7 +349,7 @@ impl HayateApp {
     /// Rebuild + autosave after a document change (undo/redo, etc.).
     pub(crate) fn after_doc_change(&mut self) {
         self.rebuild();
-        let _ = hayate_format::autosave(&self.pres, DOC_PATH);
+        let _ = hayate_format::autosave(&self.pres, &self.doc_path);
     }
 
     /// Add a rectangle at the slide center as one undoable transaction, and select it.
@@ -441,7 +556,7 @@ impl HayateApp {
         if !tx.ops.is_empty() {
             self.history.commit(&mut self.pres.world, tx);
             self.rebuild();
-            let _ = hayate_format::autosave(&self.pres, DOC_PATH);
+            let _ = hayate_format::autosave(&self.pres, &self.doc_path);
         }
     }
 

@@ -694,3 +694,66 @@ fn resize_snaps_moving_edge_to_slide_center(cx: &mut TestAppContext) {
         "moving right edge snaps onto the slide centre line"
     );
 }
+
+#[gpui::test]
+fn save_dialog_opens_and_edits_filename(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, cx| s.on_key_down(&keydown("ctrl-s"), cx));
+    assert!(
+        app.read_with(cx, |s, _| s.save_modal.is_some()),
+        "Ctrl+S opens the Save dialog"
+    );
+    for k in ["x", "y"] {
+        app.update(cx, |s, cx| s.save_modal_key(&keydown(k), cx));
+    }
+    let buf = app.read_with(cx, |s, _| s.save_modal.as_ref().unwrap().buf.clone());
+    assert!(
+        buf.ends_with("xy"),
+        "typed chars append to the filename: {buf}"
+    );
+    let before = app.read_with(cx, |s, _| s.doc_path.clone());
+    app.update(cx, |s, cx| s.save_modal_key(&keydown("escape"), cx));
+    assert!(
+        app.read_with(cx, |s, _| s.save_modal.is_none()),
+        "Esc closes it"
+    );
+    assert_eq!(
+        app.read_with(cx, |s, _| s.doc_path.clone()),
+        before,
+        "cancel leaves the document path unchanged"
+    );
+}
+
+#[gpui::test]
+fn layout_placeholder_renders_on_slide(cx: &mut TestAppContext) {
+    use hayate_ir::doc::PlaceholderType;
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let before = app.read_with(cx, |s, _| s.scene.nodes.len());
+    app.update(cx, |s, _| s.add_layout_placeholder(PlaceholderType::Body));
+    let eff = app.read_with(cx, |s, _| s.pres.effective_placeholders(s.slide).len());
+    assert_eq!(eff, 1, "the layout now defines one placeholder");
+    let after = app.read_with(cx, |s, _| s.scene.nodes.len());
+    assert_eq!(
+        after,
+        before + 1,
+        "the inherited placeholder adds one node to every slide using the layout"
+    );
+}
+
+#[gpui::test]
+fn new_layout_switches_current_slide(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let orig = app.read_with(cx, |s, _| s.pres.layout_of(s.slide));
+    app.update(cx, |s, _| s.add_layout());
+    let nl = app.read_with(cx, |s, _| s.master_layout);
+    assert!(
+        nl.is_some() && nl != orig,
+        "a fresh layout is created and selected"
+    );
+    app.update(cx, |s, _| s.set_current_slide_layout(nl.unwrap()));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.pres.layout_of(s.slide)),
+        nl,
+        "the slide now uses the new layout"
+    );
+}

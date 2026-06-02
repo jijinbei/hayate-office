@@ -215,6 +215,40 @@ impl HayateApp {
         cx.notify();
     }
 
+    /// Key handling for the "Save As" dialog: edit the filename, Enter saves, Esc cancels.
+    pub(crate) fn save_modal_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        let key = ev.keystroke.key.clone();
+        match key.as_str() {
+            "escape" => self.save_modal = None,
+            "enter" => {
+                if let Some(m) = self.save_modal.take() {
+                    let name = m.buf.trim();
+                    if !name.is_empty() {
+                        self.doc_path = name.to_string();
+                        self.save();
+                    }
+                }
+            }
+            "backspace" => {
+                if let Some(m) = self.save_modal.as_mut() {
+                    m.buf.pop();
+                }
+            }
+            "space" => {
+                if let Some(m) = self.save_modal.as_mut() {
+                    m.buf.push(' ');
+                }
+            }
+            s if s.chars().count() == 1 => {
+                if let Some(m) = self.save_modal.as_mut() {
+                    m.buf.push_str(s);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
     pub(crate) fn field_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.clone();
         match key.as_str() {
@@ -354,6 +388,10 @@ impl HayateApp {
             cx.notify();
             return;
         }
+        if self.save_modal.is_some() {
+            self.save_modal_key(ev, cx);
+            return;
+        }
         if self.renaming.is_some() {
             self.rename_key(ev, cx);
             return;
@@ -405,6 +443,8 @@ impl HayateApp {
             }
             "e" if cmd && k.modifiers.shift => self.export_pptx(),
             "e" if cmd => self.export_svg(),
+            // Ctrl/Cmd+Shift+P exports a PDF (P = PDF); plain Ctrl/Cmd+P opens the palette below.
+            "p" if cmd && k.modifiers.shift => self.export_pdf(),
             "f5" => {
                 self.present = true;
                 self.present_t = 0;
@@ -428,7 +468,13 @@ impl HayateApp {
                 self.after_doc_change();
                 cx.notify();
             }
-            "s" if cmd => self.save(),
+            "s" if cmd => {
+                // Open the Save dialog pre-filled with the current path.
+                self.save_modal = Some(crate::SaveModal {
+                    buf: self.doc_path.clone(),
+                });
+                cx.notify();
+            }
             "o" if cmd => {
                 self.open();
                 cx.notify();

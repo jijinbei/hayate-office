@@ -4,7 +4,7 @@ use hayate_ir::frac::FracIndex;
 use hayate_ir::world::{CompValue, Entity};
 use hayate_model::{Operation, Transaction};
 
-use crate::{HayateApp, DOC_PATH};
+use crate::HayateApp;
 
 impl HayateApp {
     pub(crate) fn next_slide(&mut self, delta: i64) {
@@ -63,7 +63,7 @@ impl HayateApp {
         self.slide = new_slide;
         self.selection = None;
         self.rebuild();
-        let _ = hayate_format::autosave(&self.pres, DOC_PATH);
+        let _ = hayate_format::autosave(&self.pres, &self.doc_path);
     }
 
     /// Delete the current slide (keeps at least one slide).
@@ -78,7 +78,7 @@ impl HayateApp {
         self.slide = self.pres.slides().first().copied().unwrap_or(self.slide);
         self.selection = None;
         self.rebuild();
-        let _ = hayate_format::autosave(&self.pres, DOC_PATH);
+        let _ = hayate_format::autosave(&self.pres, &self.doc_path);
     }
 
     /// Reorder `dragged` to sit immediately before `target` in the slide list, by assigning it
