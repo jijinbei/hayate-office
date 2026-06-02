@@ -1,12 +1,16 @@
-//! Minimal PPTX (OOXML) exporter for a `hayate_ir::presentation::Presentation`.
+//! Minimal PPTX (OOXML) exporter and importer for a `hayate_ir::presentation::Presentation`.
 //!
-//! Export only (no import). We hand-write the XML parts and pack them into a ZIP via the
-//! `zip` crate. The goal is a minimal but valid `.pptx` that opens in PowerPoint /
-//! LibreOffice with each slide's shapes (rect / round rect / ellipse) and text boxes shown
-//! at their correct positions, sizes, rotation and resolved solid fill color.
+//! We hand-write the XML parts and pack them into a ZIP via the `zip` crate. The goal is a
+//! minimal but valid `.pptx` that opens in PowerPoint / LibreOffice with each slide's shapes
+//! (rect / round rect / ellipse) and text boxes shown at their correct positions, sizes,
+//! rotation and resolved solid fill color.
 //!
 //! Theme references in fills and text colors are resolved to literal RGB through the
 //! slide's master theme (`Presentation::theme_of` + `Theme::resolve_color`).
+//!
+//! Import ([`import_pptx`]) is intentionally low-fidelity: it recovers the slide size, slide
+//! order and, for each autoshape (`<p:sp>`), its frame, preset geometry, solid fill,
+//! rotation and text. Unknown elements are ignored.
 
 use hayate_ir::color::Color;
 use hayate_ir::geom::RectEmu;
@@ -165,6 +169,370 @@ pub fn export_pptx(
 
     zip.finish()?;
     Ok(())
+}
+
+/// Import a `.pptx` file at `path` into a `Presentation`.
+///
+/// Reads `ppt/presentation.xml` for the slide size (`<p:sldSz>`) and slide order
+/// (`<p:sldId>` -> relationship -> `ppt/slides/slideN.xml`), then parses each slide. A
+/// single master (`Theme::default`) and layout are created; every imported slide hangs off
+/// that layout. For each `<p:sp>` we recover frame, preset geometry, solid fill, rotation
+/// and text. The parse is deliberately tolerant: unknown elements are ignored and missing
+/// pieces are simply omitted.
+pub fn import_pptx(
+    path: impl AsRef<std::path::Path>,
+) -> Result<Presentation, Box<dyn std::error::Error>> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path)?;
+    let mut zip = zip::ZipArchive::new(file)?;
+
+    // Read a named entry into a string, if it exists.
+    let read_entry = |zip: &mut zip::ZipArchive<std::fs::File>, name: &str| -> Option<String> {
+        let mut e = zip.by_name(name).ok()?;
+        let mut buf = String::new();
+        e.read_to_string(&mut buf).ok()?;
+        Some(buf)
+    };
+
+    // --- presentation.xml: slide size + ordered slide relationship ids ---
+    let pres_xml = read_entry(&mut zip, "ppt/presentation.xml")
+        .ok_or("missing ppt/presentation.xml")?;
+    let (slide_size, slide_rids) = parse_presentation(&pres_xml);
+
+    // --- presentation.xml.rels: map relationship id -> slide part path ---
+    let rels_xml = read_entry(&mut zip, "ppt/_rels/presentation.xml.rels").unwrap_or_default();
+    let rid_to_target = parse_rels(&rels_xml);
+
+    let mut pres = Presentation::new();
+    if let Some(sz) = slide_size {
+        pres.slide_size = sz;
+    }
+    let master = pres.add_master(Theme::default());
+    let layout = pres.add_layout(master, "Imported");
+
+    // Resolve each slide relationship id to its part path and parse it. Targets in the rels
+    // are relative to the `ppt/` directory.
+    for rid in &slide_rids {
+        let target = match rid_to_target.get(rid) {
+            Some(t) => t,
+            None => continue,
+        };
+        let part = normalize_part_path(target);
+        let slide_xml = match read_entry(&mut zip, &part) {
+            Some(s) => s,
+            None => continue,
+        };
+        let slide = pres.add_slide(layout);
+        parse_slide_into(&slide_xml, &mut pres, slide);
+    }
+
+    Ok(pres)
+}
+
+/// Parse `ppt/presentation.xml` for the slide size and the ordered list of slide
+/// relationship ids (`<p:sldId r:id="rIdN"/>`).
+fn parse_presentation(xml: &str) -> (Option<hayate_ir::geom::SizeEmu>, Vec<String>) {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+
+    let mut size: Option<hayate_ir::geom::SizeEmu> = None;
+    let mut rids: Vec<String> = Vec::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "sldSz" => {
+                        let cx = attr_i64(&e, b"cx");
+                        let cy = attr_i64(&e, b"cy");
+                        if let (Some(cx), Some(cy)) = (cx, cy) {
+                            size = Some(hayate_ir::geom::SizeEmu::new(cx, cy));
+                        }
+                    }
+                    "sldId" => {
+                        // The relationship id (r:id) points at the slide part; the numeric
+                        // p:id is ignored.
+                        if let Some(rid) = attr_str(&e, b"r:id") {
+                            rids.push(rid);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+
+    (size, rids)
+}
+
+/// Parse a `*.rels` part into a map of relationship id -> target path.
+fn parse_rels(xml: &str) -> std::collections::BTreeMap<String, String> {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+    let mut map = std::collections::BTreeMap::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) | Ok(Event::Empty(e))
+                if local_name(e.name().as_ref()) == "Relationship" =>
+            {
+                if let (Some(id), Some(target)) = (attr_str(&e, b"Id"), attr_str(&e, b"Target")) {
+                    map.insert(id, target);
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+    map
+}
+
+/// Normalize a relationship `Target` (relative to `ppt/`) into a full package part path.
+fn normalize_part_path(target: &str) -> String {
+    // Targets are like "slides/slide1.xml" or "../slides/slide1.xml". Resolve against the
+    // "ppt/" base, collapsing any leading "../".
+    let mut t = target.trim_start_matches('/').to_string();
+    let mut base = vec!["ppt"];
+    while let Some(rest) = t.strip_prefix("../") {
+        base.pop();
+        t = rest.to_string();
+    }
+    if base.is_empty() {
+        t
+    } else {
+        format!("{}/{}", base.join("/"), t)
+    }
+}
+
+/// Parse one `ppt/slides/slideN.xml` and add its autoshapes to `pres` under `slide`.
+fn parse_slide_into(xml: &str, pres: &mut Presentation, slide: Entity) {
+    use quick_xml::events::Event;
+    use quick_xml::reader::Reader;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(false);
+
+    // State accumulated for the shape currently being parsed (between <p:sp> and </p:sp>).
+    struct ShapeState {
+        off: Option<(Emu, Emu)>,
+        ext: Option<(Emu, Emu)>,
+        rotation: Option<f32>,
+        geometry: Option<Geometry>,
+        fill: Option<Color>,
+        texts: Vec<String>,
+    }
+    impl ShapeState {
+        fn new() -> Self {
+            Self {
+                off: None,
+                ext: None,
+                rotation: None,
+                geometry: None,
+                fill: None,
+                texts: Vec::new(),
+            }
+        }
+    }
+
+    let mut state: Option<ShapeState> = None;
+    // Whether we are inside a <a:t> element (so the next Text event is run text).
+    let mut in_text = false;
+    // Track whether we are inside a solidFill, so a nested srgbClr is taken as the fill.
+    let mut solidfill_depth: i32 = 0;
+
+    // Handle the attributes of an element start (shared by Start and Empty events). The
+    // depth-tracking elements (`sp`, `solidFill`, `t`) are handled by the caller, since for
+    // self-closing (`Empty`) elements they would open and close at once.
+    fn apply_attrs(state: &mut Option<ShapeState>, solidfill_depth: i32, name: &str, e: &quick_xml::events::BytesStart) {
+        let s = match state.as_mut() {
+            Some(s) => s,
+            None => return,
+        };
+        match name {
+            "off" => {
+                if let (Some(x), Some(y)) = (attr_i64(e, b"x"), attr_i64(e, b"y")) {
+                    s.off = Some((x, y));
+                }
+            }
+            "ext" => {
+                if let (Some(cx), Some(cy)) = (attr_i64(e, b"cx"), attr_i64(e, b"cy")) {
+                    s.ext = Some((cx, cy));
+                }
+            }
+            "xfrm" => {
+                if let Some(rot) = attr_i64(e, b"rot") {
+                    // OOXML rot is in 60000ths of a degree.
+                    s.rotation = Some(rot as f32 / 60_000.0);
+                }
+            }
+            "prstGeom" => {
+                if let Some(prst) = attr_str(e, b"prst") {
+                    s.geometry = preset_to_geometry(&prst);
+                }
+            }
+            "srgbClr" if solidfill_depth > 0 && s.fill.is_none() => {
+                if let Some(rgba) = attr_str(e, b"val").as_deref().and_then(parse_hex_rgb) {
+                    s.fill = Some(Color::Literal(rgba));
+                }
+            }
+            _ => {}
+        }
+    }
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "sp" => state = Some(ShapeState::new()),
+                    "solidFill" => solidfill_depth += 1,
+                    "t" => in_text = true,
+                    other => apply_attrs(&mut state, solidfill_depth, other, &e),
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                // Self-closing variants, e.g. <a:off .../> or <a:srgbClr .../>.
+                let name = local_name(e.name().as_ref());
+                apply_attrs(&mut state, solidfill_depth, &name, &e);
+            }
+            Ok(Event::Text(t)) if in_text => {
+                if let (Some(s), Ok(txt)) = (state.as_mut(), t.unescape()) {
+                    s.texts.push(txt.into_owned());
+                }
+            }
+            Ok(Event::End(e)) => {
+                let name = local_name(e.name().as_ref());
+                match name.as_str() {
+                    "t" => in_text = false,
+                    "solidFill" => solidfill_depth = solidfill_depth.saturating_sub(1),
+                    "sp" => {
+                        if let Some(s) = state.take() {
+                            commit_shape(pres, slide, s.off, s.ext, s.rotation, s.geometry, s.fill, &s.texts);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break,
+            _ => {}
+        }
+    }
+}
+
+/// Build a shape entity under `slide` from accumulated parse state.
+#[allow(clippy::too_many_arguments)]
+fn commit_shape(
+    pres: &mut Presentation,
+    slide: Entity,
+    off: Option<(Emu, Emu)>,
+    ext: Option<(Emu, Emu)>,
+    rotation: Option<f32>,
+    geometry: Option<Geometry>,
+    fill: Option<Color>,
+    texts: &[String],
+) {
+    let e = pres.add_shape(slide);
+
+    if let (Some((x, y)), Some((cx, cy))) = (off, ext) {
+        pres.world.frames.insert(e, RectEmu::new(x, y, cx, cy));
+    }
+    if let Some(r) = rotation {
+        pres.world.rotations.insert(e, r);
+    }
+    if let Some(g) = geometry {
+        pres.world.geometries.insert(e, g);
+    }
+    if let Some(c) = fill {
+        pres.world.fills.insert(e, Fill::Solid(c));
+    }
+    if !texts.is_empty() {
+        use hayate_ir::color::Rgba;
+        use hayate_ir::font::{FontRef, ThemeFontSlot};
+        use hayate_ir::text::{Paragraph, Run};
+        use hayate_ir::units::pt;
+
+        // One paragraph + one run per <a:t>, with default font/size/color.
+        let paragraphs: Vec<Paragraph> = texts
+            .iter()
+            .map(|t| {
+                Paragraph::new(vec![Run {
+                    text: t.clone(),
+                    font: FontRef::Theme(ThemeFontSlot::Minor),
+                    size: pt(18),
+                    color: Color::literal(Rgba::BLACK),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                }])
+            })
+            .collect();
+        pres.world.texts.insert(
+            e,
+            TextBody {
+                paragraphs,
+                autofit: false,
+            },
+        );
+    }
+}
+
+/// Map an OOXML `prst` preset name to a `Geometry` (only the shapes we export).
+fn preset_to_geometry(prst: &str) -> Option<Geometry> {
+    match prst {
+        "rect" => Some(Geometry::Rect),
+        "roundRect" => Some(Geometry::RoundRect { radius: 0 }),
+        "ellipse" => Some(Geometry::Ellipse),
+        _ => None,
+    }
+}
+
+/// Parse a 6-hex-digit `RRGGBB` color string into an opaque `Rgba`.
+fn parse_hex_rgb(s: &str) -> Option<hayate_ir::color::Rgba> {
+    let s = s.trim();
+    if s.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+    let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+    let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+    Some(hayate_ir::color::Rgba::rgb(r, g, b))
+}
+
+/// The local name of an XML element, dropping any namespace prefix (`p:sp` -> `sp`).
+fn local_name(qname: &[u8]) -> String {
+    let s = String::from_utf8_lossy(qname);
+    match s.rsplit_once(':') {
+        Some((_, local)) => local.to_string(),
+        None => s.into_owned(),
+    }
+}
+
+/// Read an attribute value (matched by its full, possibly prefixed, key) as a string.
+fn attr_str(e: &quick_xml::events::BytesStart, key: &[u8]) -> Option<String> {
+    for a in e.attributes().flatten() {
+        if a.key.as_ref() == key {
+            return a.unescape_value().ok().map(|v| v.into_owned());
+        }
+    }
+    None
+}
+
+/// Read an attribute value as an `i64` (EMU / rotation units).
+fn attr_i64(e: &quick_xml::events::BytesStart, key: &[u8]) -> Option<Emu> {
+    attr_str(e, key)?.trim().parse::<i64>().ok()
 }
 
 /// Write one ZIP entry from an in-memory string.
@@ -582,6 +950,126 @@ mod tests {
         }
 
         // Clean up.
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Process-unique temp path generator (pid + a per-call counter) so parallel tests in
+    /// the same process never collide on a file name.
+    fn unique_temp_path(tag: &str) -> std::path::PathBuf {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        std::env::temp_dir().join(format!(
+            "hayate_pptx_{tag}_{}_{n}.pptx",
+            std::process::id()
+        ))
+    }
+
+    #[test]
+    fn export_then_import_roundtrips() {
+        // Build a deck with two slides; the first carries a filled, rotated rect plus a
+        // text box. We then export to a temp file and import it back.
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        let slide1 = p.add_slide(layout);
+        let _slide2 = p.add_slide(layout);
+
+        let rect = p.add_shape(slide1);
+        let rect_frame = RectEmu::new(914_400, 457_200, 1_828_800, 914_400);
+        p.world.frames.insert(rect, rect_frame);
+        p.world.geometries.insert(rect, Geometry::Rect);
+        p.world.rotations.insert(rect, 30.0);
+        p.world.fills.insert(
+            rect,
+            Fill::Solid(Color::literal(Rgba::rgb(0x12, 0x34, 0x56))),
+        );
+
+        let tb = p.add_shape(slide1);
+        p.world
+            .frames
+            .insert(tb, RectEmu::new(914_400, 1_828_800, 5_000_000, 914_400));
+        p.world.texts.insert(
+            tb,
+            TextBody {
+                paragraphs: vec![Paragraph::new(vec![Run {
+                    text: "Round trip".to_string(),
+                    font: FontRef::Theme(ThemeFontSlot::Minor),
+                    size: pt(24),
+                    color: Color::literal(Rgba::BLACK),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                }])],
+                autofit: false,
+            },
+        );
+
+        let path = unique_temp_path("roundtrip");
+        let _ = std::fs::remove_file(&path);
+        export_pptx(&p, &path).expect("export should succeed");
+
+        let imported = import_pptx(&path).expect("import should succeed");
+
+        // Slide count matches.
+        assert_eq!(
+            imported.slides().len(),
+            p.slides().len(),
+            "slide count should round-trip"
+        );
+
+        // The slide size round-trips.
+        assert_eq!(imported.slide_size, p.slide_size, "slide size should round-trip");
+
+        // At least one shape on the first imported slide has the rect's frame.
+        let first = imported.slides()[0];
+        let frames: Vec<RectEmu> = imported
+            .children(first)
+            .iter()
+            .filter_map(|c| imported.world.frames.get(c).copied())
+            .collect();
+        assert!(
+            frames.contains(&rect_frame),
+            "expected a shape with frame {rect_frame:?}, got {frames:?}"
+        );
+
+        // The fill, geometry, rotation and text were recovered for some shape.
+        assert!(
+            imported
+                .children(first)
+                .iter()
+                .any(|c| imported.world.fills.get(c)
+                    == Some(&Fill::Solid(Color::literal(Rgba::rgb(0x12, 0x34, 0x56))))),
+            "solid fill should round-trip"
+        );
+        assert!(
+            imported
+                .children(first)
+                .iter()
+                .any(|c| imported.world.geometries.get(c) == Some(&Geometry::Rect)),
+            "rect geometry should round-trip"
+        );
+        assert!(
+            imported
+                .children(first)
+                .iter()
+                .any(|c| imported.world.rotations.get(c).copied() == Some(30.0)),
+            "rotation should round-trip"
+        );
+        assert!(
+            imported.children(first).iter().any(|c| imported
+                .world
+                .texts
+                .get(c)
+                .map(|tb| tb
+                    .paragraphs
+                    .iter()
+                    .flat_map(|p| &p.runs)
+                    .any(|r| r.text == "Round trip"))
+                .unwrap_or(false)),
+            "text should round-trip"
+        );
+
         let _ = std::fs::remove_file(&path);
     }
 }

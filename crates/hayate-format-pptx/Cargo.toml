@@ -8,3 +8,4 @@ repository.workspace = true
 [dependencies]
 hayate-ir.workspace = true
 zip = "2"
+quick-xml = "0.36"
