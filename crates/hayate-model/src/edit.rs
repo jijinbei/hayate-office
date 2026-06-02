@@ -9,6 +9,7 @@ use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::RectEmu;
 use hayate_ir::paint::Fill;
 use hayate_ir::shape::Geometry;
+use hayate_ir::anim::{Anim, AnimKind, AnimStep, Easing, Effect, SlideTimeline, Trigger};
 use hayate_ir::color::Color;
 use hayate_ir::color::ThemeColorToken;
 use hayate_ir::font::{FontRef, ThemeFontSlot};
@@ -360,6 +361,42 @@ pub fn move_backward(world: &World, e: Entity) -> Transaction {
         FracIndex::between(Some(p2_order), Some(p_order))
     };
     set_order_tx("move backward", e, new_order)
+}
+
+/// Add an entrance animation for `target` to `slide`'s animation timeline. Reads the slide's
+/// existing `SlideTimeline` from `world` (or starts an empty one) and appends a new
+/// `AnimStep` that fires after the previous step (no delay) and runs a single
+/// `Entrance(effect)` anim on `target` for `duration_ms` milliseconds with `EaseOut`. The new
+/// timeline is written back via `SetComponent(Timeline)` on the SLIDE entity, so undo restores
+/// the prior timeline (or removes it if the slide had none).
+pub fn add_entrance(
+    world: &World,
+    slide: Entity,
+    target: Entity,
+    effect: Effect,
+    duration_ms: u32,
+) -> Transaction {
+    let mut timeline = match world.timelines.get(&slide) {
+        Some(existing) => existing.clone(),
+        None => SlideTimeline::default(),
+    };
+    timeline.steps.push(AnimStep {
+        trigger: Trigger::AfterPrev { delay: 0 },
+        anims: vec![Anim {
+            target,
+            kind: AnimKind::Entrance(effect),
+            duration: duration_ms,
+            delay: 0,
+            easing: Easing::EaseOut,
+        }],
+    });
+    Transaction::new(
+        "add entrance",
+        vec![Operation::SetComponent {
+            entity: slide,
+            value: CompValue::Timeline(timeline),
+        }],
+    )
 }
 
 #[cfg(test)]
@@ -847,5 +884,47 @@ mod tests {
         // a is already first: no previous sibling, so the transaction is empty.
         let tx = move_backward(&w, a);
         assert!(tx.ops.is_empty());
+    }
+
+    #[test]
+    fn add_entrance_creates_step_appends_second_and_undoes() {
+        let mut w = World::new();
+        let mut h = History::new();
+
+        // A slide entity and a shape entity (spawn + frame).
+        let slide = w.spawn();
+        let shape = w.spawn();
+        h.commit(&mut w, set_frame(shape, RectEmu::new(0, 0, 100, 50)));
+
+        // No timeline initially.
+        assert!(w.timelines.get(&slide).is_none());
+
+        // First entrance: a fresh one-step timeline targeting the shape.
+        let tx = add_entrance(&w, slide, shape, Effect::Fade, 500);
+        h.commit(&mut w, tx);
+        let tl = w.timelines.get(&slide).expect("timeline created");
+        assert_eq!(tl.steps.len(), 1);
+        let anim = &tl.steps[0].anims[0];
+        assert_eq!(anim.target, shape);
+        assert_eq!(anim.kind, AnimKind::Entrance(Effect::Fade));
+        assert_eq!(anim.duration, 500);
+
+        // Second entrance: appends a second step (does not replace the first).
+        let tx = add_entrance(&w, slide, shape, Effect::Zoom, 250);
+        h.commit(&mut w, tx);
+        let tl = w.timelines.get(&slide).expect("timeline present");
+        assert_eq!(tl.steps.len(), 2);
+        assert_eq!(tl.steps[1].anims[0].kind, AnimKind::Entrance(Effect::Zoom));
+        assert_eq!(tl.steps[1].anims[0].duration, 250);
+
+        // Undo the second add: back to a single step.
+        assert!(h.undo(&mut w));
+        let tl = w.timelines.get(&slide).expect("timeline present");
+        assert_eq!(tl.steps.len(), 1);
+        assert_eq!(tl.steps[0].anims[0].kind, AnimKind::Entrance(Effect::Fade));
+
+        // Undo the first add: the (previously absent) timeline is removed.
+        assert!(h.undo(&mut w));
+        assert!(w.timelines.get(&slide).is_none());
     }
 }
