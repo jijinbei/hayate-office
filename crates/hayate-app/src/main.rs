@@ -104,6 +104,17 @@ fn pt_to_emu(v: f32) -> i64 {
     (v * 12_700.0) as i64
 }
 
+/// Fill background from an Rgba, scaling alpha by `opacity` (0..1).
+fn fill_bg(c: Rgba, opacity: f32) -> Background {
+    gpui::Rgba {
+        r: c.r as f32 / 255.0,
+        g: c.g as f32 / 255.0,
+        b: c.b as f32 / 255.0,
+        a: (c.a as f32 / 255.0) * opacity.clamp(0.0, 1.0),
+    }
+    .into()
+}
+
 fn rgb_u32(c: Rgba) -> u32 {
     ((c.r as u32) << 16) | ((c.g as u32) << 8) | (c.b as u32)
 }
@@ -799,6 +810,7 @@ fn paint_scene(scene: &Scene, o: Point<Pixels>, window: &mut Window, cx: &mut Ap
 
     for node in &scene.nodes {
         let angle = node.rotation_deg.to_radians();
+        let opacity = node.opacity;
         match &node.prim {
             Primitive::Quad { bounds: r, corner_radius, fill: Some(Paint::Solid(c)), .. } => {
                 if angle.abs() < 1e-3 {
@@ -809,7 +821,7 @@ fn paint_scene(scene: &Scene, o: Point<Pixels>, window: &mut Window, cx: &mut Ap
                     window.paint_quad(quad(
                         b,
                         px(*corner_radius),
-                        Background::from(rgb(rgb_u32(*c))),
+                        fill_bg(*c, opacity),
                         px(0.),
                         gpui::transparent_black(),
                         Default::default(),
@@ -834,7 +846,7 @@ fn paint_scene(scene: &Scene, o: Point<Pixels>, window: &mut Window, cx: &mut Ap
                     }
                     b.close();
                     if let Ok(path) = b.build() {
-                        window.paint_path(path, rgb(rgb_u32(*c)));
+                        window.paint_path(path, fill_bg(*c, opacity));
                     }
                 }
             }
