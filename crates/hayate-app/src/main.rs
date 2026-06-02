@@ -7,14 +7,15 @@
 #![cfg_attr(target_family = "wasm", no_main)]
 
 use std::cell::Cell;
+use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    App, Background, Bounds, ClickEvent, Context, Font, FontStyle, FontWeight, Hsla, KeyDownEvent,
-    MouseButton,
-    MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, SharedString,
-    TextRun, Window, WindowBounds, WindowOptions, canvas, div, point, prelude::*, px, quad, rgb,
-    size,
+    App, Background, Bounds, ClickEvent, Context, ElementInputHandler, EntityInputHandler, Font,
+    FontStyle, FontWeight, Hsla, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, PathBuilder,
+    Pixels, Point, SharedString, TextRun, UTF16Selection, Window, WindowBounds, WindowOptions,
+    canvas, div, point, prelude::*, px, quad, rgb, size,
 };
 use gpui_platform::application;
 
@@ -33,7 +34,8 @@ use hayate_model::{edit, History, Operation, Transaction};
 use hayate_core::CommandRegistry;
 use hayate_render::scene::{Paint, Primitive, PxRect, PxSize, ResolvedRun, Scene, TextBlock};
 use hayate_render::{
-    alignment_guides, build_slide_scene, grid_lines, hit_test, resize_handles, Guide, GuideKind,
+    alignment_guides, build_slide_scene, build_slide_scene_at, grid_lines, hit_test,
+    resize_handles, Guide, GuideKind,
 };
 
 const SELECTION: u32 = 0x3B82F6;
@@ -104,6 +106,23 @@ fn view_px(pres: &Presentation, zoom: f32) -> PxSize {
 
 fn pt_to_emu(v: f32) -> i64 {
     (v * 12_700.0) as i64
+}
+
+/// Number of UTF-16 code units in `s`.
+fn utf16_len(s: &str) -> usize {
+    s.chars().map(|c| c.len_utf16()).sum()
+}
+
+/// Byte index in `s` for a UTF-16 code-unit offset (clamped to the end).
+fn utf16_to_byte(s: &str, off16: usize) -> usize {
+    let mut u = 0;
+    for (b, c) in s.char_indices() {
+        if u >= off16 {
+            return b;
+        }
+        u += c.len_utf16();
+    }
+    s.len()
 }
 
 /// New frame when dragging resize `handle` (TL,T,TR,R,BR,B,BL,L) by (dx,dy) EMU from `start`.
@@ -218,12 +237,16 @@ struct HayateApp {
     also: Vec<Entity>,
     /// Fullscreen presentation (slideshow) mode.
     present: bool,
+    /// Animation playback time (ms) within the current slide in presentation mode.
+    present_t: u32,
 }
 
 struct TextEdit {
     entity: Entity,
     original: String,
     buf: String,
+    /// IME composing (marked) range, in UTF-16 offsets into `buf`.
+    marked: Option<Range<usize>>,
 }
 
 struct ResizeDrag {
@@ -279,6 +302,7 @@ impl HayateApp {
             text_edit: None,
             also: Vec::new(),
             present: false,
+            present_t: 0,
         }
     }
 
@@ -337,6 +361,29 @@ impl HayateApp {
         }
     }
 
+    fn import_pptx(&mut self) {
+        match hayate_format_pptx::import_pptx("hayate-deck.pptx") {
+            Ok(p) => {
+                self.pres = p;
+                self.slide = self.pres.slides().first().copied().unwrap_or(self.slide);
+                self.history = History::new();
+                self.selection = None;
+                self.also.clear();
+                self.rebuild();
+                eprintln!("imported hayate-deck.pptx");
+            }
+            Err(e) => eprintln!("pptx import error: {e}"),
+        }
+    }
+
+    /// Add a fade-in entrance animation to the selected shape on the current slide.
+    fn add_fade_in(&mut self) {
+        if let Some(e) = self.selection {
+            let tx = edit::add_entrance(&self.pres.world, self.slide, e, hayate_ir::anim::Effect::Fade, 600);
+            self.commit_tx(tx);
+        }
+    }
+
     fn next_slide(&mut self, delta: i64) {
         let slides = self.pres.slides();
         if let Some(i) = slides.iter().position(|&s| s == self.slide) {
@@ -366,6 +413,7 @@ impl HayateApp {
             entity: e,
             buf: original.clone(),
             original,
+            marked: None,
         });
     }
 
@@ -422,6 +470,27 @@ impl HayateApp {
             }
         }
         cx.notify();
+    }
+
+    /// Core of the IME replace methods: splice `text` into the edit buffer at `range`
+    /// (UTF-16), update the marked range, and live-render.
+    fn ime_replace(&mut self, range: Option<Range<usize>>, text: &str, new_marked: Option<Range<usize>>) {
+        let (e, buf) = {
+            let te = match self.text_edit.as_mut() {
+                Some(t) => t,
+                None => return,
+            };
+            let range = range.or_else(|| te.marked.clone()).unwrap_or_else(|| {
+                let end = utf16_len(&te.buf);
+                end..end
+            });
+            let sb = utf16_to_byte(&te.buf, range.start);
+            let eb = utf16_to_byte(&te.buf, range.end);
+            te.buf.replace_range(sb..eb, text);
+            te.marked = new_marked.map(|m| (range.start + m.start)..(range.start + m.end));
+            (te.entity, te.buf.clone())
+        };
+        self.live_set_text(e, buf);
     }
 
     /// Add a new text box on the current slide and start editing it.
@@ -831,8 +900,19 @@ impl HayateApp {
                     self.present = false;
                     cx.notify();
                 }
-                "right" | "space" | "down" => self.next_slide(1),
-                "left" | "up" => self.next_slide(-1),
+                "space" => {
+                    // Advance entrance animations on the current slide.
+                    self.present_t = self.present_t.saturating_add(700);
+                    cx.notify();
+                }
+                "right" | "down" => {
+                    self.next_slide(1);
+                    self.present_t = 0;
+                }
+                "left" | "up" => {
+                    self.next_slide(-1);
+                    self.present_t = 0;
+                }
                 _ => {}
             }
             return;
@@ -848,6 +928,11 @@ impl HayateApp {
             "e" if cmd => self.export_svg(),
             "f5" => {
                 self.present = true;
+                self.present_t = 0;
+                cx.notify();
+            }
+            "o" if cmd && k.modifiers.shift => {
+                self.import_pptx();
                 cx.notify();
             }
             "i" if !cmd => {
@@ -1295,6 +1380,94 @@ fn tool_button(
         .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| action(this, window, cx)))
 }
 
+/// IME / platform text input. Active only while a text box is being edited
+/// (`accepts_text_input`), so single-key shortcuts still work otherwise.
+impl EntityInputHandler for HayateApp {
+    fn text_for_range(
+        &mut self,
+        range: Range<usize>,
+        _adjusted: &mut Option<Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        let te = self.text_edit.as_ref()?;
+        let s = utf16_to_byte(&te.buf, range.start);
+        let e = utf16_to_byte(&te.buf, range.end);
+        te.buf.get(s..e).map(|x| x.to_string())
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_disabled_input: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        let te = self.text_edit.as_ref()?;
+        let end = utf16_len(&te.buf);
+        Some(UTF16Selection {
+            range: end..end,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<Range<usize>> {
+        self.text_edit.as_ref().and_then(|te| te.marked.clone())
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        if let Some(te) = self.text_edit.as_mut() {
+            te.marked = None;
+        }
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        text: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ime_replace(range, text, None);
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        range: Option<Range<usize>>,
+        new_text: &str,
+        new_marked: Option<Range<usize>>,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ime_replace(range, new_text, new_marked);
+        cx.notify();
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _range_utf16: Range<usize>,
+        element_bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        // Approximate: place the IME candidate window over the editing area.
+        Some(element_bounds)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _point: Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        Some(0)
+    }
+
+    fn accepts_text_input(&self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
+        self.text_edit.is_some()
+    }
+}
+
 impl Render for HayateApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.focused_once {
@@ -1309,7 +1482,7 @@ impl Render for HayateApp {
                 w: f32::from(vp.width),
                 h: f32::from(vp.height),
             };
-            let pscene = build_slide_scene(&self.pres, self.slide, target);
+            let pscene = build_slide_scene_at(&self.pres, self.slide, target, self.present_t);
             let (pw, ph) = (pscene.size.w, pscene.size.h);
             let pcanvas = canvas(
                 |_, _, _| {},
@@ -1336,6 +1509,8 @@ impl Render for HayateApp {
         let guides = self.guides.clone();
         let show_grid = self.show_grid;
         let origin_cell = self.canvas_origin.clone();
+        let input_entity = cx.entity();
+        let input_focus = self.focus.clone();
         let (sw, sh) = (scene.size.w, scene.size.h);
         let title: SharedString = format!(
             "HayateOffice — Ctrl+P palette · R add · Del delete · Ctrl+Z undo · Ctrl+S/O save/open ({} shapes)",
@@ -1372,6 +1547,12 @@ impl Render for HayateApp {
             move |bounds, _, window, cx| {
                 let o = bounds.origin;
                 origin_cell.set(o);
+                // Register the IME/text input handler for this editing region.
+                window.handle_input(
+                    &input_focus,
+                    ElementInputHandler::new(bounds, input_entity.clone()),
+                    cx,
+                );
 
                 paint_scene(&scene, o, window, cx);
 
@@ -1692,6 +1873,10 @@ impl Render for HayateApp {
                         .child(tool_button("al_m", "M", cx, |t, _w, cx| { t.align("shapes.align_vcenter"); cx.notify(); }))
                         .child(tool_button("al_b", "B", cx, |t, _w, cx| { t.align("shapes.align_bottom"); cx.notify(); })),
                 )
+                .child(tool_button("anim_fade", "Animate: Fade In", cx, |t, _w, cx| {
+                    t.add_fade_in();
+                    cx.notify();
+                }))
                 .child(tool_button("edit_text", "Edit Text (F2)", cx, |t, _w, cx| {
                     if let Some(e) = t.selection {
                         t.begin_text_edit(e);
