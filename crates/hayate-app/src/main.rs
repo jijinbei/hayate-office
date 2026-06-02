@@ -161,13 +161,29 @@ fn resize_frame(handle: usize, start: RectEmu, dx: i64, dy: i64) -> RectEmu {
 
 /// Fill background from an Rgba, scaling alpha by `opacity` (0..1).
 fn fill_bg(c: Rgba, opacity: f32) -> Background {
+    gpui_rgba(c, opacity).into()
+}
+
+/// Convert a scene color (+ node opacity) into a gpui color.
+fn gpui_rgba(c: Rgba, opacity: f32) -> gpui::Rgba {
     gpui::Rgba {
         r: c.r as f32 / 255.0,
         g: c.g as f32 / 255.0,
         b: c.b as f32 / 255.0,
         a: (c.a as f32 / 255.0) * opacity.clamp(0.0, 1.0),
     }
-    .into()
+}
+
+/// Resolve a scene `Paint` (solid or two-stop linear gradient) into a gpui `Background`.
+fn paint_bg(p: &Paint, opacity: f32) -> Background {
+    match p {
+        Paint::Solid(c) => fill_bg(*c, opacity),
+        Paint::Linear { from, to, angle_deg } => gpui::linear_gradient(
+            *angle_deg,
+            gpui::linear_color_stop(gpui_rgba(*from, opacity), 0.0),
+            gpui::linear_color_stop(gpui_rgba(*to, opacity), 1.0),
+        ),
+    }
 }
 
 fn rgb_u32(c: Rgba) -> u32 {
@@ -426,6 +442,14 @@ impl HayateApp {
                     }))
                     .child(menu_item("m_align_r", "Align Right", cx, |t, _w, cx| {
                         t.run_on_selection("shape.align_text_right");
+                        cx.notify();
+                    }))
+                    .child(menu_divider())
+                    .child(menu_item("m_gradient", "Gradient Fill", cx, |t, _w, cx| {
+                        t.run_on_selection_with(
+                            "shape.fill_gradient",
+                            serde_json::json!({ "from": "#4F86C6", "to": "#E91E63", "angle": 0.0 }),
+                        );
                         cx.notify();
                     }))
                     .child(menu_divider())
@@ -696,21 +720,12 @@ impl HayateApp {
             "backspace" => {
                 if let Some(te) = self.text_edit.as_mut() {
                     te.buf.pop();
+                    te.marked = None;
                 }
                 live = true;
             }
-            "space" => {
-                if let Some(te) = self.text_edit.as_mut() {
-                    te.buf.push(' ');
-                }
-                live = true;
-            }
-            s if s.chars().count() == 1 => {
-                if let Some(te) = self.text_edit.as_mut() {
-                    te.buf.push_str(s);
-                }
-                live = true;
-            }
+            // Character input (including space and IME composition) flows through the platform
+            // text-input handler (`replace_text_in_range`); handling it here too would double it.
             _ => {}
         }
         if live {
@@ -1054,6 +1069,18 @@ impl HayateApp {
         let o = self.canvas_origin.get();
         let x = f32::from(ev.position.x - o.x);
         let y = f32::from(ev.position.y - o.y);
+        // Double-click enters in-canvas text editing on the shape under the cursor.
+        if ev.click_count >= 2 {
+            if let Some(e) = hit_test(&self.scene, x, y) {
+                if self.pres.world.texts.contains_key(&e) {
+                    self.selection = Some(e);
+                    self.also.clear();
+                    self.begin_text_edit(e);
+                    cx.notify();
+                    return;
+                }
+            }
+        }
         // Grab a resize handle on the current (axis-aligned) selection?
         if let Some(sel) = self.selection {
             if let Some(node) = self.scene.nodes.iter().find(|n| n.source == Some(sel)) {
@@ -1126,10 +1153,54 @@ impl HayateApp {
             size: d.start_frame.size,
         };
         let e = d.entity;
+        let nf = self.snap_frame(e, nf);
         self.pres.world.frames.insert(e, nf); // live preview, no history
         self.rebuild();
         self.update_guides(e);
         cx.notify();
+    }
+
+    /// Snap `nf` so the moving shape's edges/center align to nearby guide lines: the slide
+    /// edges & center and every other shape's edges & center, within a small pixel radius.
+    fn snap_frame(&self, moving: Entity, nf: RectEmu) -> RectEmu {
+        let scale = self.scale();
+        if scale <= 0.0 {
+            return nf;
+        }
+        // Snap radius (~8 device px) expressed in EMU.
+        let thr = (8.0 / scale) as i64;
+        let (sw, sh) = (self.pres.slide_size.w, self.pres.slide_size.h);
+        let mut xs = vec![0, sw / 2, sw];
+        let mut ys = vec![0, sh / 2, sh];
+        for other in self.pres.children(self.slide) {
+            if other == moving {
+                continue;
+            }
+            if let Some(f) = self.pres.world.frames.get(&other) {
+                xs.extend([f.origin.x, f.origin.x + f.size.w / 2, f.origin.x + f.size.w]);
+                ys.extend([f.origin.y, f.origin.y + f.size.h / 2, f.origin.y + f.size.h]);
+            }
+        }
+        // Best (smallest) delta aligning any of [start, center, end] to a candidate line.
+        let best = |start: i64, size: i64, cands: &[i64]| -> Option<i64> {
+            let anchors = [start, start + size / 2, start + size];
+            let mut best: Option<i64> = None;
+            for a in anchors {
+                for &c in cands {
+                    let d = c - a;
+                    if d.abs() <= thr && best.map_or(true, |b: i64| d.abs() < b.abs()) {
+                        best = Some(d);
+                    }
+                }
+            }
+            best
+        };
+        let ox = nf.origin.x + best(nf.origin.x, nf.size.w, &xs).unwrap_or(0);
+        let oy = nf.origin.y + best(nf.origin.y, nf.size.h, &ys).unwrap_or(0);
+        RectEmu {
+            origin: PointEmu::new(ox, oy),
+            size: nf.size,
+        }
     }
 
     /// Recompute alignment guides for the moving shape against the others (scene px coords).
@@ -1714,7 +1785,7 @@ fn paint_scene(
             Primitive::Quad {
                 bounds: r,
                 corner_radius,
-                fill: Some(Paint::Solid(c)),
+                fill: Some(paint),
                 ..
             } => {
                 if angle.abs() < 1e-3 {
@@ -1725,7 +1796,7 @@ fn paint_scene(
                     window.paint_quad(quad(
                         b,
                         px(*corner_radius),
-                        fill_bg(*c, opacity),
+                        paint_bg(paint, opacity),
                         px(0.),
                         gpui::transparent_black(),
                         Default::default(),
@@ -1750,13 +1821,13 @@ fn paint_scene(
                     }
                     b.close();
                     if let Ok(path) = b.build() {
-                        window.paint_path(path, fill_bg(*c, opacity));
+                        window.paint_path(path, paint_bg(paint, opacity));
                     }
                 }
             }
             Primitive::Ellipse {
                 bounds: r,
-                fill: Some(Paint::Solid(c)),
+                fill: Some(paint),
                 ..
             } => {
                 let (cx_, cy_) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
@@ -1776,7 +1847,7 @@ fn paint_scene(
                 }
                 b.close();
                 if let Ok(path) = b.build() {
-                    window.paint_path(path, rgb(rgb_u32(*c)));
+                    window.paint_path(path, paint_bg(paint, opacity));
                 }
             }
             Primitive::Image {
@@ -1999,11 +2070,7 @@ impl Render for HayateApp {
         let input_entity = cx.entity();
         let input_focus = self.focus.clone();
         let (sw, sh) = (scene.size.w, scene.size.h);
-        let title: SharedString = format!(
-            "HayateOffice — Ctrl+P palette · R add · Del delete · Ctrl+Z undo · Ctrl+S/O save/open ({} shapes)",
-            scene.nodes.len()
-        )
-        .into();
+        let title: SharedString = "HayateOffice".into();
 
         let palette_panel = self.palette.as_ref().map(|p| {
             let list = self.palette_commands();
