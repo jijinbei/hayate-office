@@ -1,0 +1,10 @@
+[package]
+name = "hayate-format-pptx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+hayate-ir.workspace = true
+zip = "2"
