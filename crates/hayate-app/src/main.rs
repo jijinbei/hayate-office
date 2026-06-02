@@ -402,6 +402,70 @@ impl HayateApp {
         }
     }
 
+    // --- inspector (Format pane) actions ---
+
+    fn commit_tx(&mut self, tx: Transaction) {
+        if !tx.ops.is_empty() {
+            self.history.commit(&mut self.pres.world, tx);
+            self.rebuild();
+        }
+    }
+
+    fn sel_rotation(&self) -> f32 {
+        self.selection
+            .and_then(|e| self.pres.world.rotations.get(&e).copied())
+            .unwrap_or(0.0)
+    }
+
+    fn rotate_by(&mut self, delta: f32) {
+        if let Some(e) = self.selection {
+            let cur = self.pres.world.rotations.get(&e).copied().unwrap_or(0.0);
+            let tx = edit::set_rotation(e, cur + delta);
+            self.commit_tx(tx);
+        }
+    }
+
+    fn set_rotation_abs(&mut self, deg: f32) {
+        if let Some(e) = self.selection {
+            let tx = edit::set_rotation(e, deg);
+            self.commit_tx(tx);
+        }
+    }
+
+    fn nudge(&mut self, dx: i64, dy: i64) {
+        if let Some(e) = self.selection {
+            let tx = edit::translate(&self.pres.world, e, dx, dy);
+            self.commit_tx(tx);
+        }
+    }
+
+    fn resize_by(&mut self, dw: i64, dh: i64) {
+        if let Some(e) = self.selection {
+            if let Some(f) = self.pres.world.frames.get(&e).copied() {
+                let nw = (f.size.w + dw).max(91_440);
+                let nh = (f.size.h + dh).max(91_440);
+                let tx = edit::resize(&self.pres.world, e, nw, nh);
+                self.commit_tx(tx);
+            }
+        }
+    }
+
+    fn set_fill_accent(&mut self, token: ThemeColorToken) {
+        if let Some(e) = self.selection {
+            let tx = edit::set_fill(e, Fill::Solid(Color::theme(token)));
+            self.commit_tx(tx);
+        }
+    }
+
+    fn run_on_selection(&mut self, id: &str) {
+        if let Some(e) = self.selection {
+            let args = serde_json::json!({ "entity": e.0 });
+            if let Some(tx) = self.registry.build(id, &args, &self.pres.world) {
+                self.commit_tx(tx);
+            }
+        }
+    }
+
     fn open(&mut self) {
         match hayate_format::load(DOC_PATH) {
             Ok(p) => {
@@ -539,8 +603,9 @@ impl Render for HayateApp {
 
         // Fit the slide into the current window area: content scales as the window grows.
         let vp = window.viewport_size();
+        let inspector_w = if self.selection.is_some() { 244.0 } else { 0.0 };
         self.view_size = PxSize {
-            w: (f32::from(vp.width) - 240.0).max(64.0), // minus slide-list sidebar
+            w: (f32::from(vp.width) - 244.0 - inspector_w).max(64.0), // minus slide-list + format pane
             h: (f32::from(vp.height) - 88.0).max(64.0), // minus top bar
         };
         self.rebuild();
@@ -648,6 +713,106 @@ impl Render for HayateApp {
             );
         }
 
+        // Format (properties) pane for the selected shape — PowerPoint-style.
+        let accents = [
+            ThemeColorToken::Accent1,
+            ThemeColorToken::Accent2,
+            ThemeColorToken::Accent3,
+            ThemeColorToken::Accent4,
+            ThemeColorToken::Accent5,
+            ThemeColorToken::Accent6,
+        ];
+        let theme = self.pres.theme_of(self.slide).cloned().unwrap_or_default();
+        let inspector = self.selection.map(|_e| {
+            let rot = self.sel_rotation();
+            let mut swatches = div().flex().flex_row().gap_1();
+            for (i, t) in accents.into_iter().enumerate() {
+                let cu = rgb_u32(theme.color_for(t));
+                swatches = swatches.child(
+                    div()
+                        .id(("acc", i))
+                        .w(px(28.))
+                        .h(px(28.))
+                        .rounded_md()
+                        .bg(rgb(cu))
+                        .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+                            this.set_fill_accent(t);
+                            cx.notify();
+                        })),
+                );
+            }
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .w(px(228.))
+                .p_2()
+                .bg(rgb(0x252525))
+                .child(div().text_xl().child("Format"))
+                .child(div().child(format!("Rotation: {}\u{00B0}", rot.round() as i32)))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(tool_button("rot_m", "\u{27F2}-15", cx, |t, _w, cx| {
+                            t.rotate_by(-15.0);
+                            cx.notify();
+                        }))
+                        .child(tool_button("rot_p", "\u{27F3}+15", cx, |t, _w, cx| {
+                            t.rotate_by(15.0);
+                            cx.notify();
+                        }))
+                        .child(tool_button("rot_0", "0\u{00B0}", cx, |t, _w, cx| {
+                            t.set_rotation_abs(0.0);
+                            cx.notify();
+                        })),
+                )
+                .child(div().child("Position"))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(tool_button("x_m", "X-", cx, |t, _w, cx| { t.nudge(-91_440, 0); cx.notify(); }))
+                        .child(tool_button("x_p", "X+", cx, |t, _w, cx| { t.nudge(91_440, 0); cx.notify(); }))
+                        .child(tool_button("y_m", "Y-", cx, |t, _w, cx| { t.nudge(0, -91_440); cx.notify(); }))
+                        .child(tool_button("y_p", "Y+", cx, |t, _w, cx| { t.nudge(0, 91_440); cx.notify(); })),
+                )
+                .child(div().child("Size"))
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(tool_button("w_m", "W-", cx, |t, _w, cx| { t.resize_by(-182_880, 0); cx.notify(); }))
+                        .child(tool_button("w_p", "W+", cx, |t, _w, cx| { t.resize_by(182_880, 0); cx.notify(); }))
+                        .child(tool_button("h_m", "H-", cx, |t, _w, cx| { t.resize_by(0, -182_880); cx.notify(); }))
+                        .child(tool_button("h_p", "H+", cx, |t, _w, cx| { t.resize_by(0, 182_880); cx.notify(); })),
+                )
+                .child(div().child("Fill"))
+                .child(swatches)
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_2()
+                        .child(tool_button("front", "Front", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.bring_to_front");
+                            cx.notify();
+                        }))
+                        .child(tool_button("back", "Back", cx, |t, _w, cx| {
+                            t.run_on_selection("shape.send_to_back");
+                            cx.notify();
+                        })),
+                )
+                .child(tool_button("del", "Delete", cx, |t, _w, cx| {
+                    t.delete_selection();
+                    t.rebuild();
+                    cx.notify();
+                }))
+        });
+
         div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| this.on_key_down(ev, cx)))
@@ -709,7 +874,8 @@ impl Render for HayateApp {
                                 cx.listener(|this, ev: &MouseUpEvent, _, cx| this.on_mouse_up(ev, cx)),
                             )
                             .child(slide_canvas),
-                    ),
+                    )
+                    .children(inspector),
             )
     }
 }
