@@ -34,8 +34,6 @@ use hayate_core::CommandRegistry;
 use hayate_render::scene::{Paint, Primitive, PxRect, PxSize, ResolvedRun, Scene, TextBlock};
 use hayate_render::{build_slide_scene, hit_test};
 
-/// Fixed on-screen slide size (does not rescale with the window).
-const TARGET: PxSize = PxSize { w: 768.0, h: 432.0 };
 const SELECTION: u32 = 0x3B82F6;
 const DOC_PATH: &str = "hayate-sample.hayate";
 
@@ -93,6 +91,15 @@ fn sample_presentation() -> Presentation {
     p
 }
 
+/// On-screen slide size in pixels at the given zoom (1pt -> 1px at zoom 1.0).
+fn view_px(pres: &Presentation, zoom: f32) -> PxSize {
+    let pt = |v: i64| v as f32 / 12_700.0;
+    PxSize {
+        w: pt(pres.slide_size.w) * zoom,
+        h: pt(pres.slide_size.h) * zoom,
+    }
+}
+
 fn rgb_u32(c: Rgba) -> u32 {
     ((c.r as u32) << 16) | ((c.g as u32) << 8) | (c.b as u32)
 }
@@ -138,8 +145,9 @@ struct HayateApp {
     /// Keyboard focus for the editor (so Ctrl/Cmd+Z reaches us).
     focus: gpui::FocusHandle,
     focused_once: bool,
-    /// Available slide-view size in pixels (the slide is fit into this; grows with the window).
-    view_size: PxSize,
+    /// View zoom (display scale only; document coordinates stay in absolute points).
+    /// 1.0 = 100% (1pt -> 1px). Independent of window size.
+    zoom: f32,
     /// Command registry (palette / scripts / AI surface).
     registry: CommandRegistry,
     /// Command palette state when open.
@@ -157,7 +165,8 @@ impl HayateApp {
     fn new(cx: &mut Context<Self>) -> Self {
         let pres = sample_presentation();
         let slide = pres.slides()[0];
-        let scene = build_slide_scene(&pres, slide, TARGET);
+        let zoom = 0.8;
+        let scene = build_slide_scene(&pres, slide, view_px(&pres, zoom));
         HayateApp {
             pres,
             slide,
@@ -168,11 +177,30 @@ impl HayateApp {
             canvas_origin: Rc::new(Cell::new(point(px(0.), px(0.)))),
             focus: cx.focus_handle(),
             focused_once: false,
-            view_size: TARGET,
+            zoom,
             registry: hayate_core::builtins(),
             palette: None,
             rot_edit: None,
         }
+    }
+
+    fn set_zoom(&mut self, z: f32, cx: &mut Context<Self>) {
+        self.zoom = z.clamp(0.1, 8.0);
+        self.rebuild();
+        cx.notify();
+    }
+
+    /// Set zoom so the slide fits the current window's editing area.
+    fn fit_zoom(&mut self, window: &Window) {
+        let vp = window.viewport_size();
+        let inspector_w = if self.selection.is_some() { 244.0 } else { 0.0 };
+        let avail_w = (f32::from(vp.width) - 244.0 - inspector_w - 24.0).max(64.0);
+        let avail_h = (f32::from(vp.height) - 96.0).max(64.0);
+        let pt = |v: i64| (v as f32 / 12_700.0).max(1.0);
+        let z = (avail_w / pt(self.pres.slide_size.w))
+            .min(avail_h / pt(self.pres.slide_size.h))
+            .clamp(0.1, 8.0);
+        self.zoom = z;
     }
 
     /// Handle a key while the rotation field is being edited (digits only, 0..=360).
@@ -293,7 +321,8 @@ impl HayateApp {
     }
 
     fn rebuild(&mut self) {
-        self.scene = build_slide_scene(&self.pres, self.slide, self.view_size);
+        let target = view_px(&self.pres, self.zoom);
+        self.scene = build_slide_scene(&self.pres, self.slide, target);
     }
 
     /// Pixels per EMU (width-fit).
@@ -678,7 +707,8 @@ impl Render for HayateApp {
             self.focused_once = true;
         }
 
-        // Slide size is fixed (TARGET); resizing the window does not rescale the content.
+        // Document coordinates are absolute (points); on-screen size = slide_pt * zoom.
+        // Window resizing does not change zoom (use the zoom controls / Fit).
         let scene = self.scene.clone();
         let selection = self.selection;
         let origin_cell = self.canvas_origin.clone();
@@ -958,6 +988,20 @@ impl Render for HayateApp {
                             .flex_row()
                             .gap_2()
                             .items_center()
+                            .child(tool_button("zoom_out", "\u{2212}", cx, |t, _w, cx| {
+                                let z = t.zoom / 1.25;
+                                t.set_zoom(z, cx);
+                            }))
+                            .child(div().child(format!("{}%", (self.zoom * 100.0).round() as i32)))
+                            .child(tool_button("zoom_in", "+", cx, |t, _w, cx| {
+                                let z = t.zoom * 1.25;
+                                t.set_zoom(z, cx);
+                            }))
+                            .child(tool_button("zoom_fit", "Fit", cx, |t, w, cx| {
+                                t.fit_zoom(w);
+                                t.rebuild();
+                                cx.notify();
+                            }))
                             .child(tool_button("min", "\u{2013}", cx, |_this, window, _cx| {
                                 window.minimize_window();
                             }))
