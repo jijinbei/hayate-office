@@ -260,3 +260,59 @@ fn line_geometry_builds_line_primitive() {
         other => panic!("expected line, got {other:?}"),
     }
 }
+
+#[test]
+fn container_scene_renders_context_and_editable() {
+    use hayate_ir::doc::{PlaceholderRef, PlaceholderType};
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Title and Content");
+
+    // A placeholder defined on the master (context) and one on the layout (editable).
+    let title = PlaceholderRef {
+        ph_type: PlaceholderType::Title,
+        idx: 0,
+    };
+    let body = PlaceholderRef {
+        ph_type: PlaceholderType::Body,
+        idx: 0,
+    };
+    let m_ph = p.add_shape(master);
+    p.world
+        .frames
+        .insert(m_ph, RectEmu::new(0, 0, 914_400, 914_400));
+    p.world.geometries.insert(m_ph, Geometry::Rect);
+    p.world.placeholders.insert(m_ph, title);
+    let l_ph = p.add_shape(layout);
+    p.world
+        .frames
+        .insert(l_ph, RectEmu::new(0, 914_400, 914_400, 914_400));
+    p.world.geometries.insert(l_ph, Geometry::Rect);
+    p.world.placeholders.insert(l_ph, body);
+
+    let theme = p.container_theme(layout).cloned().unwrap_or_default();
+    let bg = p.container_background(layout);
+    let scene = build_container_scene(
+        &p,
+        layout,
+        &theme,
+        bg,
+        &[master],
+        PxSize { w: 960.0, h: 540.0 },
+    );
+
+    // The master placeholder is display-only context (source None); the layout's own is selectable.
+    assert!(
+        scene.nodes.iter().any(|n| n.source.is_none()),
+        "master context node present"
+    );
+    assert!(
+        scene.nodes.iter().any(|n| n.source == Some(l_ph)),
+        "layout placeholder selectable"
+    );
+
+    // Editing the master shows only its own children (no context).
+    let mscene = build_container_scene(&p, master, &theme, bg, &[], PxSize { w: 960.0, h: 540.0 });
+    assert_eq!(mscene.nodes.len(), 1);
+    assert_eq!(mscene.nodes[0].source, Some(m_ph));
+}

@@ -101,46 +101,91 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
         });
     }
 
-    for e in p.children(slide) {
-        // Placeholder shapes are rendered above via the inheritance resolvers.
-        if p.world.placeholders.get(&e).is_some() {
+    // The slide's own non-placeholder shapes (placeholders were handled above).
+    push_raw_children(p, slide, &theme, &vp, true, true, 1.0, &mut nodes);
+
+    Scene {
+        size: vp.size(p.slide_size),
+        background,
+        nodes,
+    }
+}
+
+/// Render a container's direct children straight from their own components (frame/text/picture/
+/// geometry), appending one [`SceneNode`] each. `skip_placeholders` excludes placeholder shapes
+/// (used by the slide path, which renders placeholders via the inheritance resolvers instead);
+/// `selectable` sets each node's `source` (None makes it display-only context); `opacity_mul`
+/// scales opacity (used to dim ancestor context when editing a layout/master).
+#[allow(clippy::too_many_arguments)]
+fn push_raw_children(
+    p: &Presentation,
+    container: Entity,
+    theme: &Theme,
+    vp: &Viewport,
+    skip_placeholders: bool,
+    selectable: bool,
+    opacity_mul: f32,
+    nodes: &mut Vec<SceneNode>,
+) {
+    for e in p.children(container) {
+        if skip_placeholders && p.world.placeholders.contains_key(&e) {
             continue;
         }
         let frame = match p.world.frames.get(&e) {
             Some(f) => *f,
-            None => continue, // shapes without geometry are skipped for now
+            None => continue,
         };
         let bounds = vp.rect(frame);
         let rotation_deg = p.world.rotations.get(&e).copied().unwrap_or(0.0);
-        let opacity = p.world.opacity.get(&e).copied().unwrap_or(1.0);
-        let fill = p.world.fills.get(&e).map(|f| fill_to_paint(f, &theme));
+        let opacity = p.world.opacity.get(&e).copied().unwrap_or(1.0) * opacity_mul;
+        let fill = p.world.fills.get(&e).map(|f| fill_to_paint(f, theme));
         let stroke = p.world.strokes.get(&e).map(|s| StrokePx {
             color: theme.resolve_color(&s.color),
             width: vp.len(s.width),
         });
-
         let prim = if let Some(tb) = p.world.texts.get(&e) {
-            Primitive::Text(resolve_text(tb, &theme, &vp, bounds))
+            Primitive::Text(resolve_text(tb, theme, vp, bounds))
         } else if let Some(pic) = p.world.pictures.get(&e) {
-            // A picture takes precedence over any geometry on the same entity.
             Primitive::Image {
                 bounds,
                 media_key: pic.media_key.clone(),
             }
         } else if let Some(geom) = p.world.geometries.get(&e) {
-            geometry_prim(geom, bounds, fill, stroke, &vp)
+            geometry_prim(geom, bounds, fill, stroke, vp)
         } else {
             continue;
         };
-
         nodes.push(SceneNode {
-            source: Some(e),
+            source: selectable.then_some(e),
             rotation_deg,
             opacity,
             prim,
         });
     }
+}
 
+/// Build a scene for editing a non-slide container (a layout or master) in place. `context`
+/// lists ancestor containers (e.g. the owning master when editing a layout) whose shapes render
+/// dimmed and display-only; the `container` itself renders fully and selectable. The caller
+/// resolves `theme`/`background` via [`Presentation::container_theme`]/`container_background`
+/// (a bare layout/master has no `SlideInfo`).
+pub fn build_container_scene(
+    p: &Presentation,
+    container: Entity,
+    theme: &Theme,
+    background: Option<Fill>,
+    context: &[Entity],
+    target: PxSize,
+) -> Scene {
+    let vp = Viewport::fit(p.slide_size, target);
+    let background = background
+        .map(|f| paint_to_rgba(&f, theme))
+        .unwrap_or(Rgba::WHITE);
+    let mut nodes = Vec::new();
+    for &anc in context {
+        push_raw_children(p, anc, theme, &vp, false, false, 0.5, &mut nodes);
+    }
+    push_raw_children(p, container, theme, &vp, false, true, 1.0, &mut nodes);
     Scene {
         size: vp.size(p.slide_size),
         background,

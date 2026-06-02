@@ -14,6 +14,7 @@ pub mod raster;
 pub mod scene;
 pub mod svg;
 
+pub use build::build_container_scene;
 pub use build::build_slide_scene;
 pub use build::build_slide_scene_at;
 pub use grid::{grid_lines, GridLines};
