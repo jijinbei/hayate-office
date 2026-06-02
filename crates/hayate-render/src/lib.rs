@@ -7,8 +7,10 @@ pub mod hit;
 pub mod linebreak;
 pub mod raster;
 pub mod scene;
+pub mod svg;
 
 pub use build::build_slide_scene;
+pub use svg::export_svg;
 pub use hit::hit_test;
 pub use raster::rasterize;
 pub use linebreak::{DefaultBreaker, Item, JapaneseBreaker, LineBreaker};
