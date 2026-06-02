@@ -415,6 +415,13 @@ impl HayateApp {
                 self.paste_clipboard();
                 cx.notify();
             }
+            "escape" => {
+                // Cancel the current selection.
+                self.selection = None;
+                self.also.clear();
+                self.marquee = None;
+                cx.notify();
+            }
             "delete" | "backspace" if !cmd => {
                 self.delete_selection();
                 cx.notify();

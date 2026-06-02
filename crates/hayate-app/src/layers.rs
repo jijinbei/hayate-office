@@ -39,23 +39,39 @@ impl HayateApp {
                         continue;
                     }
                     seen_groups.push(key);
+                    let group_no = seen_groups.len();
+                    let members: Vec<Entity> = front_to_back
+                        .iter()
+                        .copied()
+                        .filter(|m| self.pres.world.groups.get(m) == Some(&key))
+                        .collect();
+                    let first = members[0];
 
-                    // Group header row (not itself selectable).
+                    // Group header row — clicking it selects the whole group.
                     panel = panel.child(
                         div()
+                            .id(("group", group_no))
                             .px_2()
                             .py_1()
                             .text_sm()
-                            .text_color(rgb(0x8a8a8a))
-                            .child("\u{25b8} Group"),
+                            .rounded_md()
+                            .hover(|s| s.bg(rgb(0x2f2f2f)))
+                            .child(format!("\u{1F4C1} Group {group_no}"))
+                            .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                                window.focus(&this.focus, cx);
+                                this.selection = Some(first);
+                                this.also = group_members(&this.pres.world, first)
+                                    .into_iter()
+                                    .filter(|&m| m != first)
+                                    .collect();
+                                cx.notify();
+                            })),
                     );
 
                     // Members of this group, front-to-back, indented under the header.
-                    for &m in &front_to_back {
-                        if self.pres.world.groups.get(&m) == Some(&key) {
-                            panel = panel.child(self.layer_row(m, index, true, cx));
-                            index += 1;
-                        }
+                    for &m in &members {
+                        panel = panel.child(self.layer_row(m, index, true, cx));
+                        index += 1;
                     }
                 }
                 None => {
@@ -123,7 +139,11 @@ impl HayateApp {
             } else {
                 truncated
             };
-            return format!("T  {label}");
+            return if label.is_empty() {
+                "Text".to_string()
+            } else {
+                label
+            };
         }
         if self.pres.world.pictures.contains_key(&e) {
             return "Image".to_string();

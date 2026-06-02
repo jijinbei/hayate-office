@@ -78,13 +78,18 @@ impl HayateApp {
             cx.notify();
             return;
         }
-        self.also.clear();
-        self.selection = hit;
-        // Clicking a grouped shape selects the whole group.
-        if let Some(h) = hit {
-            let members = hayate_model::edit::group_members(&self.pres.world, h);
-            if members.len() > 1 {
-                self.also = members.into_iter().filter(|&m| m != h).collect();
+        // If the clicked shape is already part of the current selection (a multi-select or a
+        // group), keep the whole selection so the drag moves them all together. Otherwise
+        // select just this shape, expanded to its group.
+        let already_selected = hit.map_or(false, |h| self.selected_all().contains(&h));
+        if !already_selected {
+            self.also.clear();
+            self.selection = hit;
+            if let Some(h) = hit {
+                let members = hayate_model::edit::group_members(&self.pres.world, h);
+                if members.len() > 1 {
+                    self.also = members.into_iter().filter(|&m| m != h).collect();
+                }
             }
         }
         // Drag moves every selected shape (group / multi-select) together.
