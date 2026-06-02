@@ -14,7 +14,7 @@
 use hayate_ir::color::{Color, Rgba, ThemeColorToken};
 use hayate_ir::frac::FracIndex;
 use hayate_ir::paint::Fill;
-use hayate_ir::world::{CompValue, Entity, World};
+use hayate_ir::world::{CompKind, CompValue, Entity, World};
 use hayate_model::edit;
 use hayate_model::{Operation, Transaction};
 use serde::{Deserialize, Serialize};
@@ -307,6 +307,63 @@ pub fn builtins() -> CommandRegistry {
                 entity,
                 value: CompValue::Rotation(degrees as f32),
             }],
+            _ => vec![],
+        },
+    );
+
+    // shape.set_opacity — set the entity's Opacity. The value is clamped to 0.0..=1.0 and
+    // stored as f32. Built directly as a SetComponent op (no edit-helper dependency).
+    reg.register(
+        CommandMeta::new("shape.set_opacity", "Set Opacity", "Style"),
+        vec![
+            ParamSpec::new("entity", ParamType::Entity),
+            ParamSpec::new("value", ParamType::Float),
+        ],
+        |_world, args| match (arg_entity(args, "entity"), arg_f64(args, "value")) {
+            (Some(entity), Some(value)) => {
+                let value = value.clamp(0.0, 1.0);
+                vec![Operation::SetComponent {
+                    entity,
+                    value: CompValue::Opacity(value as f32),
+                }]
+            }
+            _ => vec![],
+        },
+    );
+
+    // shape.reset_rotation — clear any rotation by setting it back to 0 degrees.
+    reg.register(
+        CommandMeta::new("shape.reset_rotation", "Reset Rotation", "Shape"),
+        vec![ParamSpec::new("entity", ParamType::Entity)],
+        |_world, args| match arg_entity(args, "entity") {
+            Some(entity) => vec![Operation::SetComponent {
+                entity,
+                value: CompValue::Rotation(0.0),
+            }],
+            None => vec![],
+        },
+    );
+
+    // shape.rotate_by — add `degrees` to the entity's current Rotation (default 0.0 when the
+    // entity has no Rotation yet). Reads current state from the World.
+    reg.register(
+        CommandMeta::new("shape.rotate_by", "Rotate By", "Shape"),
+        vec![
+            ParamSpec::new("entity", ParamType::Entity),
+            ParamSpec::new("degrees", ParamType::Float),
+        ],
+        |world, args| match (arg_entity(args, "entity"), arg_f64(args, "degrees")) {
+            (Some(entity), Some(degrees)) => {
+                let current = match world.get(entity, CompKind::Rotation) {
+                    Some(CompValue::Rotation(r)) => r,
+                    _ => 0.0,
+                };
+                let sum = current + degrees as f32;
+                vec![Operation::SetComponent {
+                    entity,
+                    value: CompValue::Rotation(sum),
+                }]
+            }
             _ => vec![],
         },
     );
@@ -685,6 +742,95 @@ mod tests {
         assert!(hits
             .iter()
             .any(|(_, title)| title == "Fill: Accent 1"));
+    }
+
+    #[test]
+    fn set_opacity_command_sets_and_clamps() {
+        let (mut w, e) = world_with_framed_shape();
+        let reg = builtins();
+        let mut h = History::new();
+
+        // A normal in-range value is stored as-is.
+        let tx = reg
+            .build(
+                "shape.set_opacity",
+                &json!({ "entity": e.0, "value": 0.5 }),
+                &w,
+            )
+            .expect("shape.set_opacity is registered");
+        assert_eq!(tx.label, "Set Opacity");
+        h.commit(&mut w, tx);
+        assert_eq!(w.get(e, CompKind::Opacity), Some(CompValue::Opacity(0.5)));
+
+        // An out-of-range value is clamped to 1.0.
+        let tx = reg
+            .build(
+                "shape.set_opacity",
+                &json!({ "entity": e.0, "value": 2.5 }),
+                &w,
+            )
+            .unwrap();
+        h.commit(&mut w, tx);
+        assert_eq!(w.get(e, CompKind::Opacity), Some(CompValue::Opacity(1.0)));
+
+        // Undoable as one step (back to 0.5).
+        assert!(h.undo(&mut w));
+        assert_eq!(w.get(e, CompKind::Opacity), Some(CompValue::Opacity(0.5)));
+    }
+
+    #[test]
+    fn reset_rotation_command_sets_zero() {
+        let (mut w, e) = world_with_framed_shape();
+        w.set(e, CompValue::Rotation(33.0));
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build("shape.reset_rotation", &json!({ "entity": e.0 }), &w)
+            .expect("shape.reset_rotation is registered");
+        assert_eq!(tx.label, "Reset Rotation");
+        h.commit(&mut w, tx);
+        assert_eq!(w.get(e, CompKind::Rotation), Some(CompValue::Rotation(0.0)));
+
+        // Undoable as one step (back to the prior rotation).
+        assert!(h.undo(&mut w));
+        assert_eq!(w.get(e, CompKind::Rotation), Some(CompValue::Rotation(33.0)));
+    }
+
+    #[test]
+    fn rotate_by_command_adds_to_current() {
+        let (mut w, e) = world_with_framed_shape();
+        w.set(e, CompValue::Rotation(10.0));
+        let reg = builtins();
+        let mut h = History::new();
+
+        let tx = reg
+            .build(
+                "shape.rotate_by",
+                &json!({ "entity": e.0, "degrees": 35 }),
+                &w,
+            )
+            .expect("shape.rotate_by is registered");
+        assert_eq!(tx.label, "Rotate By");
+        h.commit(&mut w, tx);
+        assert_eq!(w.get(e, CompKind::Rotation), Some(CompValue::Rotation(45.0)));
+
+        // Undoable as one step (back to 10.0).
+        assert!(h.undo(&mut w));
+        assert_eq!(w.get(e, CompKind::Rotation), Some(CompValue::Rotation(10.0)));
+    }
+
+    #[test]
+    fn manifest_includes_new_style_and_shape_commands() {
+        let reg = builtins();
+        let manifest = reg.manifest();
+        let ids: Vec<&str> = manifest
+            .iter()
+            .filter_map(|c| c["id"].as_str())
+            .collect();
+        assert!(ids.contains(&"shape.set_opacity"));
+        assert!(ids.contains(&"shape.reset_rotation"));
+        assert!(ids.contains(&"shape.rotate_by"));
     }
 
     #[test]
