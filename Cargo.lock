@@ -2560,9 +2560,22 @@ version = "0.0.0"
 dependencies = [
  "gpui",
  "gpui_platform",
+ "hayate-core",
+ "hayate-format",
  "hayate-ir",
  "hayate-model",
  "hayate-render",
+ "serde_json",
+]
+
+[[package]]
+name = "hayate-core"
+version = "0.0.0"
+dependencies = [
+ "hayate-ir",
+ "hayate-model",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

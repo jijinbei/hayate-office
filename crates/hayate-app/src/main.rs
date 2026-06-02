@@ -10,7 +10,8 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 use gpui::{
-    App, Background, Bounds, Context, Font, FontStyle, FontWeight, Hsla, KeyDownEvent, MouseButton,
+    App, Background, Bounds, ClickEvent, Context, Font, FontStyle, FontWeight, Hsla, KeyDownEvent,
+    MouseButton,
     MouseDownEvent, MouseMoveEvent, MouseUpEvent, PathBuilder, Pixels, Point, SharedString,
     TextRun, Window, WindowBounds, WindowOptions, canvas, div, point, prelude::*, px, quad, rgb,
     size,
@@ -136,6 +137,8 @@ struct HayateApp {
     /// Keyboard focus for the editor (so Ctrl/Cmd+Z reaches us).
     focus: gpui::FocusHandle,
     focused_once: bool,
+    /// Display zoom factor for the slide view.
+    zoom: f32,
     /// Command registry (palette / scripts / AI surface).
     registry: CommandRegistry,
     /// Command palette state when open.
@@ -162,9 +165,24 @@ impl HayateApp {
             canvas_origin: Rc::new(Cell::new(point(px(0.), px(0.)))),
             focus: cx.focus_handle(),
             focused_once: false,
+            zoom: 1.0,
             registry: hayate_core::builtins(),
             palette: None,
         }
+    }
+
+    /// Slide render target in pixels at the current zoom.
+    fn target(&self) -> PxSize {
+        PxSize {
+            w: 960.0 * self.zoom,
+            h: 540.0 * self.zoom,
+        }
+    }
+
+    fn set_zoom(&mut self, z: f32, cx: &mut Context<Self>) {
+        self.zoom = z.clamp(0.25, 4.0);
+        self.rebuild();
+        cx.notify();
     }
 
     /// Commands matching the palette query, as (id, title).
@@ -256,7 +274,8 @@ impl HayateApp {
     }
 
     fn rebuild(&mut self) {
-        self.scene = build_slide_scene(&self.pres, self.slide, TARGET);
+        let target = self.target();
+        self.scene = build_slide_scene(&self.pres, self.slide, target);
     }
 
     /// Pixels per EMU (width-fit).
@@ -446,6 +465,24 @@ fn paint_text(tb: &TextBlock, ox: Pixels, oy: Pixels, window: &mut Window, cx: &
     }
 }
 
+/// A small clickable toolbar button.
+fn tool_button(
+    id: &'static str,
+    label: impl Into<SharedString>,
+    cx: &mut Context<HayateApp>,
+    action: impl Fn(&mut HayateApp, &mut Context<HayateApp>) + 'static,
+) -> impl IntoElement {
+    div()
+        .id(id)
+        .px_2()
+        .py_1()
+        .bg(rgb(0x3a3a3a))
+        .rounded_md()
+        .hover(|s| s.bg(rgb(0x4a4a4a)))
+        .child(label.into())
+        .on_click(cx.listener(move |this, _ev: &ClickEvent, _window, cx| action(this, cx)))
+}
+
 impl Render for HayateApp {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         if !self.focused_once {
@@ -568,7 +605,35 @@ impl Render for HayateApp {
             .size_full()
             .bg(rgb(0x1e1e1e))
             .text_color(rgb(0xffffff))
-            .child(div().text_xl().child(title))
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .justify_between()
+                    .items_center()
+                    .child(div().text_xl().child(title))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_2()
+                            .items_center()
+                            .child(tool_button("zoom_out", "\u{2212}", cx, |this, cx| {
+                                let z = this.zoom / 1.25;
+                                this.set_zoom(z, cx);
+                            }))
+                            .child(div().child(format!("{}%", (self.zoom * 100.0).round() as i32)))
+                            .child(tool_button("zoom_in", "+", cx, |this, cx| {
+                                let z = this.zoom * 1.25;
+                                this.set_zoom(z, cx);
+                            }))
+                            .child(tool_button("delete", "Delete", cx, |this, cx| {
+                                this.delete_selection();
+                                this.rebuild();
+                                cx.notify();
+                            })),
+                    ),
+            )
             .children(palette_panel)
             .child(
                 div()
