@@ -27,9 +27,10 @@ fn node_contains(node: &SceneNode, x: f32, y: f32) -> bool {
     // Rotate the test point into the node's local (unrotated) frame.
     let (lx, ly) = rotate_about_center(x, y, bounds, -node.rotation_deg);
     match &node.prim {
-        Primitive::Quad { .. } | Primitive::Text(_) | Primitive::Image { .. } => {
-            rect_contains(bounds, lx, ly)
-        }
+        Primitive::Quad { .. }
+        | Primitive::Text(_)
+        | Primitive::Image { .. }
+        | Primitive::Line { .. } => rect_contains(bounds, lx, ly),
         Primitive::Ellipse { .. } => ellipse_contains(bounds, lx, ly),
     }
 }
@@ -41,6 +42,7 @@ fn primitive_bounds(prim: &Primitive) -> PxRect {
         Primitive::Ellipse { bounds, .. } => *bounds,
         Primitive::Text(block) => block.bounds,
         Primitive::Image { bounds, .. } => *bounds,
+        Primitive::Line { .. } => crate::scene::prim_bounds(prim),
     }
 }
 

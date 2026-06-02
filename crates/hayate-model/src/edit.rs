@@ -11,7 +11,7 @@ use hayate_ir::color::ThemeColorToken;
 use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::RectEmu;
-use hayate_ir::paint::Fill;
+use hayate_ir::paint::{Fill, Stroke};
 use hayate_ir::shape::Geometry;
 use hayate_ir::text::{HAlign, Paragraph, Run, TextBody};
 use hayate_ir::units::pt;
@@ -106,6 +106,47 @@ pub fn create_rect(
             Operation::SetComponent {
                 entity: reserved,
                 value: CompValue::Fill(fill),
+            },
+        ],
+    )
+}
+
+/// Create a line (or arrow) shape on a reserved id: spawn it, then attach parent, sibling
+/// order, frame, line geometry and a default stroke. The line is drawn along the frame's
+/// diagonal (top-left -> bottom-right); when `arrow` is true an arrowhead is drawn at the
+/// end point. Unlike a rect, a line carries a `Stroke` (a dark 2pt outline) rather than a
+/// fill. `reserved` should come from [`World::reserve_id`] so the spawn is fully captured by
+/// this (undoable) transaction.
+pub fn create_line(
+    reserved: Entity,
+    parent: Entity,
+    order: FracIndex,
+    frame: RectEmu,
+    arrow: bool,
+) -> Transaction {
+    Transaction::new(
+        "create line",
+        vec![
+            Operation::Spawn { entity: reserved },
+            Operation::SetComponent {
+                entity: reserved,
+                value: CompValue::Parent(parent),
+            },
+            Operation::SetComponent {
+                entity: reserved,
+                value: CompValue::Order(order),
+            },
+            Operation::SetComponent {
+                entity: reserved,
+                value: CompValue::Frame(frame),
+            },
+            Operation::SetComponent {
+                entity: reserved,
+                value: CompValue::Geometry(Geometry::Line { arrow }),
+            },
+            Operation::SetComponent {
+                entity: reserved,
+                value: CompValue::Stroke(Stroke::solid(Color::theme(ThemeColorToken::Dk1), pt(2))),
             },
         ],
     )

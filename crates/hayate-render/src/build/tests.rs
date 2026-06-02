@@ -219,3 +219,38 @@ fn picture_with_frame_yields_image_node() {
         other => panic!("expected image, got {other:?}"),
     }
 }
+
+#[test]
+fn line_geometry_builds_line_primitive() {
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Blank");
+    let slide = p.add_slide(layout);
+
+    // An arrow with no explicit stroke: build should synthesize a default stroke and emit a
+    // Line primitive whose endpoints span the frame's diagonal (top-left -> bottom-right).
+    let line = p.add_shape(slide);
+    p.world
+        .frames
+        .insert(line, RectEmu::new(0, 0, 914_400, 914_400));
+    p.world
+        .geometries
+        .insert(line, Geometry::Line { arrow: true });
+
+    let scene = build_slide_scene(&p, slide, PxSize { w: 960.0, h: 540.0 });
+    assert_eq!(scene.nodes.len(), 1);
+    match &scene.nodes[0].prim {
+        Primitive::Line {
+            from,
+            to,
+            stroke,
+            arrow,
+        } => {
+            assert!(*arrow);
+            assert!(from.0 < to.0 && from.1 < to.1);
+            // A default stroke is synthesized when the shape carries none.
+            assert!(stroke.is_some());
+        }
+        other => panic!("expected line, got {other:?}"),
+    }
+}

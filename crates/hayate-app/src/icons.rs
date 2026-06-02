@@ -51,6 +51,12 @@ const ALIGN_CENTER: &str = lucide!(
 const ALIGN_RIGHT: &str = lucide!(
     r#"<line x1="21" x2="3" y1="6" y2="6"/><line x1="21" x2="9" y1="12" y2="12"/><line x1="21" x2="7" y1="18" y2="18"/>"#
 );
+const CIRCLE: &str = lucide!(r#"<circle cx="12" cy="12" r="10"/>"#);
+const LINE: &str = lucide!(r#"<line x1="5" y1="19" x2="19" y2="5"/>"#);
+const ARROW: &str = lucide!(r#"<path d="M7 7h10v10"/><path d="M7 17 17 7"/>"#);
+const IMAGE: &str = lucide!(
+    r#"<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>"#
+);
 
 /// Map an icon name (the `icons/<name>.svg` path) to its embedded SVG source.
 fn svg_for(name: &str) -> Option<&'static str> {
@@ -69,6 +75,10 @@ fn svg_for(name: &str) -> Option<&'static str> {
         "align-left" => ALIGN_LEFT,
         "align-center" => ALIGN_CENTER,
         "align-right" => ALIGN_RIGHT,
+        "circle" => CIRCLE,
+        "line" => LINE,
+        "arrow" => ARROW,
+        "image" => IMAGE,
         _ => return None,
     })
 }

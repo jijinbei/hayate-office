@@ -102,7 +102,34 @@ fn emit_node(out: &mut String, node: &SceneNode) {
         } => emit_ellipse(out, node, *bounds, fill, stroke),
         Primitive::Text(block) => emit_text(out, node, block),
         Primitive::Image { bounds, .. } => emit_image(out, node, *bounds),
+        Primitive::Line {
+            from,
+            to,
+            stroke,
+            arrow: _,
+        } => emit_line(out, node, *from, *to, stroke),
     }
+}
+
+/// Emit an SVG `<line>` between the two endpoints. The arrowhead is omitted for simplicity
+/// (the kind round-trips through the IR geometry, not the SVG).
+fn emit_line(
+    out: &mut String,
+    node: &SceneNode,
+    from: (f32, f32),
+    to: (f32, f32),
+    stroke: &Option<StrokePx>,
+) {
+    out.push_str(&format!(
+        "<line x1=\"{}\" y1=\"{}\" x2=\"{}\" y2=\"{}\"",
+        from.0, from.1, to.0, to.1
+    ));
+    push_stroke(out, stroke);
+    out.push_str(&rotation_attr(
+        node.rotation_deg,
+        crate::scene::prim_bounds(&node.prim),
+    ));
+    out.push_str("/>");
 }
 
 /// Emit a light-gray `<rect>` placeholder for an image (actual pixels are resolved elsewhere).

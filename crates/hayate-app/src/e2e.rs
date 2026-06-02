@@ -516,3 +516,62 @@ fn nested_group_wraps_existing_group(cx: &mut TestAppContext) {
     assert_eq!(apath, vec![k2, k1], "a's path nests K1 inside K2");
     assert_eq!(members, 3, "the outer group has all three shapes");
 }
+
+#[gpui::test]
+fn add_line_creates_arrow_shape(cx: &mut TestAppContext) {
+    use hayate_ir::shape::Geometry;
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let before = app.read_with(cx, |s, _| s.pres.children(s.slide).len());
+    app.update(cx, |s, _| s.add_line(true));
+    let (after, is_arrow) = app.read_with(cx, |s, _| {
+        let sel = s.selection.unwrap();
+        (
+            s.pres.children(s.slide).len(),
+            matches!(
+                s.pres.world.geometries.get(&sel),
+                Some(Geometry::Line { arrow: true })
+            ),
+        )
+    });
+    assert_eq!(after, before + 1, "add_line should add one shape");
+    assert!(is_arrow, "the new shape should be a Line with arrow=true");
+}
+
+#[gpui::test]
+fn enter_inserts_newline_and_click_commits(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let title = app.read_with(cx, |s, _| s.pres.children(s.slide)[0]);
+    app.update(cx, |s, _| s.begin_text_edit(title));
+    // Enter inserts a newline into the edit buffer (does not commit).
+    app.update(cx, |s, cx| s.on_key_down(&keydown("enter"), cx));
+    let (has_nl, still_editing) = app.read_with(cx, |s, _| {
+        (
+            s.text_edit
+                .as_ref()
+                .map(|t| t.buf.contains('\n'))
+                .unwrap_or(false),
+            s.text_edit.is_some(),
+        )
+    });
+    assert!(has_nl, "Enter should insert a newline");
+    assert!(still_editing, "Enter should not end editing");
+    // A click commits the edit (text edit ends and the run text keeps the newline).
+    app.update(cx, |s, cx| {
+        let (ex, ey) = (s.scene.size.w * 0.95, s.scene.size.h * 0.95);
+        s.on_mouse_down(&mouse(MouseButton::Left, ex, ey), cx)
+    });
+    let (done, run_has_nl) = app.read_with(cx, |s, _| {
+        let run = s
+            .pres
+            .world
+            .texts
+            .get(&title)
+            .and_then(|t| t.paragraphs.first())
+            .and_then(|p| p.runs.first())
+            .map(|r| r.text.contains('\n'))
+            .unwrap_or(false);
+        (s.text_edit.is_none(), run)
+    });
+    assert!(done, "clicking away should commit and end the text edit");
+    assert!(run_has_nl, "the committed text should keep the newline");
+}

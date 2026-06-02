@@ -234,6 +234,74 @@ impl HayateApp {
         self.selection = Some(e);
     }
 
+    /// Sibling order key that appends after the current shapes on the slide.
+    fn append_order(&self) -> FracIndex {
+        let kids = self.pres.children(self.slide);
+        let last = kids.last().and_then(|e| self.pres.world.order.get(e));
+        FracIndex::after(last)
+    }
+
+    /// Add an ellipse at the slide center and select it.
+    pub(crate) fn add_ellipse(&mut self) {
+        let order = self.append_order();
+        let e = self.pres.world.reserve_id();
+        let frame = RectEmu::new(inch_f(4.0), inch_f(3.5), inch_f(2.0), inch_f(1.4));
+        let tx = Transaction::new(
+            "create ellipse",
+            vec![
+                Operation::Spawn { entity: e },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Parent(self.slide),
+                },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Order(order),
+                },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Frame(frame),
+                },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Geometry(hayate_ir::shape::Geometry::Ellipse),
+                },
+                Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Fill(Fill::Solid(Color::theme(ThemeColorToken::Accent6))),
+                },
+            ],
+        );
+        self.commit_tx(tx);
+        self.selection = Some(e);
+    }
+
+    /// Add a line (or arrow) across the slide center and select it.
+    pub(crate) fn add_line(&mut self, arrow: bool) {
+        let order = self.append_order();
+        let e = self.pres.world.reserve_id();
+        let frame = RectEmu::new(inch_f(3.5), inch_f(3.5), inch_f(2.5), inch_f(1.5));
+        let tx = edit::create_line(e, self.slide, order, frame, arrow);
+        self.commit_tx(tx);
+        self.selection = Some(e);
+    }
+
+    /// Insert an image from a file path (used by drag-and-drop). Reads the bytes if the file has
+    /// a supported image extension; otherwise does nothing.
+    pub(crate) fn insert_image_file(&mut self, path: std::path::PathBuf) {
+        const IMAGE_EXTS: [&str; 6] = ["png", "jpg", "jpeg", "gif", "webp", "bmp"];
+        let ok = path
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|e| IMAGE_EXTS.contains(&e.to_ascii_lowercase().as_str()))
+            .unwrap_or(false);
+        if ok {
+            if let Ok(bytes) = std::fs::read(&path) {
+                self.insert_image_bytes(bytes);
+            }
+        }
+    }
+
     /// Delete the selected shape (undoable: despawn captures components to restore).
     pub(crate) fn delete_selection(&mut self) {
         if let Some(e) = self.selection.take() {

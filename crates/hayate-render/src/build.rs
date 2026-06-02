@@ -67,6 +67,21 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
                     fill,
                     stroke,
                 },
+                Geometry::Line { arrow } => {
+                    // A line runs along the diagonal of its frame (top-left -> bottom-right).
+                    // It has no fill; if the shape carries no stroke, synthesize a default
+                    // 2pt dark stroke so the line is visible.
+                    let stroke = stroke.or(Some(StrokePx {
+                        color: Rgba::rgb(0x20, 0x20, 0x20),
+                        width: vp.len(hayate_ir::units::pt(2)),
+                    }));
+                    Primitive::Line {
+                        from: (bounds.x, bounds.y),
+                        to: (bounds.x + bounds.w, bounds.y + bounds.h),
+                        stroke,
+                        arrow: *arrow,
+                    }
+                }
             }
         } else {
             continue;

@@ -315,6 +315,39 @@ fn round_rect_radius_roundtrips() {
 }
 
 #[test]
+fn line_geometry_roundtrips() {
+    // A line shape should export as a connector preset and import back to a Line geometry.
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Blank");
+    let slide = p.add_slide(layout);
+
+    let line = p.add_shape(slide);
+    p.world
+        .frames
+        .insert(line, RectEmu::new(914_400, 457_200, 3_000_000, 2_000_000));
+    p.world
+        .geometries
+        .insert(line, Geometry::Line { arrow: false });
+
+    let path = unique_temp_path("line");
+    let _ = std::fs::remove_file(&path);
+    export_pptx(&p, &path).expect("export should succeed");
+    let imported = import_pptx(&path).expect("import should succeed");
+
+    let first = imported.slides()[0];
+    let got = imported.children(first).iter().any(|c| {
+        matches!(
+            imported.world.geometries.get(c),
+            Some(Geometry::Line { .. })
+        )
+    });
+    assert!(got, "expected a line geometry after import");
+
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn embedded_image_roundtrips() {
     // A deck with a single embedded PNG picture should round-trip: after import there is a
     // shape carrying a picture whose media bytes match the original.

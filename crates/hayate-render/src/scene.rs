@@ -122,6 +122,14 @@ pub enum Primitive {
         bounds: PxRect,
         media_key: String,
     },
+    /// A straight line between two scene-pixel endpoints. `arrow` draws an arrowhead at `to`.
+    /// A line has no fill; it is drawn with `stroke` (or invisibly if `None`).
+    Line {
+        from: (f32, f32),
+        to: (f32, f32),
+        stroke: Option<StrokePx>,
+        arrow: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -150,6 +158,18 @@ pub fn prim_bounds(prim: &Primitive) -> PxRect {
         Primitive::Ellipse { bounds, .. } => *bounds,
         Primitive::Text(block) => block.bounds,
         Primitive::Image { bounds, .. } => *bounds,
+        Primitive::Line { from, to, .. } => {
+            let min_x = from.0.min(to.0);
+            let min_y = from.1.min(to.1);
+            let max_x = from.0.max(to.0);
+            let max_y = from.1.max(to.1);
+            PxRect {
+                x: min_x,
+                y: min_y,
+                w: max_x - min_x,
+                h: max_y - min_y,
+            }
+        }
     }
 }
 

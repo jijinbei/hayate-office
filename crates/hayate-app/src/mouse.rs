@@ -26,6 +26,13 @@ impl HayateApp {
         if self.context_menu.is_some() {
             return;
         }
+        // A click commits an in-progress text edit (Enter now inserts newlines instead). Revert
+        // the live preview, then commit the final buffer as one undoable transaction.
+        if let Some(te) = self.text_edit.take() {
+            self.live_set_text(te.entity, te.original.clone());
+            let tx = edit::set_run_text(&self.pres.world, te.entity, te.buf);
+            self.commit_tx(tx);
+        }
         let o = self.canvas_origin.get();
         let x = f32::from(ev.position.x - o.x);
         let y = f32::from(ev.position.y - o.y);

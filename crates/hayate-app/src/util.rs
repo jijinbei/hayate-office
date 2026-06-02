@@ -118,6 +118,7 @@ pub(crate) fn prim_bounds(prim: &Primitive) -> PxRect {
         Primitive::Ellipse { bounds, .. } => *bounds,
         Primitive::Image { bounds, .. } => *bounds,
         Primitive::Text(tb) => tb.bounds,
+        Primitive::Line { .. } => hayate_render::scene::prim_bounds(prim),
     }
 }
 

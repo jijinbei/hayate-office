@@ -192,6 +192,7 @@ impl HayateApp {
     fn numbered_labels(&self, children: &[Entity]) -> HashMap<Entity, String> {
         let mut labels = HashMap::new();
         let (mut rect, mut ell, mut img, mut txt) = (0u32, 0u32, 0u32, 0u32);
+        let (mut line, mut arrow) = (0u32, 0u32);
         for &e in children {
             // A user-set name (via the Layers panel) always wins.
             if let Some(name) = self.pres.world.names.get(&e) {
@@ -226,6 +227,14 @@ impl HayateApp {
                     Some(Geometry::Ellipse) => {
                         ell += 1;
                         format!("Ellipse {ell}")
+                    }
+                    Some(Geometry::Line { arrow: true }) => {
+                        arrow += 1;
+                        format!("Arrow {arrow}")
+                    }
+                    Some(Geometry::Line { arrow: false }) => {
+                        line += 1;
+                        format!("Line {line}")
                     }
                     Some(_) => {
                         rect += 1;

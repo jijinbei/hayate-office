@@ -81,6 +81,25 @@ pub fn rasterize(scene: &Scene, out_w: u32, out_h: u32) -> Vec<u8> {
             Primitive::Image { bounds, .. } => {
                 draw_image_box(&mut buf, w, h, bounds, sx, sy, op);
             }
+            Primitive::Line {
+                from,
+                to,
+                stroke,
+                arrow,
+            } => {
+                if let Some((col, width)) = stroke_px(stroke, op, s) {
+                    // Endpoints in output-pixel space.
+                    let x0 = from.0 * sx;
+                    let y0 = from.1 * sy;
+                    let x1 = to.0 * sx;
+                    let y1 = to.1 * sy;
+                    let thick = width.max(1.0);
+                    draw_thick_line(&mut buf, w, h, x0, y0, x1, y1, thick, col);
+                    if *arrow {
+                        draw_arrowhead(&mut buf, w, h, x0, y0, x1, y1, thick, col);
+                    }
+                }
+            }
         }
     }
 
@@ -315,6 +334,85 @@ fn draw_line(buf: &mut [u8], w: usize, h: usize, x0: f32, y0: f32, x1: f32, y1: 
             blend_over(buf, ((py as usize) * w + px as usize) * 4, c);
         }
     }
+}
+
+/// Draw a line of `thickness` output px between two output-pixel points by stamping a small
+/// square of pixels at each sampled point along the segment.
+fn draw_thick_line(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    thickness: f32,
+    c: Rgba,
+) {
+    let half = (thickness * 0.5).max(0.5);
+    let steps = (x1 - x0).abs().max((y1 - y0).abs()).ceil().max(1.0) as i32;
+    for i in 0..=steps {
+        let t = i as f32 / steps as f32;
+        let px = x0 + (x1 - x0) * t;
+        let py = y0 + (y1 - y0) * t;
+        fill_px_rect(buf, w, h, px - half, py - half, thickness, thickness, c);
+    }
+}
+
+/// Draw a simple two-stroke arrowhead at the end point `(x1, y1)` of the segment, pointing
+/// away from `(x0, y0)`. The barbs are sized relative to the stroke thickness.
+fn draw_arrowhead(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    x0: f32,
+    y0: f32,
+    x1: f32,
+    y1: f32,
+    thickness: f32,
+    c: Rgba,
+) {
+    let dx = x1 - x0;
+    let dy = y1 - y0;
+    let len = (dx * dx + dy * dy).sqrt();
+    if len <= f32::EPSILON {
+        return;
+    }
+    // Unit vector along the line (from -> to).
+    let ux = dx / len;
+    let uy = dy / len;
+    // Barb length: a few stroke widths, but not longer than the line itself.
+    let barb = (thickness * 4.0).max(6.0).min(len);
+    let ang = 0.5_f32; // ~28.6 degrees off the shaft
+    let (s, co) = ang.sin_cos();
+    // Base vector points back along the shaft (from `to` toward `from`); rotate by +/- ang.
+    let (bx, by) = (-ux, -uy);
+    let r1x = bx * co - by * s;
+    let r1y = bx * s + by * co;
+    let r2x = bx * co + by * s;
+    let r2y = -bx * s + by * co;
+    draw_thick_line(
+        buf,
+        w,
+        h,
+        x1,
+        y1,
+        x1 + r1x * barb,
+        y1 + r1y * barb,
+        thickness,
+        c,
+    );
+    draw_thick_line(
+        buf,
+        w,
+        h,
+        x1,
+        y1,
+        x1 + r2x * barb,
+        y1 + r2y * barb,
+        thickness,
+        c,
+    );
 }
 
 /// Render an image placeholder: light-gray fill, gray border, and two diagonals.

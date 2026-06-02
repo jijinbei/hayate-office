@@ -707,6 +707,37 @@ impl Render for HayateApp {
                     .justify_between()
                     .items_center()
                     .child(div().text_xl().child(title))
+                    // Shape-creation tools.
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_1()
+                            .child(icon_button("tool_rect", "square", cx, |t, _w, cx| {
+                                t.add_rect();
+                                cx.notify();
+                            }))
+                            .child(icon_button("tool_ellipse", "circle", cx, |t, _w, cx| {
+                                t.add_ellipse();
+                                cx.notify();
+                            }))
+                            .child(icon_button("tool_line", "line", cx, |t, _w, cx| {
+                                t.add_line(false);
+                                cx.notify();
+                            }))
+                            .child(icon_button("tool_arrow", "arrow", cx, |t, _w, cx| {
+                                t.add_line(true);
+                                cx.notify();
+                            }))
+                            .child(icon_button("tool_text", "type", cx, |t, _w, cx| {
+                                t.add_text_box();
+                                cx.notify();
+                            }))
+                            .child(icon_button("tool_image", "image", cx, |t, _w, cx| {
+                                t.insert_image(cx);
+                                cx.notify();
+                            })),
+                    )
                     .child(
                         div()
                             .flex()
@@ -759,10 +790,24 @@ impl Render for HayateApp {
                             .overflow_y_scroll()
                             .child(
                                 div()
+                                    .id("slide_canvas_area")
                                     .w(px(sw))
                                     .h(px(sh))
                                     .border_1()
                                     .border_color(rgb(0x555555))
+                                    // Drop image files onto the slide to insert them.
+                                    .on_drop::<gpui::ExternalPaths>({
+                                        let view = cx.entity();
+                                        move |paths, _window, cx| {
+                                            let paths = paths.paths().to_vec();
+                                            view.update(cx, |this, cx| {
+                                                for p in paths {
+                                                    this.insert_image_file(p);
+                                                }
+                                                cx.notify();
+                                            });
+                                        }
+                                    })
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, ev: &MouseDownEvent, window, cx| {

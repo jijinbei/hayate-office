@@ -75,11 +75,14 @@ impl HayateApp {
                 }
             }
             "enter" => {
-                if let Some(te) = self.text_edit.take() {
-                    // Revert the live edits, then commit the final text as one undo step.
-                    self.live_set_text(te.entity, te.original);
-                    let tx = edit::set_run_text(&self.pres.world, te.entity, te.buf);
-                    self.commit_tx(tx);
+                // Enter inserts a newline (multi-line text). Commit happens on click-away (or
+                // Esc cancels). Shaping treats '\n' as a hard line break.
+                if let Some(te) = self.text_edit.as_mut() {
+                    te.buf.replace_range(te.selected.clone(), "\n");
+                    let c = te.selected.start + 1;
+                    te.selected = c..c;
+                    te.marked = None;
+                    live = Some((te.entity, te.buf.clone()));
                 }
             }
             "backspace" => {

@@ -256,6 +256,53 @@ pub(crate) fn paint_scene(
                     ));
                 }
             }
+            Primitive::Line {
+                from,
+                to,
+                stroke: Some(stroke),
+                arrow,
+            } => {
+                let color = gpui_rgba(stroke.color, opacity);
+                let width = px(stroke.width.max(1.0));
+                // Endpoints in window coordinates (rotation is applied about the node center,
+                // consistent with the rotated-quad path above).
+                let (cx_, cy_) = ((from.0 + to.0) / 2.0, (from.1 + to.1) / 2.0);
+                let (fx, fy) = rotate_pt(from.0, from.1, cx_, cy_, angle);
+                let (tx, ty) = rotate_pt(to.0, to.1, cx_, cy_, angle);
+                let p_from = point(o.x + px(fx), o.y + px(fy));
+                let p_to = point(o.x + px(tx), o.y + px(ty));
+
+                let mut b = PathBuilder::stroke(width);
+                b.move_to(p_from);
+                b.line_to(p_to);
+                if let Ok(path) = b.build() {
+                    window.paint_path(path, color);
+                }
+
+                if *arrow {
+                    // Two short barbs from the `to` point, pointing back along the shaft.
+                    let dx = tx - fx;
+                    let dy = ty - fy;
+                    let len = (dx * dx + dy * dy).sqrt();
+                    if len > f32::EPSILON {
+                        let (ux, uy) = (dx / len, dy / len);
+                        let barb = (stroke.width * 4.0).max(8.0).min(len);
+                        let ang = 0.5_f32;
+                        let (s, co) = ang.sin_cos();
+                        let (bx, by) = (-ux, -uy);
+                        let r1 = (bx * co - by * s, bx * s + by * co);
+                        let r2 = (bx * co + by * s, -bx * s + by * co);
+                        for (rx, ry) in [r1, r2] {
+                            let mut ab = PathBuilder::stroke(width);
+                            ab.move_to(p_to);
+                            ab.line_to(point(o.x + px(tx + rx * barb), o.y + px(ty + ry * barb)));
+                            if let Ok(path) = ab.build() {
+                                window.paint_path(path, color);
+                            }
+                        }
+                    }
+                }
+            }
             Primitive::Text(tb) => paint_text(tb, o.x, o.y, window, cx),
             _ => {}
         }

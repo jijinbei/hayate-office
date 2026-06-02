@@ -889,6 +889,9 @@ fn preset_to_geometry(
             Some(Geometry::RoundRect { radius })
         }
         "ellipse" => Some(Geometry::Ellipse),
+        // A plain line or straight connector imports back to a non-arrow line. Arrowhead
+        // fidelity is not preserved on import (the head/tail markers are dropped).
+        "line" | "straightConnector1" => Some(Geometry::Line { arrow: false }),
         _ => None,
     }
 }
@@ -1088,6 +1091,9 @@ fn slide_xml(
             Some(Geometry::Rect) => "rect",
             Some(Geometry::RoundRect { .. }) => "roundRect",
             Some(Geometry::Ellipse) => "ellipse",
+            // Export both plain lines and arrows as a straight connector preset; the kind
+            // round-trips, while arrowhead markers are kept simple (not emitted here).
+            Some(Geometry::Line { .. }) => "straightConnector1",
             None => "rect",
         };
         // For a round rect, emit the corner radius as the `adj` guide so it round-trips.

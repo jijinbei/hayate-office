@@ -13,4 +13,10 @@ pub enum Geometry {
         radius: Emu,
     },
     Ellipse,
+    /// A straight line drawn along the diagonal of the shape's `frame`, from the frame's
+    /// top-left to its bottom-right. When `arrow` is true, an arrowhead is drawn at the end
+    /// (bottom-right) point. A line carries no fill; only a stroke.
+    Line {
+        arrow: bool,
+    },
 }
