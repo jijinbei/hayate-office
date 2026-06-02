@@ -26,15 +26,15 @@
             libgbm
             libdrm
             libva
-            xorg.libX11
-            xorg.libxcb
-            xorg.libXcursor
-            xorg.libXi
-            xorg.libXrandr
-            xorg.libXext
-            xorg.libXfixes
-            xorg.libXcomposite
-            xorg.libXdamage
+            libx11
+            libxcb
+            libxcursor
+            libxi
+            libxrandr
+            libxext
+            libxfixes
+            libxcomposite
+            libxdamage
             fontconfig
             freetype
             alsa-lib
