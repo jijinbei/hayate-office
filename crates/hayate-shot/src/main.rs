@@ -8,10 +8,10 @@
 
 use hayate_core::CommandRegistry;
 use hayate_ir::anim::Effect;
-use hayate_ir::color::{Color, ThemeColorToken};
+use hayate_ir::color::{Color, Rgba, ThemeColorToken};
 use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::geom::RectEmu;
-use hayate_ir::paint::Fill;
+use hayate_ir::paint::{Fill, Stroke};
 use hayate_ir::presentation::Presentation;
 use hayate_ir::shape::Geometry;
 use hayate_ir::text::{Paragraph, Run, TextBody};
@@ -135,7 +135,42 @@ fn main() {
         write_shot(out_dir, &mut idx, &format!("anim_fade_{t}ms"), &p, slide, Some(t));
     }
 
-    // 14 PPTX round-trip: export then re-import and render the imported deck.
+    // 14 round rect + stroke: a rounded rectangle with a thick border, plus a stroked ellipse.
+    {
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        let slide = p.add_slide(layout);
+
+        let rr = p.add_shape(slide);
+        p.world
+            .frames
+            .insert(rr, RectEmu::new(inch_f(1.0), inch_f(1.5), inch_f(4.0), inch_f(2.5)));
+        p.world
+            .geometries
+            .insert(rr, Geometry::RoundRect { radius: inch_f(0.5) });
+        p.world
+            .fills
+            .insert(rr, Fill::Solid(Color::theme(ThemeColorToken::Accent2)));
+        p.world.strokes.insert(
+            rr,
+            Stroke::solid(Color::literal(Rgba::rgb(20, 20, 20)), pt(6).max(1)),
+        );
+
+        let el = p.add_shape(slide);
+        p.world
+            .frames
+            .insert(el, RectEmu::new(inch_f(6.0), inch_f(1.5), inch_f(3.0), inch_f(2.5)));
+        p.world.geometries.insert(el, Geometry::Ellipse);
+        // Stroke only (no fill) to verify outline rendering.
+        p.world.strokes.insert(
+            el,
+            Stroke::solid(Color::literal(Rgba::rgb(30, 90, 200)), pt(8).max(1)),
+        );
+        write_shot(out_dir, &mut idx, "roundrect_stroke", &p, slide, None);
+    }
+
+    // 15 PPTX round-trip: export then re-import and render the imported deck.
     let (p, slide, _) = deck();
     let tmp = out_dir.join("_roundtrip.pptx");
     match hayate_format_pptx::export_pptx(&p, &tmp) {
