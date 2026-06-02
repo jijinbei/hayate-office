@@ -1,15 +1,10 @@
 {
   description = "HayateOffice dev environment (gpui Linux build/runtime deps)";
 
-  inputs = {
-    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
-    # nixGL injects the host GPU driver so GPU apps run under Nix on non-NixOS.
-    nixgl.url = "github:nix-community/nixGL";
-    nixgl.inputs.nixpkgs.follows = "nixpkgs";
-  };
+  inputs.nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
 
   outputs =
-    { self, nixpkgs, nixgl }:
+    { self, nixpkgs }:
     let
       # Primary test target is Linux (DESIGN: portability-first, main testing on Linux).
       systems = [ "x86_64-linux" "aarch64-linux" ];
@@ -51,8 +46,9 @@
         {
           default = pkgs.mkShell {
             # Build tools. Rust itself comes from the user's rustup toolchain on PATH
-            # (nix develop is non-pure), so we don't pin it here.
+            # (nix develop is non-pure), so we don't pin it here. `just` runs the task recipes.
             nativeBuildInputs = with pkgs; [
+              just
               pkg-config
               cmake
               clang
@@ -66,28 +62,12 @@
 
             shellHook = ''
               export LD_LIBRARY_PATH="${pkgs.lib.makeLibraryPath runtimeLibs}:''${LD_LIBRARY_PATH:-}"
-              echo "HayateOffice dev shell ready (gpui build deps)."
-              echo "  Build:  cargo build -p hayate-app"
-              echo "  Run (non-NixOS NVIDIA, injects GPU driver via nixGL):"
-              echo "    NIXPKGS_ALLOW_UNFREE=1 nix run --impure .#vulkan-nvidia -- cargo run -p hayate-app"
+              echo "HayateOffice dev shell ready. Tasks: just --list"
+              echo "  just test       # core crates (pure Rust)"
+              echo "  just build-app  # compile the gpui app"
+              echo "  just run        # run the app (host GPU driver injected via nix-gl-host)"
             '';
           };
-        }
-      );
-
-      # nixGL wrappers to run the GPU app on non-NixOS. NVIDIA's wrapper is unfree and reads
-      # the host driver, so it needs `--impure` and `NIXPKGS_ALLOW_UNFREE=1`. Exposed as a
-      # separate output so the default devShell stays pure and never blocks the build.
-      #   NIXPKGS_ALLOW_UNFREE=1 nix run --impure .#vulkan-nvidia -- cargo run -p hayate-app
-      packages = forAll (
-        system:
-        let
-          ngl = nixgl.packages.${system};
-        in
-        {
-          # Vulkan (Blade backend) for NVIDIA; fall back to the GL wrapper if unavailable.
-          vulkan-nvidia = ngl.nixVulkanNvidia or ngl.nixGLNvidia;
-          gl-nvidia = ngl.nixGLNvidia;
         }
       );
     };
