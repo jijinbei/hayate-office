@@ -288,3 +288,38 @@ fn grouped_shapes_drag_together(cx: &mut TestAppContext) {
         "grouped shapes must move by the same delta: {da:?} vs {db:?}"
     );
 }
+
+#[gpui::test]
+fn marquee_selects_intersecting_shapes(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // Bounding region covering the two accent rects (shapes 1 and 2).
+    let (a, b, rect) = app.read_with(cx, |s, _| {
+        let kids = s.pres.children(s.slide);
+        let (a, b) = (kids[1], kids[2]);
+        let nb = |e| {
+            let n = s.scene.nodes.iter().find(|n| n.source == Some(e)).unwrap();
+            prim_bounds(&n.prim)
+        };
+        let (ba, bb) = (nb(a), nb(b));
+        let x0 = ba.x.min(bb.x) - 4.0;
+        let y0 = ba.y.min(bb.y) - 4.0;
+        let x1 = (ba.x + ba.w).max(bb.x + bb.w) + 4.0;
+        let y1 = (ba.y + ba.h).max(bb.y + bb.h) + 4.0;
+        (a, b, (x0, y0, x1, y1))
+    });
+    // Start the marquee on empty space (top-left of the region), drag to the far corner.
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, rect.0, rect.1), cx)
+    });
+    app.update(cx, |s, cx| s.on_mouse_move(&mouse_move(rect.2, rect.3), cx));
+    app.update(cx, |s, cx| s.on_mouse_up(&mouse_up(rect.2, rect.3), cx));
+    let selected = app.read_with(cx, |s, _| {
+        let mut v: Vec<_> = s.selection.into_iter().collect();
+        v.extend(s.also.iter().copied());
+        v
+    });
+    assert!(
+        selected.contains(&a) && selected.contains(&b),
+        "marquee should select both rects: {selected:?}"
+    );
+}

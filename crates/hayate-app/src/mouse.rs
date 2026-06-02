@@ -69,6 +69,15 @@ impl HayateApp {
             cx.notify();
             return;
         }
+        // Dragging on empty canvas starts a marquee (rubber-band) selection.
+        if hit.is_none() {
+            self.selection = None;
+            self.also.clear();
+            self.drag = None;
+            self.marquee = Some((x, y, x, y));
+            cx.notify();
+            return;
+        }
         self.also.clear();
         self.selection = hit;
         // Clicking a grouped shape selects the whole group.
@@ -93,6 +102,15 @@ impl HayateApp {
     }
 
     pub(crate) fn on_mouse_move(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        // While a marquee is active, just track the current corner.
+        if let Some((sx, sy, _, _)) = self.marquee {
+            let o = self.canvas_origin.get();
+            let x = f32::from(ev.position.x - o.x);
+            let y = f32::from(ev.position.y - o.y);
+            self.marquee = Some((sx, sy, x, y));
+            cx.notify();
+            return;
+        }
         if let Some(rd) = &self.resize {
             let scale = self.scale();
             if scale <= 0.0 {
@@ -202,6 +220,34 @@ impl HayateApp {
     }
 
     pub(crate) fn on_mouse_up(&mut self, _ev: &MouseUpEvent, cx: &mut Context<Self>) {
+        // Finalize a marquee: select every shape whose bounds intersect the rect.
+        if let Some((sx, sy, cx0, cy0)) = self.marquee.take() {
+            let rx = sx.min(cx0);
+            let ry = sy.min(cy0);
+            let rw = (sx - cx0).abs();
+            let rh = (sy - cy0).abs();
+            self.also.clear();
+            // Ignore tiny marquees (treat as a click on empty space): clear selection.
+            if rw < 3.0 && rh < 3.0 {
+                self.selection = None;
+                cx.notify();
+                return;
+            }
+            let mut hits: Vec<Entity> = Vec::new();
+            for node in &self.scene.nodes {
+                let Some(src) = node.source else { continue };
+                let b = prim_bounds(&node.prim);
+                // Standard AABB overlap test.
+                let disjoint = b.x + b.w < rx || rx + rw < b.x || b.y + b.h < ry || ry + rh < b.y;
+                if !disjoint {
+                    hits.push(src);
+                }
+            }
+            self.selection = hits.first().copied();
+            self.also = hits.into_iter().skip(1).collect();
+            cx.notify();
+            return;
+        }
         if let Some(rd) = self.resize.take() {
             if let Some(e) = self.selection {
                 if let Some(final_f) = self.pres.world.frames.get(&e).copied() {

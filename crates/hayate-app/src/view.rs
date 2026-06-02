@@ -52,14 +52,23 @@ impl Render for HayateApp {
                 .into_any_element();
         }
 
+        // Refit the slide to the available area whenever the window is resized, so enlarging
+        // the window enlarges the slide. Manual zoom (+/-) persists until the next resize.
+        let vp = window.viewport_size();
+        if self.last_viewport != Some(vp) {
+            self.last_viewport = Some(vp);
+            self.fit_zoom(window);
+            self.rebuild();
+        }
+
         // Document coordinates are absolute (points); on-screen size = slide_pt * zoom.
-        // Window resizing does not change zoom (use the zoom controls / Fit).
         let scene = self.scene.clone();
         let media = self.pres.media.clone();
         let selection = self.selection;
         let also = self.also.clone();
         let guides = self.guides.clone();
         let show_grid = self.show_grid;
+        let marquee = self.marquee;
         // Caret/selection (editing entity + byte range) for drawing the cursor and highlight.
         let caret = self
             .text_edit
@@ -353,6 +362,26 @@ impl Render for HayateApp {
                             Default::default(),
                         )),
                     }
+                }
+
+                // Marquee (rubber-band) selection rectangle.
+                if let Some((sx, sy, cx0, cy0)) = marquee {
+                    let rx = sx.min(cx0);
+                    let ry = sy.min(cy0);
+                    let rw = (sx - cx0).abs();
+                    let rh = (sy - cy0).abs();
+                    let b = Bounds {
+                        origin: point(o.x + px(rx), o.y + px(ry)),
+                        size: size(px(rw), px(rh)),
+                    };
+                    window.paint_quad(quad(
+                        b,
+                        px(0.),
+                        Background::from(gpui::rgba(0x3B82F622)),
+                        px(1.),
+                        rgb(SELECTION),
+                        Default::default(),
+                    ));
                 }
             },
         )
@@ -655,6 +684,7 @@ impl Render for HayateApp {
                     .flex_row()
                     .gap_3()
                     .child(sidebar)
+                    .child(self.layers_panel(cx))
                     .child(
                         div()
                             .w(px(sw))

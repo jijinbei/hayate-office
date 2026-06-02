@@ -84,21 +84,27 @@ pub(crate) fn paint_text(
         if runs.is_empty() {
             continue;
         }
-        // Shape at natural width (force_width = None; passing the box width here would stretch
-        // the glyphs across the box). Alignment uses the box width via paint's `align_width`.
-        let shaped =
-            window
-                .text_system()
-                .shape_line(SharedString::from(text), font_size, &runs, None);
-        let _ = shaped.paint(
-            point(left, top),
-            line_height,
-            align,
+        // Shape with wrapping at the box width so long paragraphs flow onto multiple rows
+        // instead of overflowing to the right. `shape_text` returns one `WrappedLine` per
+        // hard line break; each may itself contain soft wrap boundaries. Passing `None` as
+        // `bounds` to `paint` makes alignment use the layout's `wrap_width` (the box width).
+        match window.text_system().shape_text(
+            SharedString::from(text),
+            font_size,
+            &runs,
             Some(px(tb.bounds.w)),
-            window,
-            cx,
-        );
-        top += line_height;
+            None,
+        ) {
+            Ok(lines) => {
+                for line in lines.iter() {
+                    let _ = line.paint(point(left, top), line_height, align, None, window, cx);
+                    // A wrapped line occupies one row per soft wrap boundary plus one.
+                    let rows = line.wrap_boundaries.len() + 1;
+                    top += line_height * (rows as f32);
+                }
+            }
+            Err(_) => {} // skip this paragraph on shaping error
+        }
     }
 }
 

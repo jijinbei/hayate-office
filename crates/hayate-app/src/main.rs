@@ -34,6 +34,7 @@ use hayate_render::{build_slide_scene, Guide};
 mod actions;
 mod input;
 mod io;
+mod layers;
 mod menu;
 mod mouse;
 mod paint;
@@ -164,6 +165,10 @@ struct HayateApp {
     context_menu: Option<ContextMenu>,
     /// Whether the font picker overlay is open.
     font_picker: bool,
+    /// Active marquee (rubber-band) selection rect in scene px: (start_x, start_y, cur_x, cur_y).
+    marquee: Option<(f32, f32, f32, f32)>,
+    /// Last window viewport size; used to refit the slide when the window is resized.
+    last_viewport: Option<gpui::Size<gpui::Pixels>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -264,6 +269,8 @@ impl HayateApp {
             present_t: 0,
             context_menu: None,
             font_picker: false,
+            marquee: None,
+            last_viewport: None,
         }
     }
 }
