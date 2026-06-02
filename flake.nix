@@ -41,6 +41,7 @@
             openssl
             zlib
             zstd
+            bzip2
           ];
         in
         {
