@@ -5,7 +5,7 @@ use hayate_ir::color::{Color, Rgba, ThemeColorToken};
 use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::geom::RectEmu;
 use hayate_ir::paint::Fill;
-use hayate_ir::shape::Geometry;
+use hayate_ir::shape::{ArrowHead, Geometry};
 use hayate_ir::text::{Paragraph, Run, TextBody};
 use hayate_ir::theme::Theme;
 use hayate_ir::units::pt;
@@ -316,7 +316,8 @@ fn round_rect_radius_roundtrips() {
 
 #[test]
 fn line_geometry_roundtrips() {
-    // A line shape should export as a connector preset and import back to a Line geometry.
+    // A line shape should export as a connector preset and import back to a Line geometry,
+    // round-tripping each end's arrowhead via the connector's `<a:headEnd>`/`<a:tailEnd>`.
     let mut p = Presentation::new();
     let master = p.add_master(Theme::default());
     let layout = p.add_layout(master, "Blank");
@@ -326,9 +327,14 @@ fn line_geometry_roundtrips() {
     p.world
         .frames
         .insert(line, RectEmu::new(914_400, 457_200, 3_000_000, 2_000_000));
-    p.world
-        .geometries
-        .insert(line, Geometry::Line { arrow: false });
+    // A line with a plain START and an arrow at the END (the common single-headed arrow).
+    p.world.geometries.insert(
+        line,
+        Geometry::Line {
+            start: ArrowHead::None,
+            end: ArrowHead::Arrow,
+        },
+    );
 
     let path = unique_temp_path("line");
     let _ = std::fs::remove_file(&path);
@@ -336,13 +342,19 @@ fn line_geometry_roundtrips() {
     let imported = import_pptx(&path).expect("import should succeed");
 
     let first = imported.slides()[0];
-    let got = imported.children(first).iter().any(|c| {
-        matches!(
-            imported.world.geometries.get(c),
-            Some(Geometry::Line { .. })
-        )
-    });
-    assert!(got, "expected a line geometry after import");
+    let got =
+        imported
+            .children(first)
+            .iter()
+            .find_map(|c| match imported.world.geometries.get(c) {
+                Some(Geometry::Line { start, end }) => Some((*start, *end)),
+                _ => None,
+            });
+    assert_eq!(
+        got,
+        Some((ArrowHead::None, ArrowHead::Arrow)),
+        "expected a line whose arrowheads round-tripped"
+    );
 
     let _ = std::fs::remove_file(&path);
 }

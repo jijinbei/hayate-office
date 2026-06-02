@@ -463,6 +463,10 @@ fn parse_slide_into(
         preset: Option<String>,
         /// The `<a:gd name="adj" fmla="val N">` value, if present, for round-rect radius.
         adj: Option<i64>,
+        /// Whether the connector's `<a:ln>` carried a `<a:headEnd>` / `<a:tailEnd>` decoration
+        /// with a non-`none` type (used to reconstruct a [`Geometry::Line`]'s arrowheads).
+        head_arrow: bool,
+        tail_arrow: bool,
         fill: Option<Color>,
         /// Gradient stops/angle accumulated from a `<a:gradFill>` (first/last gs + lin ang).
         grad_from: Option<Color>,
@@ -480,6 +484,8 @@ fn parse_slide_into(
                 rotation: None,
                 preset: None,
                 adj: None,
+                head_arrow: false,
+                tail_arrow: false,
                 fill: None,
                 grad_from: None,
                 grad_to: None,
@@ -578,6 +584,16 @@ fn parse_slide_into(
                 if let Some(prst) = attr_str(e, b"prst") {
                     s.preset = Some(prst);
                 }
+            }
+            "headEnd" => {
+                // Line-end decoration at the connector's start: any non-`none` type is an arrow.
+                let ty = attr_str(e, b"type");
+                s.head_arrow = ty.as_deref().map(|t| t != "none").unwrap_or(false);
+            }
+            "tailEnd" => {
+                // Line-end decoration at the connector's end.
+                let ty = attr_str(e, b"type");
+                s.tail_arrow = ty.as_deref().map(|t| t != "none").unwrap_or(false);
             }
             "gd" => {
                 // Round-rect corner radius guide: <a:gd name="adj" fmla="val N"/>.
@@ -694,10 +710,15 @@ fn parse_slide_into(
                     "sp" => {
                         if let Some(s) = state.take() {
                             // Resolve geometry now that both the preset and frame are known.
-                            let geometry = s
-                                .preset
-                                .as_deref()
-                                .and_then(|prst| preset_to_geometry(prst, s.adj, s.off.zip(s.ext)));
+                            let geometry = s.preset.as_deref().and_then(|prst| {
+                                preset_to_geometry(
+                                    prst,
+                                    s.adj,
+                                    s.off.zip(s.ext),
+                                    s.head_arrow,
+                                    s.tail_arrow,
+                                )
+                            });
                             // A gradient (if both stops were seen) takes precedence over a solid fill.
                             let fill = match (s.grad_from, s.grad_to) {
                                 (Some(from), Some(to)) => Some(Fill::Linear {
@@ -881,7 +902,17 @@ fn preset_to_geometry(
     prst: &str,
     adj: Option<i64>,
     off_ext: Option<((Emu, Emu), (Emu, Emu))>,
+    head_arrow: bool,
+    tail_arrow: bool,
 ) -> Option<Geometry> {
+    use hayate_ir::shape::ArrowHead;
+    let head = |on: bool| {
+        if on {
+            ArrowHead::Arrow
+        } else {
+            ArrowHead::None
+        }
+    };
     match prst {
         "rect" => Some(Geometry::Rect),
         "roundRect" => {
@@ -889,9 +920,12 @@ fn preset_to_geometry(
             Some(Geometry::RoundRect { radius })
         }
         "ellipse" => Some(Geometry::Ellipse),
-        // A plain line or straight connector imports back to a non-arrow line. Arrowhead
-        // fidelity is not preserved on import (the head/tail markers are dropped).
-        "line" | "straightConnector1" => Some(Geometry::Line { arrow: false }),
+        // A plain line or straight connector imports back to a line. The connector's
+        // `<a:headEnd>` / `<a:tailEnd>` decorations map to the line's START / END arrowheads.
+        "line" | "straightConnector1" => Some(Geometry::Line {
+            start: head(head_arrow),
+            end: head(tail_arrow),
+        }),
         _ => None,
     }
 }
@@ -1121,6 +1155,21 @@ fn slide_xml(
                 s.push_str("<a:noFill/>");
             }
             None => {}
+        }
+        // For a line/arrow, emit an `<a:ln>` carrying the per-end decorations so the START
+        // (headEnd) and END (tailEnd) arrowheads round-trip. A `triangle` type denotes an
+        // arrowhead; `none` denotes a plain end.
+        if let Some(Geometry::Line { start, end }) = geom {
+            use hayate_ir::shape::ArrowHead;
+            let end_type = |a: &ArrowHead| match a {
+                ArrowHead::Arrow => "triangle",
+                ArrowHead::None => "none",
+            };
+            s.push_str(&format!(
+                r#"<a:ln><a:headEnd type="{}"/><a:tailEnd type="{}"/></a:ln>"#,
+                end_type(start),
+                end_type(end),
+            ));
         }
         s.push_str("</p:spPr>");
 

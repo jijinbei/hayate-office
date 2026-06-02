@@ -524,12 +524,16 @@ fn add_line_creates_arrow_shape(cx: &mut TestAppContext) {
     let before = app.read_with(cx, |s, _| s.pres.children(s.slide).len());
     app.update(cx, |s, _| s.add_line(true));
     let (after, is_arrow) = app.read_with(cx, |s, _| {
+        use hayate_ir::shape::ArrowHead;
         let sel = s.selection.unwrap();
         (
             s.pres.children(s.slide).len(),
             matches!(
                 s.pres.world.geometries.get(&sel),
-                Some(Geometry::Line { arrow: true })
+                Some(Geometry::Line {
+                    end: ArrowHead::Arrow,
+                    ..
+                })
             ),
         )
     });
@@ -574,4 +578,30 @@ fn enter_inserts_newline_and_click_commits(cx: &mut TestAppContext) {
     });
     assert!(done, "clicking away should commit and end the text edit");
     assert!(run_has_nl, "the committed text should keep the newline");
+}
+
+#[gpui::test]
+fn arrow_heads_and_stroke_width_edit(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // A plain line: no heads.
+    app.update(cx, |s, _| s.add_line(false));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.sel_line_heads()),
+        Some((false, false))
+    );
+    // Turn on the start head and off (toggle) — set start=true, end stays false.
+    app.update(cx, |s, _| s.set_arrow_head(false, true));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.sel_line_heads()),
+        Some((true, false))
+    );
+    // Set the end head too.
+    app.update(cx, |s, _| s.set_arrow_head(true, true));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.sel_line_heads()),
+        Some((true, true))
+    );
+    // Stroke width edit.
+    app.update(cx, |s, _| s.set_stroke_width(6));
+    assert_eq!(app.read_with(cx, |s, _| s.sel_stroke_pt()), Some(6));
 }

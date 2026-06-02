@@ -85,7 +85,8 @@ pub fn rasterize(scene: &Scene, out_w: u32, out_h: u32) -> Vec<u8> {
                 from,
                 to,
                 stroke,
-                arrow,
+                start_arrow,
+                end_arrow,
             } => {
                 if let Some((col, width)) = stroke_px(stroke, op, s) {
                     // Endpoints in output-pixel space.
@@ -95,8 +96,15 @@ pub fn rasterize(scene: &Scene, out_w: u32, out_h: u32) -> Vec<u8> {
                     let y1 = to.1 * sy;
                     let thick = width.max(1.0);
                     draw_thick_line(&mut buf, w, h, x0, y0, x1, y1, thick, col);
-                    if *arrow {
+                    if *end_arrow {
+                        // Arrowhead at END (`to`), barbs pointing back toward `from`.
                         draw_arrowhead(&mut buf, w, h, x0, y0, x1, y1, thick, col);
+                    }
+                    if *start_arrow {
+                        // Arrowhead at START (`from`), barbs pointing back toward `to`
+                        // (i.e. outward from the start). Swap the segment endpoints so the
+                        // helper draws the head at `(x0, y0)`.
+                        draw_arrowhead(&mut buf, w, h, x1, y1, x0, y0, thick, col);
                     }
                 }
             }

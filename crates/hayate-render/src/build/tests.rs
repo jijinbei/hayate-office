@@ -233,9 +233,13 @@ fn line_geometry_builds_line_primitive() {
     p.world
         .frames
         .insert(line, RectEmu::new(0, 0, 914_400, 914_400));
-    p.world
-        .geometries
-        .insert(line, Geometry::Line { arrow: true });
+    p.world.geometries.insert(
+        line,
+        Geometry::Line {
+            start: ArrowHead::None,
+            end: ArrowHead::Arrow,
+        },
+    );
 
     let scene = build_slide_scene(&p, slide, PxSize { w: 960.0, h: 540.0 });
     assert_eq!(scene.nodes.len(), 1);
@@ -244,9 +248,11 @@ fn line_geometry_builds_line_primitive() {
             from,
             to,
             stroke,
-            arrow,
+            start_arrow,
+            end_arrow,
         } => {
-            assert!(*arrow);
+            assert!(!*start_arrow);
+            assert!(*end_arrow);
             assert!(from.0 < to.0 && from.1 < to.1);
             // A default stroke is synthesized when the shape carries none.
             assert!(stroke.is_some());

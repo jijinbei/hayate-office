@@ -12,7 +12,7 @@ use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::RectEmu;
 use hayate_ir::paint::{Fill, Stroke};
-use hayate_ir::shape::Geometry;
+use hayate_ir::shape::{ArrowHead, Geometry};
 use hayate_ir::text::{HAlign, Paragraph, Run, TextBody};
 use hayate_ir::units::pt;
 use hayate_ir::world::{CompKind, CompValue, Entity, World};
@@ -113,16 +113,17 @@ pub fn create_rect(
 
 /// Create a line (or arrow) shape on a reserved id: spawn it, then attach parent, sibling
 /// order, frame, line geometry and a default stroke. The line is drawn along the frame's
-/// diagonal (top-left -> bottom-right); when `arrow` is true an arrowhead is drawn at the
-/// end point. Unlike a rect, a line carries a `Stroke` (a dark 2pt outline) rather than a
-/// fill. `reserved` should come from [`World::reserve_id`] so the spawn is fully captured by
-/// this (undoable) transaction.
+/// diagonal from the START point (top-left) to the END point (bottom-right); each end carries
+/// an independent [`ArrowHead`] (an arrowhead is drawn where it is `ArrowHead::Arrow`). Unlike
+/// a rect, a line carries a `Stroke` (a dark 2pt outline) rather than a fill. `reserved` should
+/// come from [`World::reserve_id`] so the spawn is fully captured by this (undoable) transaction.
 pub fn create_line(
     reserved: Entity,
     parent: Entity,
     order: FracIndex,
     frame: RectEmu,
-    arrow: bool,
+    start: ArrowHead,
+    end: ArrowHead,
 ) -> Transaction {
     Transaction::new(
         "create line",
@@ -142,7 +143,7 @@ pub fn create_line(
             },
             Operation::SetComponent {
                 entity: reserved,
-                value: CompValue::Geometry(Geometry::Line { arrow }),
+                value: CompValue::Geometry(Geometry::Line { start, end }),
             },
             Operation::SetComponent {
                 entity: reserved,

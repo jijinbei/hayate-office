@@ -122,13 +122,15 @@ pub enum Primitive {
         bounds: PxRect,
         media_key: String,
     },
-    /// A straight line between two scene-pixel endpoints. `arrow` draws an arrowhead at `to`.
-    /// A line has no fill; it is drawn with `stroke` (or invisibly if `None`).
+    /// A straight line between two scene-pixel endpoints (`from` = START, `to` = END).
+    /// `start_arrow` draws an arrowhead at `from`, `end_arrow` at `to`. A line has no fill;
+    /// it is drawn with `stroke` (or invisibly if `None`).
     Line {
         from: (f32, f32),
         to: (f32, f32),
         stroke: Option<StrokePx>,
-        arrow: bool,
+        start_arrow: bool,
+        end_arrow: bool,
     },
 }
 

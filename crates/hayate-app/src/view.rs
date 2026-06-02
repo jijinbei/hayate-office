@@ -550,6 +550,27 @@ impl Render for HayateApp {
                         })),
                 );
             }
+            // Stroke colour swatches (set the outline, not the fill).
+            let mut stroke_swatches = div().flex().flex_row().gap_1();
+            for (i, t) in accents.into_iter().enumerate() {
+                let cu = crate::util::rgb_u32(theme.color_for(t));
+                stroke_swatches = stroke_swatches.child(
+                    div()
+                        .id(("strk", i))
+                        .w(px(22.))
+                        .h(px(22.))
+                        .rounded_md()
+                        .border_1()
+                        .border_color(rgb(0x777777))
+                        .bg(rgb(cu))
+                        .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                            window.focus(&this.focus, cx);
+                            this.set_stroke_color(t);
+                            cx.notify();
+                        })),
+                );
+            }
+            let line_heads = self.sel_line_heads();
             let mut pane = div()
                 .id("inspector")
                 .flex()
@@ -591,45 +612,90 @@ impl Render for HayateApp {
                 )
                 .child(label("Fill"))
                 .child(swatches)
-                .child(label("Arrange"))
+                .child(label("Stroke"))
                 .child(
                     div()
                         .flex()
                         .flex_row()
                         .gap_1()
-                        .child(icon_button("front", "bring-front", cx, |t, _w, cx| {
-                            t.run_on_selection("shape.bring_to_front");
-                            cx.notify();
-                        }))
-                        .child(icon_button("back", "send-back", cx, |t, _w, cx| {
-                            t.run_on_selection("shape.send_to_back");
-                            cx.notify();
-                        }))
-                        .child(tool_button("al_l", "L", cx, |t, _w, cx| {
-                            t.align("shapes.align_left");
-                            cx.notify();
-                        }))
-                        .child(tool_button("al_c", "C", cx, |t, _w, cx| {
-                            t.align("shapes.align_hcenter");
-                            cx.notify();
-                        }))
-                        .child(tool_button("al_r", "R", cx, |t, _w, cx| {
-                            t.align("shapes.align_right");
-                            cx.notify();
-                        }))
-                        .child(tool_button("al_t", "T", cx, |t, _w, cx| {
-                            t.align("shapes.align_top");
-                            cx.notify();
-                        }))
-                        .child(tool_button("al_m", "M", cx, |t, _w, cx| {
-                            t.align("shapes.align_vcenter");
-                            cx.notify();
-                        }))
-                        .child(tool_button("al_b", "B", cx, |t, _w, cx| {
-                            t.align("shapes.align_bottom");
-                            cx.notify();
-                        })),
+                        .items_center()
+                        .child(div().text_sm().text_color(rgb(0x8a8a8a)).child("W"))
+                        .child(self.num_field("f_stroke_w", FieldKind::StrokeWidth, cx)),
+                )
+                .child(stroke_swatches);
+            // Arrowhead start/end controls (only for line shapes).
+            if let Some((start_on, end_on)) = line_heads {
+                pane = pane.child(label("Arrowheads (start / end)")).child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .gap_1()
+                        .child(tool_button(
+                            "ah_s",
+                            if start_on {
+                                "Start \u{25C0}"
+                            } else {
+                                "Start \u{2014}"
+                            },
+                            cx,
+                            move |t, _w, cx| {
+                                t.set_arrow_head(false, !start_on);
+                                cx.notify();
+                            },
+                        ))
+                        .child(tool_button(
+                            "ah_e",
+                            if end_on {
+                                "End \u{25B6}"
+                            } else {
+                                "End \u{2014}"
+                            },
+                            cx,
+                            move |t, _w, cx| {
+                                t.set_arrow_head(true, !end_on);
+                                cx.notify();
+                            },
+                        )),
                 );
+            }
+            pane = pane.child(label("Arrange")).child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .child(icon_button("front", "bring-front", cx, |t, _w, cx| {
+                        t.run_on_selection("shape.bring_to_front");
+                        cx.notify();
+                    }))
+                    .child(icon_button("back", "send-back", cx, |t, _w, cx| {
+                        t.run_on_selection("shape.send_to_back");
+                        cx.notify();
+                    }))
+                    .child(tool_button("al_l", "L", cx, |t, _w, cx| {
+                        t.align("shapes.align_left");
+                        cx.notify();
+                    }))
+                    .child(tool_button("al_c", "C", cx, |t, _w, cx| {
+                        t.align("shapes.align_hcenter");
+                        cx.notify();
+                    }))
+                    .child(tool_button("al_r", "R", cx, |t, _w, cx| {
+                        t.align("shapes.align_right");
+                        cx.notify();
+                    }))
+                    .child(tool_button("al_t", "T", cx, |t, _w, cx| {
+                        t.align("shapes.align_top");
+                        cx.notify();
+                    }))
+                    .child(tool_button("al_m", "M", cx, |t, _w, cx| {
+                        t.align("shapes.align_vcenter");
+                        cx.notify();
+                    }))
+                    .child(tool_button("al_b", "B", cx, |t, _w, cx| {
+                        t.align("shapes.align_bottom");
+                        cx.notify();
+                    })),
+            );
             // Text controls only when the selected shape carries text.
             if has_text {
                 pane = pane

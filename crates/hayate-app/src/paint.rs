@@ -260,12 +260,15 @@ pub(crate) fn paint_scene(
                 from,
                 to,
                 stroke: Some(stroke),
-                arrow,
+                start_arrow,
+                end_arrow,
             } => {
                 let color = gpui_rgba(stroke.color, opacity);
                 let width = px(stroke.width.max(1.0));
-                // Endpoints in window coordinates (rotation is applied about the node center,
-                // consistent with the rotated-quad path above).
+                // Endpoints in window coordinates. Rotation is applied about the line's center
+                // (the midpoint of from/to), consistent with the rotated-quad path above; the
+                // arrowheads below are computed from the already-rotated endpoints, so they
+                // rotate with the line through the full 0-360 deg range.
                 let (cx_, cy_) = ((from.0 + to.0) / 2.0, (from.1 + to.1) / 2.0);
                 let (fx, fy) = rotate_pt(from.0, from.1, cx_, cy_, angle);
                 let (tx, ty) = rotate_pt(to.0, to.1, cx_, cy_, angle);
@@ -279,28 +282,42 @@ pub(crate) fn paint_scene(
                     window.paint_path(path, color);
                 }
 
-                if *arrow {
-                    // Two short barbs from the `to` point, pointing back along the shaft.
-                    let dx = tx - fx;
-                    let dy = ty - fy;
+                // Draw an arrowhead at `(hx, hy)`, with barbs pointing back toward `(ox, oy)`
+                // (the other endpoint). Both points are in already-rotated scene coords.
+                let mut draw_head = |hx: f32, hy: f32, ox: f32, oy: f32| {
+                    let dx = hx - ox;
+                    let dy = hy - oy;
                     let len = (dx * dx + dy * dy).sqrt();
-                    if len > f32::EPSILON {
-                        let (ux, uy) = (dx / len, dy / len);
-                        let barb = (stroke.width * 4.0).max(8.0).min(len);
-                        let ang = 0.5_f32;
-                        let (s, co) = ang.sin_cos();
-                        let (bx, by) = (-ux, -uy);
-                        let r1 = (bx * co - by * s, bx * s + by * co);
-                        let r2 = (bx * co + by * s, -bx * s + by * co);
-                        for (rx, ry) in [r1, r2] {
-                            let mut ab = PathBuilder::stroke(width);
-                            ab.move_to(p_to);
-                            ab.line_to(point(o.x + px(tx + rx * barb), o.y + px(ty + ry * barb)));
-                            if let Ok(path) = ab.build() {
-                                window.paint_path(path, color);
-                            }
+                    if len <= f32::EPSILON {
+                        return;
+                    }
+                    // Unit vector pointing from the other endpoint toward the head.
+                    let (ux, uy) = (dx / len, dy / len);
+                    let barb = (stroke.width * 4.0).max(8.0).min(len);
+                    let ang = 0.5_f32;
+                    let (s, co) = ang.sin_cos();
+                    // Base vector points back along the shaft (head -> other endpoint).
+                    let (bx, by) = (-ux, -uy);
+                    let r1 = (bx * co - by * s, bx * s + by * co);
+                    let r2 = (bx * co + by * s, -bx * s + by * co);
+                    let p_head = point(o.x + px(hx), o.y + px(hy));
+                    for (rx, ry) in [r1, r2] {
+                        let mut ab = PathBuilder::stroke(width);
+                        ab.move_to(p_head);
+                        ab.line_to(point(o.x + px(hx + rx * barb), o.y + px(hy + ry * barb)));
+                        if let Ok(path) = ab.build() {
+                            window.paint_path(path, color);
                         }
                     }
+                };
+
+                if *end_arrow {
+                    // Arrowhead at END (`to`), barbs pointing back toward START.
+                    draw_head(tx, ty, fx, fy);
+                }
+                if *start_arrow {
+                    // Arrowhead at START (`from`), barbs pointing back toward END.
+                    draw_head(fx, fy, tx, ty);
                 }
             }
             Primitive::Text(tb) => paint_text(tb, o.x, o.y, window, cx),

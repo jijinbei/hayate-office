@@ -276,14 +276,116 @@ impl HayateApp {
         self.selection = Some(e);
     }
 
-    /// Add a line (or arrow) across the slide center and select it.
+    /// Add a line (or arrow) across the slide center and select it. The arrow tool puts a head
+    /// on the end point; the plain line tool leaves both ends bare.
     pub(crate) fn add_line(&mut self, arrow: bool) {
+        use hayate_ir::shape::ArrowHead;
         let order = self.append_order();
         let e = self.pres.world.reserve_id();
         let frame = RectEmu::new(inch_f(3.5), inch_f(3.5), inch_f(2.5), inch_f(1.5));
-        let tx = edit::create_line(e, self.slide, order, frame, arrow);
+        let end = if arrow {
+            ArrowHead::Arrow
+        } else {
+            ArrowHead::None
+        };
+        let tx = edit::create_line(e, self.slide, order, frame, ArrowHead::None, end);
         self.commit_tx(tx);
         self.selection = Some(e);
+    }
+
+    /// Set the selected shape's stroke width (points), keeping its colour.
+    pub(crate) fn set_stroke_width(&mut self, pt_val: i64) {
+        use hayate_ir::paint::Stroke;
+        if let Some(e) = self.selection {
+            let color = self
+                .pres
+                .world
+                .strokes
+                .get(&e)
+                .map(|s| s.color)
+                .unwrap_or_else(|| Color::theme(ThemeColorToken::Dk1));
+            let tx = Transaction::new(
+                "set stroke width",
+                vec![Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Stroke(Stroke::solid(color, pt(pt_val.max(1)))),
+                }],
+            );
+            self.commit_tx(tx);
+        }
+    }
+
+    /// Set the selected shape's stroke colour (a theme accent), keeping its width.
+    pub(crate) fn set_stroke_color(&mut self, token: ThemeColorToken) {
+        use hayate_ir::paint::Stroke;
+        if let Some(e) = self.selection {
+            let width = self
+                .pres
+                .world
+                .strokes
+                .get(&e)
+                .map(|s| s.width)
+                .unwrap_or_else(|| pt(2));
+            let tx = Transaction::new(
+                "set stroke color",
+                vec![Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Stroke(Stroke::solid(Color::theme(token), width)),
+                }],
+            );
+            self.commit_tx(tx);
+        }
+    }
+
+    /// Current stroke width of the selection in points, if it has a stroke.
+    pub(crate) fn sel_stroke_pt(&self) -> Option<i64> {
+        let e = self.selection?;
+        self.pres
+            .world
+            .strokes
+            .get(&e)
+            .map(|s| (s.width / 12_700).max(1))
+    }
+
+    /// Toggle a line's start/end arrowhead. `which` is true for the END, false for the START.
+    pub(crate) fn set_arrow_head(&mut self, which_end: bool, on: bool) {
+        use hayate_ir::shape::{ArrowHead, Geometry};
+        if let Some(e) = self.selection {
+            if let Some(Geometry::Line { start, end }) = self.pres.world.geometries.get(&e).copied()
+            {
+                let head = if on {
+                    ArrowHead::Arrow
+                } else {
+                    ArrowHead::None
+                };
+                let (start, end) = if which_end {
+                    (start, head)
+                } else {
+                    (head, end)
+                };
+                let tx = Transaction::new(
+                    "set arrow head",
+                    vec![Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Geometry(Geometry::Line { start, end }),
+                    }],
+                );
+                self.commit_tx(tx);
+            }
+        }
+    }
+
+    /// Whether the selection is a Line, and its (start_is_arrow, end_is_arrow).
+    pub(crate) fn sel_line_heads(&self) -> Option<(bool, bool)> {
+        use hayate_ir::shape::{ArrowHead, Geometry};
+        let e = self.selection?;
+        match self.pres.world.geometries.get(&e).copied()? {
+            Geometry::Line { start, end } => Some((
+                matches!(start, ArrowHead::Arrow),
+                matches!(end, ArrowHead::Arrow),
+            )),
+            _ => None,
+        }
     }
 
     /// Insert an image from a file path (used by drag-and-drop). Reads the bytes if the file has

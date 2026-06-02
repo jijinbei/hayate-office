@@ -14,9 +14,20 @@ pub enum Geometry {
     },
     Ellipse,
     /// A straight line drawn along the diagonal of the shape's `frame`, from the frame's
-    /// top-left to its bottom-right. When `arrow` is true, an arrowhead is drawn at the end
-    /// (bottom-right) point. A line carries no fill; only a stroke.
+    /// top-left (the START point) to its bottom-right (the END point). Each end carries an
+    /// independent [`ArrowHead`]. A line has no fill; only a stroke.
     Line {
-        arrow: bool,
+        start: ArrowHead,
+        end: ArrowHead,
     },
+}
+
+/// The decoration at one end of a line/connector.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ArrowHead {
+    /// A plain end (no decoration).
+    #[default]
+    None,
+    /// A V-shaped arrowhead pointing outward along the line.
+    Arrow,
 }

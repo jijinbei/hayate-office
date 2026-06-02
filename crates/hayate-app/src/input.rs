@@ -233,6 +233,7 @@ impl HayateApp {
                                 self.set_frame_field(|f| f.size.h = pt_to_emu(v).max(12_700))
                             }
                             FieldKind::Opacity => self.set_opacity_pct(v),
+                            FieldKind::StrokeWidth => self.set_stroke_width(v.round() as i64),
                         }
                     }
                 }
@@ -298,6 +299,7 @@ impl HayateApp {
                     .unwrap_or(1.0);
                 format!("{}", (o * 100.0).round() as i32)
             }
+            FieldKind::StrokeWidth => self.sel_stroke_pt().unwrap_or(0).to_string(),
         }
     }
 

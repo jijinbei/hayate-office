@@ -5,7 +5,7 @@ use std::collections::HashMap;
 
 use gpui::{div, prelude::*, px, rgb, ClickEvent, Context};
 
-use hayate_ir::shape::Geometry;
+use hayate_ir::shape::{ArrowHead, Geometry};
 use hayate_ir::world::Entity;
 use hayate_model::edit::group_members;
 
@@ -228,11 +228,14 @@ impl HayateApp {
                         ell += 1;
                         format!("Ellipse {ell}")
                     }
-                    Some(Geometry::Line { arrow: true }) => {
+                    // A line with an arrowhead on either end reads as an "Arrow".
+                    Some(Geometry::Line { start, end })
+                        if matches!(start, ArrowHead::Arrow) || matches!(end, ArrowHead::Arrow) =>
+                    {
                         arrow += 1;
                         format!("Arrow {arrow}")
                     }
-                    Some(Geometry::Line { arrow: false }) => {
+                    Some(Geometry::Line { .. }) => {
                         line += 1;
                         format!("Line {line}")
                     }

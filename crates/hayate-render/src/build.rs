@@ -10,7 +10,7 @@ use hayate_ir::color::Rgba;
 use hayate_ir::font::Script;
 use hayate_ir::paint::Fill;
 use hayate_ir::presentation::Presentation;
-use hayate_ir::shape::Geometry;
+use hayate_ir::shape::{ArrowHead, Geometry};
 use hayate_ir::text::TextBody;
 use hayate_ir::theme::Theme;
 use hayate_ir::world::Entity;
@@ -67,7 +67,7 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
                     fill,
                     stroke,
                 },
-                Geometry::Line { arrow } => {
+                Geometry::Line { start, end } => {
                     // A line runs along the diagonal of its frame (top-left -> bottom-right).
                     // It has no fill; if the shape carries no stroke, synthesize a default
                     // 2pt dark stroke so the line is visible.
@@ -79,7 +79,8 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
                         from: (bounds.x, bounds.y),
                         to: (bounds.x + bounds.w, bounds.y + bounds.h),
                         stroke,
-                        arrow: *arrow,
+                        start_arrow: matches!(start, ArrowHead::Arrow),
+                        end_arrow: matches!(end, ArrowHead::Arrow),
                     }
                 }
             }

@@ -239,6 +239,7 @@ enum FieldKind {
     SizeW,
     SizeH,
     Opacity,
+    StrokeWidth,
 }
 
 struct FieldEdit {

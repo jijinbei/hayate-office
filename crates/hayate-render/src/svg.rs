@@ -106,7 +106,8 @@ fn emit_node(out: &mut String, node: &SceneNode) {
             from,
             to,
             stroke,
-            arrow: _,
+            start_arrow: _,
+            end_arrow: _,
         } => emit_line(out, node, *from, *to, stroke),
     }
 }
