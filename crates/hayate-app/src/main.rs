@@ -130,10 +130,13 @@ struct HayateApp {
     drag: Option<Drag>,
     /// Canvas top-left in window coords, written each paint, read by mouse handlers.
     canvas_origin: Rc<Cell<Point<Pixels>>>,
+    /// Keyboard focus for the editor (so Ctrl/Cmd+Z reaches us).
+    focus: gpui::FocusHandle,
+    focused_once: bool,
 }
 
 impl HayateApp {
-    fn new() -> Self {
+    fn new(cx: &mut Context<Self>) -> Self {
         let pres = sample_presentation();
         let slide = pres.slides()[0];
         let scene = build_slide_scene(&pres, slide, TARGET);
@@ -145,6 +148,8 @@ impl HayateApp {
             selection: None,
             drag: None,
             canvas_origin: Rc::new(Cell::new(point(px(0.), px(0.)))),
+            focus: cx.focus_handle(),
+            focused_once: false,
         }
     }
 
@@ -265,7 +270,11 @@ fn paint_text(tb: &TextBlock, ox: Pixels, oy: Pixels, window: &mut Window, cx: &
 }
 
 impl Render for HayateApp {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if !self.focused_once {
+            window.focus(&self.focus, cx);
+            self.focused_once = true;
+        }
         let scene = self.scene.clone();
         let selection = self.selection;
         let origin_cell = self.canvas_origin.clone();
@@ -347,9 +356,8 @@ impl Render for HayateApp {
         .size_full();
 
         div()
-            .key_context("HayateApp")
-            .track_focus(&_cx.focus_handle())
-            .on_key_down(_cx.listener(|this, ev: &KeyDownEvent, _, cx| this.on_key_down(ev, cx)))
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| this.on_key_down(ev, cx)))
             .flex()
             .flex_col()
             .gap_3()
@@ -363,9 +371,15 @@ impl Render for HayateApp {
                     .h(px(sh))
                     .border_1()
                     .border_color(rgb(0x555555))
-                    .on_mouse_down(MouseButton::Left, _cx.listener(|this, ev: &MouseDownEvent, _, cx| this.on_mouse_down(ev, cx)))
-                    .on_mouse_move(_cx.listener(|this, ev: &MouseMoveEvent, _, cx| this.on_mouse_move(ev, cx)))
-                    .on_mouse_up(MouseButton::Left, _cx.listener(|this, ev: &MouseUpEvent, _, cx| this.on_mouse_up(ev, cx)))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                            window.focus(&this.focus, cx);
+                            this.on_mouse_down(ev, cx);
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _, cx| this.on_mouse_move(ev, cx)))
+                    .on_mouse_up(MouseButton::Left, cx.listener(|this, ev: &MouseUpEvent, _, cx| this.on_mouse_up(ev, cx)))
                     .child(slide_canvas),
             )
     }
@@ -379,7 +393,7 @@ fn run() {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
                 ..Default::default()
             },
-            |_, cx| cx.new(|_| HayateApp::new()),
+            |_, cx| cx.new(|cx| HayateApp::new(cx)),
         )
         .unwrap();
         cx.activate(true);
