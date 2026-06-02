@@ -5,9 +5,11 @@
 pub mod build;
 pub mod hit;
 pub mod linebreak;
+pub mod raster;
 pub mod scene;
 
 pub use build::build_slide_scene;
 pub use hit::hit_test;
+pub use raster::rasterize;
 pub use linebreak::{DefaultBreaker, Item, JapaneseBreaker, LineBreaker};
 pub use scene::{Paint, Primitive, PxRect, PxSize, Scene, SceneNode, StrokePx, TextBlock, Viewport};
