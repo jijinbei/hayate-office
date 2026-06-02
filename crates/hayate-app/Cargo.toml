@@ -17,3 +17,7 @@ serde_json.workspace = true
 gpui.workspace = true
 # Linux windowing backends for gpui_platform.
 gpui_platform = { workspace = true, features = ["wayland", "x11"] }
+
+[dev-dependencies]
+# Headless interaction tests drive the real UI handlers through a gpui test context.
+gpui = { workspace = true, features = ["test-support"] }
