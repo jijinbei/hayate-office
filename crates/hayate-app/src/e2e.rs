@@ -800,3 +800,64 @@ fn slide_nav_disabled_in_master_scope(cx: &mut TestAppContext) {
         "next_slide is a no-op in master mode"
     );
 }
+
+#[gpui::test]
+fn add_layout_preset_populates_placeholders(cx: &mut TestAppContext) {
+    use hayate_ir::doc::PlaceholderType as PT;
+    use hayate_model::edit::LayoutPreset;
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let layout = app
+        .update(cx, |s, _| {
+            s.add_layout_preset(LayoutPreset::TitleAndContent)
+        })
+        .unwrap();
+    let kinds: Vec<PT> = app.read_with(cx, |s, _| {
+        s.pres
+            .placeholder_shapes(layout)
+            .iter()
+            .filter_map(|e| s.pres.world.placeholders.get(e).map(|p| p.ph_type))
+            .collect()
+    });
+    assert!(
+        kinds.contains(&PT::Title) && kinds.contains(&PT::Body),
+        "got {kinds:?}"
+    );
+}
+
+#[gpui::test]
+fn duplicate_and_delete_layout(cx: &mut TestAppContext) {
+    use hayate_model::edit::LayoutPreset;
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let layout = app
+        .update(cx, |s, _| s.add_layout_preset(LayoutPreset::TitleOnly))
+        .unwrap();
+    let n_before = app.read_with(cx, |s, _| s.master_layouts().len());
+    app.update(cx, |s, _| s.duplicate_layout(layout));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.master_layouts().len()),
+        n_before + 1,
+        "duplicate adds a layout"
+    );
+    // The duplicate (unused by any slide) can be deleted.
+    let dup = app.read_with(cx, |s, _| s.master_layout.unwrap());
+    app.update(cx, |s, _| s.delete_layout(dup));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.master_layouts().len()),
+        n_before,
+        "unused layout is deleted"
+    );
+}
+
+#[gpui::test]
+fn delete_layout_in_use_is_refused(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // The current slide's layout is in use; deleting it must be a no-op.
+    let layout = app.read_with(cx, |s, _| s.pres.layout_of(s.slide).unwrap());
+    let n = app.read_with(cx, |s, _| s.master_layouts().len());
+    app.update(cx, |s, _| s.delete_layout(layout));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.master_layouts().len()),
+        n,
+        "in-use layout kept"
+    );
+}

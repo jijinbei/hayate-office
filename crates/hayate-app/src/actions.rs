@@ -171,10 +171,124 @@ impl HayateApp {
         self.master_layout = Some(layout);
     }
 
+    /// Create a layout pre-populated from a standard preset (Title Slide, Title and Content, …)
+    /// under the current master, select it for editing, and return it. Placeholders are one
+    /// undoable transaction.
+    pub(crate) fn add_layout_preset(&mut self, preset: edit::LayoutPreset) -> Option<Entity> {
+        let master = self.pres.master_of(self.slide)?;
+        let n = self.master_layouts().len() + 1;
+        let layout = self
+            .pres
+            .add_layout(master, format!("{} {}", preset.name(), n));
+        let specs = edit::preset_placeholders(preset, self.pres.slide_size);
+        let mut ops = Vec::new();
+        let mut order = FracIndex::after(None);
+        for spec in specs {
+            let e = self.pres.world.reserve_id();
+            let body = TextBody {
+                paragraphs: vec![Paragraph::new(vec![Run {
+                    text: spec.label.to_string(),
+                    font: FontRef::Theme(spec.slot),
+                    size: pt(spec.size_pt),
+                    color: Color::theme(ThemeColorToken::Dk1),
+                    bold: spec.bold,
+                    italic: false,
+                    underline: false,
+                }])],
+                autofit: false,
+            };
+            let tx =
+                edit::create_placeholder(e, layout, order.clone(), spec.ph, spec.frame, Some(body));
+            ops.extend(tx.ops);
+            order = FracIndex::after(Some(&order));
+        }
+        if !ops.is_empty() {
+            self.commit_tx(Transaction::new("add layout preset", ops));
+        }
+        self.master_layout = Some(layout);
+        Some(layout)
+    }
+
     /// Point the current slide at `layout` (undoable). Inherited placeholders update immediately.
     pub(crate) fn set_current_slide_layout(&mut self, layout: Entity) {
         let tx = edit::set_slide_layout(self.slide, layout);
         self.commit_tx(tx);
+    }
+
+    /// Rename a layout (undoable; updates its `LayoutInfo.name`).
+    pub(crate) fn rename_layout(&mut self, layout: Entity, name: String) {
+        let Some(li) = self.pres.world.layout_info.get(&layout).cloned() else {
+            return;
+        };
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let tx = Transaction::new(
+            "rename layout",
+            vec![Operation::SetComponent {
+                entity: layout,
+                value: CompValue::Layout(hayate_ir::doc::LayoutInfo {
+                    master: li.master,
+                    name: name.to_string(),
+                }),
+            }],
+        );
+        self.commit_tx(tx);
+    }
+
+    /// Duplicate a layout and its placeholder shapes; select the copy for editing.
+    pub(crate) fn duplicate_layout(&mut self, layout: Entity) {
+        let Some(li) = self.pres.world.layout_info.get(&layout).cloned() else {
+            return;
+        };
+        let copy = self.pres.add_layout(li.master, format!("{} copy", li.name));
+        let mut ops = Vec::new();
+        let mut order = FracIndex::after(None);
+        for child in self.pres.placeholder_shapes(layout) {
+            let ne = self.pres.world.reserve_id();
+            ops.push(Operation::Spawn { entity: ne });
+            for comp in self.pres.world.components_of(child) {
+                // Re-parent the copy to the new layout; keep all other components.
+                let comp = match comp {
+                    CompValue::Parent(_) => CompValue::Parent(copy),
+                    CompValue::Order(_) => CompValue::Order(order.clone()),
+                    other => other,
+                };
+                ops.push(Operation::SetComponent {
+                    entity: ne,
+                    value: comp,
+                });
+            }
+            order = FracIndex::after(Some(&order));
+        }
+        if !ops.is_empty() {
+            self.commit_tx(Transaction::new("duplicate layout", ops));
+        }
+        self.master_layout = Some(copy);
+    }
+
+    /// Delete a layout and its placeholders, unless a slide still uses it (then no-op).
+    pub(crate) fn delete_layout(&mut self, layout: Entity) {
+        let in_use = self
+            .pres
+            .slides()
+            .iter()
+            .any(|s| self.pres.layout_of(*s) == Some(layout));
+        if in_use {
+            return; // refuse to delete a layout slides depend on
+        }
+        let mut ops = vec![Operation::Despawn { entity: layout }];
+        for child in self.pres.placeholder_shapes(layout) {
+            ops.push(Operation::Despawn { entity: child });
+        }
+        self.commit_tx(Transaction::new("delete layout", ops));
+        if self.master_layout == Some(layout) {
+            self.master_layout = None;
+        }
+        if self.scope == EditScope::Layout(layout) {
+            self.exit_scope();
+        }
     }
 
     /// Add a placeholder of `ph_type` to the layout the Master tab is editing, with a sensible

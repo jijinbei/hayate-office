@@ -194,6 +194,48 @@ impl HayateApp {
                         cx.notify();
                     }));
             }
+            MenuTarget::Layout(layout) => {
+                menu = menu
+                    .child(menu_item(
+                        "m_layout_edit",
+                        "Edit Layout",
+                        cx,
+                        move |t, _w, cx| {
+                            t.enter_layout_scope(layout);
+                            cx.notify();
+                        },
+                    ))
+                    .child(menu_item(
+                        "m_layout_rename",
+                        "Rename",
+                        cx,
+                        move |t, _w, cx| {
+                            let name = t
+                                .pres
+                                .world
+                                .layout_info
+                                .get(&layout)
+                                .map(|li| li.name.clone())
+                                .unwrap_or_default();
+                            t.layout_rename = Some((layout, name));
+                            cx.notify();
+                        },
+                    ))
+                    .child(menu_item(
+                        "m_layout_dup",
+                        "Duplicate",
+                        cx,
+                        move |t, _w, cx| {
+                            t.duplicate_layout(layout);
+                            cx.notify();
+                        },
+                    ))
+                    .child(menu_divider())
+                    .child(menu_item("m_layout_del", "Delete", cx, move |t, _w, cx| {
+                        t.delete_layout(layout);
+                        cx.notify();
+                    }));
+            }
         }
         // A full-window backdrop captures clicks outside the menu to dismiss it. The menu sits
         // on top, so clicks on its items reach the items (topmost hitbox wins); clicks elsewhere

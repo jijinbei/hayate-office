@@ -194,6 +194,8 @@ struct HayateApp {
     master_layout: Option<Entity>,
     /// What the canvas edits: the current slide, or a layout/master in master edit mode.
     scope: EditScope,
+    /// Layout being renamed in the Master tab: (layout, edit buffer).
+    layout_rename: Option<(Entity, String)>,
     /// Active marquee (rubber-band) selection rect in scene px: (start_x, start_y, cur_x, cur_y).
     marquee: Option<(f32, f32, f32, f32)>,
     /// Last window viewport size; used to refit the slide when the window is resized.
@@ -205,6 +207,7 @@ enum MenuTarget {
     Shape,
     Slide,
     Canvas,
+    Layout(Entity),
 }
 
 /// Which list the left panel shows.
@@ -336,6 +339,7 @@ impl HayateApp {
             save_modal: None,
             master_layout: None,
             scope: EditScope::Slide(slide),
+            layout_rename: None,
             marquee: None,
             last_viewport: None,
         }

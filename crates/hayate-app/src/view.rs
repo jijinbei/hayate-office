@@ -8,6 +8,7 @@ use gpui::{
 };
 
 use hayate_ir::color::ThemeColorToken;
+use hayate_model::edit::LayoutPreset;
 use hayate_render::scene::{Primitive, PxSize};
 use hayate_render::{
     build_slide_scene, build_slide_scene_at, grid_lines, resize_handles, GuideKind,
@@ -1052,35 +1053,86 @@ impl HayateApp {
             let is_active = active == Some(layout);
             let is_slide = slide_layout == Some(layout);
             let label = format!("{}{}", if is_slide { "● " } else { "○ " }, name);
+            // While renaming this layout, show the edit buffer instead of the clickable name.
+            let renaming = self
+                .layout_rename
+                .as_ref()
+                .filter(|(l, _)| *l == layout)
+                .map(|(_, b)| b.clone());
+            let name_child = if let Some(buf) = renaming {
+                div()
+                    .flex_1()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .text_sm()
+                    .bg(rgb(0x1f1f1f))
+                    .border_1()
+                    .border_color(rgb(SELECTION))
+                    .child(format!("{buf}|"))
+                    .into_any_element()
+            } else {
+                div()
+                    .id(("layout", layout.0 as usize))
+                    .flex_1()
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .text_sm()
+                    .bg(if is_active {
+                        rgb(0x1f3a5f)
+                    } else {
+                        rgb(0x2f2f2f)
+                    })
+                    .hover(|s| s.bg(rgb(0x094771)))
+                    .child(label)
+                    .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                        window.focus(&this.focus, cx);
+                        this.master_layout = Some(layout);
+                        this.set_current_slide_layout(layout);
+                        cx.notify();
+                    }))
+                    .into_any_element()
+            };
+            // A small live thumbnail of the layout (master placeholders render as context).
+            let ttheme = self
+                .pres
+                .container_theme(layout)
+                .cloned()
+                .unwrap_or_default();
+            let tbg = self.pres.container_background(layout);
+            let tctx: Vec<hayate_ir::world::Entity> =
+                self.pres.owning_master(layout).into_iter().collect();
+            let tscene = hayate_render::build_container_scene(
+                &self.pres,
+                layout,
+                &ttheme,
+                tbg,
+                &tctx,
+                PxSize { w: 64.0, h: 36.0 },
+            );
+            let tmedia = self.pres.media.clone();
+            let thumb = div()
+                .w(px(64.))
+                .h(px(36.))
+                .border_1()
+                .border_color(rgb(0x444444))
+                .child(
+                    canvas(
+                        |_, _, _| {},
+                        move |b, _, window, cx| paint_scene(&tscene, b.origin, &tmedia, window, cx),
+                    )
+                    .size_full(),
+                );
             col = col.child(
                 div()
+                    .id(("layout_row", layout.0 as usize))
                     .flex()
                     .flex_row()
                     .items_center()
                     .gap_1()
-                    .child(
-                        // Click the name to apply this layout to the current slide.
-                        div()
-                            .id(("layout", layout.0 as usize))
-                            .flex_1()
-                            .px_2()
-                            .py_1()
-                            .rounded_md()
-                            .text_sm()
-                            .bg(if is_active {
-                                rgb(0x1f3a5f)
-                            } else {
-                                rgb(0x2f2f2f)
-                            })
-                            .hover(|s| s.bg(rgb(0x094771)))
-                            .child(label)
-                            .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
-                                window.focus(&this.focus, cx);
-                                this.master_layout = Some(layout);
-                                this.set_current_slide_layout(layout);
-                                cx.notify();
-                            })),
-                    )
+                    .child(thumb)
+                    .child(name_child)
                     .child(
                         // Edit opens the layout on the canvas (master edit mode).
                         div()
@@ -1097,26 +1149,68 @@ impl HayateApp {
                                 this.enter_layout_scope(layout);
                                 cx.notify();
                             })),
+                    )
+                    // Right-click opens rename/duplicate/delete for this layout.
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
+                            window.focus(&this.focus, cx);
+                            this.open_menu(
+                                f32::from(ev.position.x),
+                                f32::from(ev.position.y),
+                                MenuTarget::Layout(layout),
+                            );
+                            cx.notify();
+                        }),
                     ),
             );
         }
+        // New-layout presets + Edit Master.
         col = col.child(
             div()
-                .flex()
-                .flex_row()
-                .gap_1()
-                .child(btn(
-                    "new_layout",
-                    "+ New Layout".to_string(),
-                    cx,
-                    HayateApp::add_layout,
-                ))
-                .child(btn("edit_master", "Edit Master".to_string(), cx, |a| {
-                    if let Some(m) = a.pres.master_of(a.slide) {
-                        a.enter_master_scope(m);
-                    }
-                })),
+                .text_sm()
+                .text_color(rgb(0x888888))
+                .child("New layout"),
         );
+        let presets = [
+            ("p_title_slide", "Title Slide", LayoutPreset::TitleSlide),
+            (
+                "p_title_content",
+                "Title + Content",
+                LayoutPreset::TitleAndContent,
+            ),
+            ("p_section", "Section Header", LayoutPreset::SectionHeader),
+            ("p_two", "Two Content", LayoutPreset::TwoContent),
+            ("p_title_only", "Title Only", LayoutPreset::TitleOnly),
+            ("p_blank", "Blank", LayoutPreset::Blank),
+        ];
+        let mut preset_col = div().flex().flex_col().gap_1();
+        for (id, lbl, preset) in presets {
+            preset_col = preset_col.child(
+                div()
+                    .id(id)
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .text_sm()
+                    .bg(rgb(0x3a3a3a))
+                    .hover(|s| s.bg(rgb(0x4a4a4a)))
+                    .child(format!("+ {lbl}"))
+                    .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                        window.focus(&this.focus, cx);
+                        if let Some(l) = this.add_layout_preset(preset) {
+                            this.enter_layout_scope(l);
+                        }
+                        cx.notify();
+                    })),
+            );
+        }
+        col = col.child(preset_col);
+        col = col.child(btn("edit_master", "Edit Master".to_string(), cx, |a| {
+            if let Some(m) = a.pres.master_of(a.slide) {
+                a.enter_master_scope(m);
+            }
+        }));
 
         // Placeholders on the active layout, plus add buttons.
         col = col.child(

@@ -215,6 +215,35 @@ impl HayateApp {
         cx.notify();
     }
 
+    /// Key handling for inline layout renaming in the Master tab.
+    pub(crate) fn layout_rename_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        match ev.keystroke.key.as_str() {
+            "escape" => self.layout_rename = None,
+            "enter" => {
+                if let Some((layout, buf)) = self.layout_rename.take() {
+                    self.rename_layout(layout, buf);
+                }
+            }
+            "backspace" => {
+                if let Some((_, buf)) = self.layout_rename.as_mut() {
+                    buf.pop();
+                }
+            }
+            "space" => {
+                if let Some((_, buf)) = self.layout_rename.as_mut() {
+                    buf.push(' ');
+                }
+            }
+            s if s.chars().count() == 1 => {
+                if let Some((_, buf)) = self.layout_rename.as_mut() {
+                    buf.push_str(s);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
     /// Key handling for the "Save As" dialog: edit the filename, Enter saves, Esc cancels.
     pub(crate) fn save_modal_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.clone();
@@ -390,6 +419,10 @@ impl HayateApp {
         }
         if self.save_modal.is_some() {
             self.save_modal_key(ev, cx);
+            return;
+        }
+        if self.layout_rename.is_some() {
+            self.layout_rename_key(ev, cx);
             return;
         }
         if self.renaming.is_some() {
