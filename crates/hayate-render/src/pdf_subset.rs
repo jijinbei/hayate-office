@@ -15,8 +15,8 @@ use std::collections::BTreeSet;
 use ttf_parser::{GlyphId, OutlineBuilder};
 
 /// Subdivision counts for flattening curves into line segments.
-const CUBIC_SEGMENTS: u32 = 8;
-const QUAD_SEGMENTS: u32 = 4;
+const CUBIC_SEGMENTS: u32 = 16;
+const QUAD_SEGMENTS: u32 = 10;
 
 /// A single outline point in font units. All points are on-curve (we flatten curves to lines).
 #[derive(Clone, Copy)]

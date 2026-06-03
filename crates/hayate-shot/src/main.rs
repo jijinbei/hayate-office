@@ -376,11 +376,15 @@ fn main() {
     // a shape) to a real PDF. `just pdf-shot` renders it with poppler so the end-to-end PDF
     // (structure + embedded image) can be eyeballed; the same content also appears in the PNG
     // shots above, so the two can be compared.
-    let pdf =
-        hayate_render::pdf::export_pdf(&pdf_demo(), &hayate_render::pdf::PdfOptions::default());
+    let demo = pdf_demo();
+    let pdf = hayate_render::pdf::export_pdf(&demo, &hayate_render::pdf::PdfOptions::default());
     let pdf_path = out_dir.join("deck.pdf");
     std::fs::write(&pdf_path, pdf).expect("write pdf");
     eprintln!("wrote {}", pdf_path.display());
+    // Also rasterize the same deck (cosmic-text = on-screen weight) so the PDF render can be
+    // compared against the reference under `just pdf-shot`.
+    let dslide = demo.slides()[0];
+    save!("pdf_demo_raster", &demo, dslide);
 
     println!("wrote {idx} snapshots to {}", out_dir.display());
 }
