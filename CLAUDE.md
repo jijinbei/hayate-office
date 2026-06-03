@@ -5,6 +5,9 @@ Fast, lightweight Office suite in Rust (MVP: presentation editor) on the **gpui*
 English; chat in Japanese. gpui-touching builds need `nix develop` — the `just` recipes handle that.
 
 ## Debugging (two layers; see `Justfile` for all recipes)
+The full guide also lives in the app crate-root rustdoc — `cargo doc -p hayate-app --no-deps`, then
+open `target/doc/hayate_app/index.html` ("Debugging & E2E tests").
+
 - **`just e2e`** — gpui interaction E2E: `crates/hayate-app/src/e2e.rs` drives the real handlers
   (`on_mouse_down`/`on_key_down`/menu/editing actions) headlessly via `TestAppContext` and asserts on
   real state. **Read `e2e.rs` for the patterns/helpers** (`mouse`/`keydown`/`prim_bounds`,
