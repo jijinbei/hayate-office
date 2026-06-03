@@ -36,8 +36,8 @@ fn resolve_token_with_transform() {
 fn font_picks_script_slot() {
     let t = Theme::default();
     let body = FontRef::Theme(ThemeFontSlot::Minor);
-    assert_eq!(t.font_family(&body, Script::Latin), "Arial");
-    assert_eq!(t.font_family(&body, Script::Ea), "Noto Sans JP");
+    assert_eq!(t.font_family(&body, Script::Latin), "DejaVu Sans");
+    assert_eq!(t.font_family(&body, Script::Ea), "Noto Sans CJK JP");
     assert_eq!(
         t.font_family(&FontRef::Family("Mincho".into()), Script::Latin),
         "Mincho"

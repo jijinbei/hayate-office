@@ -998,6 +998,48 @@ mod tests {
     }
 
     #[test]
+    fn bold_is_reflected_in_output() {
+        use hayate_ir::font::{FontRef, ThemeFontSlot};
+        use hayate_ir::text::{Paragraph, Run, TextBody};
+        use hayate_ir::units::pt;
+        let deck = |bold: bool| {
+            let mut p = Presentation::new();
+            let m = p.add_master(Theme::default());
+            let l = p.add_layout(m, "Blank");
+            let s = p.add_slide(l);
+            let t = p.add_shape(s);
+            p.world.frames.insert(
+                t,
+                RectEmu::new(inch_f(0.5), inch_f(0.5), inch_f(9.0), inch_f(1.0)),
+            );
+            p.world.texts.insert(
+                t,
+                TextBody {
+                    paragraphs: vec![Paragraph::new(vec![Run {
+                        text: "Hello".to_string(),
+                        font: FontRef::Theme(ThemeFontSlot::Major),
+                        size: pt(40),
+                        color: Color::theme(ThemeColorToken::Dk1),
+                        bold,
+                        italic: false,
+                        underline: false,
+                    }])],
+                    autofit: false,
+                },
+            );
+            p
+        };
+        // A bold run must produce different output than the same text in regular weight
+        // (different embedded face / glyph metrics) — WYSIWYG on export.
+        let regular = export_pdf(&deck(false), &PdfOptions::default());
+        let bold = export_pdf(&deck(true), &PdfOptions::default());
+        assert_ne!(
+            regular, bold,
+            "bold text should not export identically to regular"
+        );
+    }
+
+    #[test]
     fn empty_deck_is_valid() {
         let pdf = export_pdf(&deck(0), &PdfOptions::default());
         assert!(pdf.starts_with(b"%PDF-"));

@@ -156,9 +156,13 @@ impl Default for Theme {
                 hlink: Rgba::rgb(0x00, 0x00, 0xEE),
                 fol_hlink: Rgba::rgb(0x80, 0x00, 0x80),
             },
+            // Use family names the platform font systems actually register, so a requested
+            // bold weight resolves to a real bold face (gpui/font-kit does not synthesize bold).
+            // "Arial"/"Noto Sans JP" were not found on Linux, so bold silently fell back to a
+            // regular face on screen while the PDF (cosmic-text, fuzzy match) rendered bold.
             fonts: FontScheme {
-                major: mk("Arial", "Noto Sans JP"),
-                minor: mk("Arial", "Noto Sans JP"),
+                major: mk("DejaVu Sans", "Noto Sans CJK JP"),
+                minor: mk("DejaVu Sans", "Noto Sans CJK JP"),
             },
         }
     }
