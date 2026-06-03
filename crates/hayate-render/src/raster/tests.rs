@@ -184,3 +184,49 @@ fn text_draws_some_foreground_pixels() {
         .any(|p| p[0] < 50 && p[1] < 50 && p[2] < 50);
     assert!(any_black, "expected glyph pixels to be painted");
 }
+
+#[test]
+fn cjk_text_renders_real_glyphs() {
+    // A Japanese string must paint real glyphs (dark pixels), not tofu boxes — guards the
+    // cosmic-text font-fallback path used for non-Latin scripts.
+    let block = TextBlock {
+        bounds: PxRect {
+            x: 2.0,
+            y: 2.0,
+            w: 200.0,
+            h: 40.0,
+        },
+        paragraphs: vec![ResolvedParagraph {
+            runs: vec![ResolvedRun {
+                text: "あ".to_string(),
+                family: "Noto Sans CJK JP".to_string(),
+                size_px: 28.0,
+                color: Rgba::rgb(0, 0, 0),
+                bold: false,
+                italic: false,
+                underline: false,
+            }],
+            align: HAlign::Left,
+            bullet_level: 0,
+        }],
+    };
+    let scene = Scene {
+        size: PxSize { w: 220.0, h: 60.0 },
+        background: Rgba::WHITE,
+        nodes: vec![SceneNode {
+            source: None,
+            rotation_deg: 0.0,
+            opacity: 1.0,
+            prim: Primitive::Text(block),
+        }],
+    };
+    let buf = rasterize(&scene, 220, 60);
+    let dark = buf
+        .chunks_exact(4)
+        .filter(|p| p[0] < 80 && p[1] < 80 && p[2] < 80)
+        .count();
+    assert!(
+        dark > 20,
+        "expected real CJK glyph pixels, got {dark} dark px"
+    );
+}

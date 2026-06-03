@@ -8,3 +8,7 @@ repository.workspace = true
 
 [dependencies]
 hayate-ir.workspace = true
+# Real-font text rasterization for the headless rasterizer (shapes + renders with system fonts,
+# incl. CJK), matching the on-screen gpui text closely. Same version gpui already resolves, so it
+# adds nothing new to the lockfile.
+cosmic-text = "0.19"

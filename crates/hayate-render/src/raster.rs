@@ -1,18 +1,29 @@
-//! Dependency-free software rasterizer for headless/offscreen rendering. Renders a `Scene`
-//! into an RGBA8 pixel buffer (top-left origin, row-major) without gpui, so it is usable for
-//! thumbnails and for debug captures that approximate the live editor.
+//! Software rasterizer for headless/offscreen rendering. Renders a `Scene` into an RGBA8 pixel
+//! buffer (top-left origin, row-major) without gpui, so it is usable for thumbnails, PDF export,
+//! and debug captures that closely approximate the live editor.
 //!
-//! Fidelity (vs. the gpui canvas): solid fills, per-node opacity, rotation about the node
-//! center, rounded corners, and strokes are honored. Text is drawn with a built-in 5x7 ASCII
-//! bitmap font (lowercase mapped to uppercase shapes); non-ASCII glyphs (e.g. Japanese) are
-//! drawn as outlined cells, so position/size/color are visible but the exact glyph is not.
+//! Fidelity (vs. the gpui canvas): solid fills, per-node opacity, rotation about the node center,
+//! rounded corners, and strokes are honored. Text is shaped and rendered with real system fonts
+//! via cosmic-text (the same engine gpui uses), with font fallback so CJK and other scripts
+//! display correctly; per-run family/size/weight/italic/color, paragraph alignment, and bullet
+//! levels are applied. Text rotation is not applied (acceptable for debug/export).
 //! Images render as a gray placeholder box with a border and diagonals.
 
-use crate::scene::{Paint, Primitive, PxRect, ResolvedRun, Scene, StrokePx, TextBlock};
+use std::cell::RefCell;
+
+use cosmic_text::{
+    Align, Attrs, Buffer, Color as CtColor, Family, FontSystem, Metrics, Shaping, Style, Weight,
+};
+
+use crate::scene::{Paint, Primitive, PxRect, Scene, StrokePx, TextBlock};
 use hayate_ir::color::Rgba;
 use hayate_ir::text::HAlign;
 
-mod font;
+thread_local! {
+    /// System font set + glyph cache, built once per thread (font scanning is expensive).
+    static TEXT: RefCell<(FontSystem, cosmic_text::SwashCache)> =
+        RefCell::new((FontSystem::new(), cosmic_text::SwashCache::new()));
+}
 
 /// Rasterize `scene` into an `out_w` x `out_h` RGBA8 buffer (len = out_w*out_h*4),
 /// row-major with a top-left origin.
@@ -450,8 +461,15 @@ fn draw_image_box(buf: &mut [u8], w: usize, h: usize, bounds: &PxRect, sx: f32, 
     draw_line(buf, w, h, x + bw, y, x, y + bh, border);
 }
 
-/// Draw a text block: one line per paragraph, ASCII via the 5x7 bitmap font, with horizontal
-/// alignment within the block bounds. Rotation is not applied to text (acceptable for debug).
+/// Convert a scene color to a cosmic-text color.
+fn to_ct(c: Rgba) -> CtColor {
+    CtColor::rgba(c.r, c.g, c.b, c.a)
+}
+
+/// Draw a text block with real system fonts via cosmic-text: each paragraph is shaped and laid
+/// out (with font fallback, so CJK and other scripts render), then its glyphs are blended into the
+/// buffer. Honors per-run family/size/weight/italic/color, paragraph alignment, and bullet levels
+/// (indent + glyph), matching the on-screen gpui text closely. Rotation is not applied to text.
 fn draw_text_block(
     buf: &mut [u8],
     w: usize,
@@ -463,86 +481,97 @@ fn draw_text_block(
 ) {
     let bx = block.bounds.x * sx;
     let by = block.bounds.y * sy;
-    let bw = block.bounds.w * sx;
+    let bw = (block.bounds.w * sx).max(1.0);
 
-    let mut line_top = by;
-    for para in &block.paragraphs {
-        // Glyph cell height from the first run's size (fallback to a readable minimum).
-        let size_px = para.runs.first().map(|r| r.size_px).unwrap_or(16.0);
-        let gh = (size_px * sy).max(7.0);
-        let scale = gh / 7.0;
-        let cell_w = 6.0 * scale; // 5px glyph + 1px advance
+    TEXT.with(|cell| {
+        let mut guard = cell.borrow_mut();
+        let (fs, cache) = &mut *guard;
+        let mut line_top = by;
+        for para in &block.paragraphs {
+            let size = para
+                .runs
+                .iter()
+                .map(|r| r.size_px)
+                .fold(0.0, f32::max)
+                .max(1.0)
+                * sy;
+            let line_height = size * 1.3;
+            // Each list level indents by 0.5em (the editor's default); 0 for non-bullets.
+            let indent = size * (0.5 * para.bullet_level as f32);
+            let metrics = Metrics::new(size, line_height);
 
-        // Measure the line width to honor center/right alignment.
-        let total_chars: usize = para.runs.iter().map(|r| r.text.chars().count()).sum();
-        let line_w = total_chars as f32 * cell_w;
-        let mut pen_x = bx
-            + match para.align {
-                HAlign::Left | HAlign::Justify => 0.0,
-                HAlign::Center => ((bw - line_w) * 0.5).max(0.0),
-                HAlign::Right => (bw - line_w).max(0.0),
+            // Build the spans: an optional bullet glyph (prepended) then each run.
+            let bullet = match para.bullet_level {
+                0 => "",
+                1 => "\u{2022} ",
+                2 => "\u{25E6} ",
+                _ => "\u{25AA} ",
             };
-
-        for run in &para.runs {
-            pen_x = draw_run(buf, w, h, run, pen_x, line_top, scale, op);
-        }
-        line_top += gh * 1.4;
-    }
-}
-
-/// Draw a single run starting at `pen_x`, returning the new pen x.
-fn draw_run(
-    buf: &mut [u8],
-    w: usize,
-    h: usize,
-    run: &ResolvedRun,
-    pen_x: f32,
-    top: f32,
-    scale: f32,
-    op: f32,
-) -> f32 {
-    let color = apply_opacity(run.color, op);
-    let cell_w = 6.0 * scale;
-    let glyph_h = 7.0 * scale;
-    let mut x = pen_x;
-    for ch in run.text.chars() {
-        if let Some(rows) = font::glyph(ch) {
-            for (ry, bits) in rows.iter().enumerate() {
-                for cx in 0..5 {
-                    if bits & (1 << (4 - cx)) != 0 {
-                        let gx = x + cx as f32 * scale;
-                        let gy = top + ry as f32 * scale;
-                        fill_px_rect(buf, w, h, gx, gy, scale.max(1.0), scale.max(1.0), color);
-                        if run.bold {
-                            // Pseudo-bold: a second pass shifted by one device pixel.
-                            fill_px_rect(
-                                buf,
-                                w,
-                                h,
-                                gx + 1.0,
-                                gy,
-                                scale.max(1.0),
-                                scale.max(1.0),
-                                color,
-                            );
-                        }
-                    }
-                }
+            let mut spans: Vec<(&str, Attrs)> = Vec::new();
+            if !bullet.is_empty() {
+                let c = para
+                    .runs
+                    .first()
+                    .map(|r| r.color)
+                    .unwrap_or(Rgba::rgb(0, 0, 0));
+                spans.push((
+                    bullet,
+                    Attrs::new()
+                        .metrics(metrics)
+                        .color(to_ct(apply_opacity(c, op))),
+                ));
             }
-        } else if ch != ' ' {
-            // Unknown glyph (e.g. CJK): draw an outlined cell so position/size is visible.
-            let cw = 5.0 * scale;
-            fill_px_rect(buf, w, h, x, top, cw, 1.0, color);
-            fill_px_rect(buf, w, h, x, top + glyph_h - 1.0, cw, 1.0, color);
-            fill_px_rect(buf, w, h, x, top, 1.0, glyph_h, color);
-            fill_px_rect(buf, w, h, x + cw - 1.0, top, 1.0, glyph_h, color);
+            for run in &para.runs {
+                if run.text.is_empty() {
+                    continue;
+                }
+                let mut a = Attrs::new()
+                    .family(Family::Name(&run.family))
+                    .metrics(metrics)
+                    .color(to_ct(apply_opacity(run.color, op)));
+                if run.bold {
+                    a = a.weight(Weight::BOLD);
+                }
+                if run.italic {
+                    a = a.style(Style::Italic);
+                }
+                spans.push((run.text.as_str(), a));
+            }
+            if spans.is_empty() {
+                line_top += line_height; // keep blank lines from collapsing
+                continue;
+            }
+
+            let align = match para.align {
+                HAlign::Center => Some(Align::Center),
+                HAlign::Right => Some(Align::Right),
+                HAlign::Left | HAlign::Justify => None,
+            };
+            let mut tb = Buffer::new_empty(metrics);
+            tb.set_size(Some((bw - indent).max(1.0)), None);
+            tb.set_rich_text(spans, &Attrs::new(), Shaping::Advanced, align);
+
+            let (ox, oy) = (bx + indent, line_top);
+            tb.draw(fs, cache, CtColor::rgb(0, 0, 0), |gx, gy, gw, gh, color| {
+                let (r, g, b, a) = color.as_rgba_tuple();
+                if a == 0 {
+                    return;
+                }
+                fill_px_rect(
+                    buf,
+                    w,
+                    h,
+                    ox + gx as f32,
+                    oy + gy as f32,
+                    gw as f32,
+                    gh as f32,
+                    Rgba { r, g, b, a },
+                );
+            });
+            let rows = tb.layout_runs().count().max(1);
+            line_top += line_height * rows as f32;
         }
-        if run.underline {
-            fill_px_rect(buf, w, h, x, top + glyph_h, cell_w, scale.max(1.0), color);
-        }
-        x += cell_w;
-    }
-    x
+    });
 }
 
 #[cfg(test)]

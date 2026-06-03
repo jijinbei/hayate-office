@@ -2663,6 +2663,7 @@ dependencies = [
 name = "hayate-render"
 version = "0.0.0"
 dependencies = [
+ "cosmic-text",
  "hayate-ir",
 ]
 
