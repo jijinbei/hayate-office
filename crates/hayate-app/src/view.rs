@@ -1082,6 +1082,7 @@ impl Render for HayateApp {
             .children(self.menu_overlay(cx))
             .children(self.font_overlay(window, cx))
             .children(self.save_overlay(cx))
+            .children(self.notice_overlay(cx))
             .into_any_element()
     }
 }
@@ -1512,6 +1513,57 @@ impl HayateApp {
                             cx.notify();
                         })),
                 )
+                .into_any_element(),
+        )
+    }
+
+    /// A transient notice modal (e.g. "PDF exported …") over a dimmed backdrop. Dismissed by the
+    /// OK button, clicking the backdrop, or Esc/Enter (handled in on_key_down).
+    fn notice_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let msg = self.notice.clone()?;
+        let dialog = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .max_w(px(520.))
+            .p_4()
+            .bg(rgb(0x2b2b2b))
+            .border_1()
+            .border_color(rgb(0x555555))
+            .rounded_lg()
+            .shadow_lg()
+            .text_color(rgb(0xffffff))
+            .child(div().text_sm().child(msg))
+            .child(
+                div()
+                    .id("notice_ok")
+                    .self_end()
+                    .px_3()
+                    .py_1()
+                    .rounded_md()
+                    .bg(rgb(0x3b82f6))
+                    .hover(|s| s.bg(rgb(0x2f6fd6)))
+                    .child("OK")
+                    .on_click(cx.listener(|this, _ev: &ClickEvent, window, cx| {
+                        window.focus(&this.focus, cx);
+                        this.notice = None;
+                        cx.notify();
+                    })),
+            );
+        Some(
+            div()
+                .id("notice_backdrop")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(rgba(0x00000088))
+                .on_click(cx.listener(|this, _ev: &ClickEvent, _w, cx| {
+                    this.notice = None;
+                    cx.notify();
+                }))
+                .child(dialog)
                 .into_any_element(),
         )
     }

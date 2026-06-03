@@ -500,6 +500,12 @@ impl HayateApp {
             cx.notify();
             return;
         }
+        // Esc (or Enter) dismisses a transient notice modal.
+        if self.notice.is_some() && matches!(ev.keystroke.key.as_str(), "escape" | "enter") {
+            self.notice = None;
+            cx.notify();
+            return;
+        }
         if self.save_modal.is_some() {
             self.save_modal_key(ev, cx);
             return;
@@ -552,7 +558,10 @@ impl HayateApp {
         match k.key.as_str() {
             // Ctrl/Cmd+Shift+P exports a PDF (P = PDF). Must come before the plain Ctrl/Cmd+P
             // palette arm, which would otherwise also match the shift chord.
-            "p" if cmd && k.modifiers.shift => self.export_pdf(),
+            "p" if cmd && k.modifiers.shift => {
+                self.export_pdf();
+                cx.notify();
+            }
             "p" if cmd => {
                 self.palette = Some(PaletteState {
                     query: String::new(),

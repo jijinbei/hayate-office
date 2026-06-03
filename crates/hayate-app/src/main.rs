@@ -210,6 +210,8 @@ struct HayateApp {
     doc_path: String,
     /// Open "Save As" dialog with its editable filename buffer, if any.
     save_modal: Option<SaveModal>,
+    /// Transient notice modal (e.g. "PDF exported …"), dismissed by OK/Esc/backdrop click.
+    notice: Option<String>,
     /// Layout currently being edited in the Master tab (its placeholders apply to every slide
     /// that uses it). `None` = no layout selected for editing.
     master_layout: Option<Entity>,
@@ -400,6 +402,7 @@ impl HayateApp {
             line_drag: None,
             doc_path: DOC_PATH.to_string(),
             save_modal: None,
+            notice: None,
             master_layout: None,
             scope: EditScope::Slide(slide),
             layout_rename: None,

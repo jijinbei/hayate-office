@@ -1123,3 +1123,29 @@ fn copy_paste_multi_adds_both_ungrouped(cx: &mut TestAppContext) {
         "pasted copies are not grouped"
     );
 }
+
+#[gpui::test]
+fn ctrl_shift_p_shows_pdf_notice(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let pdf = std::env::temp_dir().join("hayate-e2e-notice.pdf");
+    let _ = std::fs::remove_file(&pdf);
+    app.update(cx, |s, _| {
+        s.doc_path = std::env::temp_dir()
+            .join("hayate-e2e-notice.hayate")
+            .to_string_lossy()
+            .into_owned();
+    });
+    app.update(cx, |s, cx| s.on_key_down(&keydown("ctrl-shift-p"), cx));
+    assert!(
+        app.read_with(cx, |s, _| s.notice.is_some()),
+        "Ctrl+Shift+P shows a notice that the PDF was generated"
+    );
+    assert!(pdf.exists(), "the PDF file was written");
+    // Esc dismisses the notice.
+    app.update(cx, |s, cx| s.on_key_down(&keydown("escape"), cx));
+    assert!(
+        app.read_with(cx, |s, _| s.notice.is_none()),
+        "Esc dismisses the notice"
+    );
+    let _ = std::fs::remove_file(&pdf);
+}
