@@ -46,6 +46,7 @@ pub(crate) fn paint_text(
     tb: &TextBlock,
     ox: Pixels,
     oy: Pixels,
+    indent_em: f32,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -61,9 +62,9 @@ pub(crate) fn paint_text(
         let size_val = para.runs.iter().map(|r| r.size_px).fold(0.0, f32::max);
         let font_size = px(if size_val > 0.0 { size_val } else { 24.0 });
         let line_height = font_size * 1.3;
-        // Each list level indents the line; the bullet glyph is prepended to the text so it
-        // shapes and baseline-aligns with the content.
-        let indent = font_size * (1.2 * para.bullet_level as f32);
+        // Each list level indents the line by `indent_em` ems; the bullet glyph is prepended to
+        // the text so it shapes and baseline-aligns with the content.
+        let indent = font_size * (indent_em * para.bullet_level as f32);
 
         let mut text = String::new();
         let mut runs: Vec<TextRun> = Vec::new();
@@ -240,6 +241,7 @@ pub(crate) fn paint_scene(
     scene: &Scene,
     o: Point<Pixels>,
     media: &std::collections::BTreeMap<String, Vec<u8>>,
+    indent_em: f32,
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -425,7 +427,7 @@ pub(crate) fn paint_scene(
                     draw_head(fx, fy, tx, ty);
                 }
             }
-            Primitive::Text(tb) => paint_text(tb, o.x, o.y, window, cx),
+            Primitive::Text(tb) => paint_text(tb, o.x, o.y, indent_em, window, cx),
             _ => {}
         }
     }

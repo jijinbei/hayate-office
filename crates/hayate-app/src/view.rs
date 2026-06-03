@@ -36,10 +36,13 @@ impl Render for HayateApp {
             };
             let pscene = build_slide_scene_at(&self.pres, self.slide, target, self.present_t);
             let pmedia = self.pres.media.clone();
+            let indent_em = self.list_indent_em;
             let (pw, ph) = (pscene.size.w, pscene.size.h);
             let pcanvas = canvas(
                 |_, _, _| {},
-                move |b, _, window, cx| paint_scene(&pscene, b.origin, &pmedia, window, cx),
+                move |b, _, window, cx| {
+                    paint_scene(&pscene, b.origin, &pmedia, indent_em, window, cx)
+                },
             )
             .size_full();
             return div()
@@ -71,6 +74,7 @@ impl Render for HayateApp {
         let guides = self.guides.clone();
         let show_grid = self.show_grid;
         let marquee = self.marquee;
+        let list_indent_em = self.list_indent_em;
         // Caret/selection (editing entity + byte range) for drawing the cursor and highlight.
         let caret = self
             .text_edit
@@ -122,7 +126,7 @@ impl Render for HayateApp {
                     cx,
                 );
 
-                paint_scene(&scene, o, &media, window, cx);
+                paint_scene(&scene, o, &media, list_indent_em, window, cx);
 
                 // Text-edit caret + selection highlight. The edit buffer's byte offsets span all
                 // lines (paragraphs joined by '\n'), so map an offset to its paragraph/line, then
@@ -162,7 +166,8 @@ impl Render for HayateApp {
                                     for p in &tb.paragraphs[..pi] {
                                         y += px(fs_of(p) * 1.3);
                                     }
-                                    let indent = font_size * (1.2 * para.bullet_level as f32);
+                                    let indent =
+                                        font_size * (list_indent_em * para.bullet_level as f32);
                                     let style = para.runs.first();
                                     let font = style
                                         .map(run_font)
@@ -488,10 +493,13 @@ impl Render for HayateApp {
         for (i, &s) in slides.iter().enumerate() {
             let tscene = build_slide_scene(&self.pres, s, PxSize { w: 176.0, h: 99.0 });
             let tmedia = self.pres.media.clone();
+            let tindent = self.list_indent_em;
             let is_cur = s == current;
             let tcanvas = canvas(
                 |_, _, _| {},
-                move |b, _, window, cx| paint_scene(&tscene, b.origin, &tmedia, window, cx),
+                move |b, _, window, cx| {
+                    paint_scene(&tscene, b.origin, &tmedia, tindent, window, cx)
+                },
             )
             .size_full();
             slide_list = slide_list.child(
@@ -856,7 +864,31 @@ impl Render for HayateApp {
                     .child(icon_button("txt_font", "type", cx, |t, _w, cx| {
                         t.font_picker = !t.font_picker;
                         cx.notify();
-                    }));
+                    }))
+                    // Bullet-list indent per level (adjustable).
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .items_center()
+                            .gap_1()
+                            .child(label("List indent"))
+                            .child(tool_button("li_minus", "-", cx, |t, _w, cx| {
+                                t.list_indent_em = (t.list_indent_em - 0.25).max(0.0);
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .min_w(px(32.))
+                                    .text_sm()
+                                    .text_color(rgb(0xdddddd))
+                                    .child(format!("{:.2}", self.list_indent_em)),
+                            )
+                            .child(tool_button("li_plus", "+", cx, |t, _w, cx| {
+                                t.list_indent_em = (t.list_indent_em + 0.25).min(3.0);
+                                cx.notify();
+                            })),
+                    );
             }
             pane
         });
@@ -1223,6 +1255,7 @@ impl HayateApp {
                 PxSize { w: 48.0, h: 27.0 },
             );
             let tmedia = self.pres.media.clone();
+            let tindent = self.list_indent_em;
             let thumb = div()
                 .flex_none()
                 .w(px(48.))
@@ -1232,7 +1265,9 @@ impl HayateApp {
                 .child(
                     canvas(
                         |_, _, _| {},
-                        move |b, _, window, cx| paint_scene(&tscene, b.origin, &tmedia, window, cx),
+                        move |b, _, window, cx| {
+                            paint_scene(&tscene, b.origin, &tmedia, tindent, window, cx)
+                        },
                     )
                     .size_full(),
                 );

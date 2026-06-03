@@ -198,6 +198,8 @@ struct HayateApp {
     layout_rename: Option<(Entity, String)>,
     /// Where the next font-picker choice applies (selection vs. theme fonts).
     font_target: FontTarget,
+    /// Bullet-list indent per level, in ems of the line's font size (user-adjustable).
+    list_indent_em: f32,
     /// Width of the left sidebar in px (user-draggable).
     sidebar_w: f32,
     /// Whether the sidebar divider is being dragged.
@@ -381,6 +383,7 @@ impl HayateApp {
             scope: EditScope::Slide(slide),
             layout_rename: None,
             font_target: FontTarget::Selection,
+            list_indent_em: 0.5,
             sidebar_w: 208.0,
             resizing_sidebar: false,
             marquee: None,
