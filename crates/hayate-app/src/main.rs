@@ -3,6 +3,26 @@
 //! Renders a sample slide's resolved Scene onto a gpui canvas and supports basic editing:
 //! click to select a shape (hit-test against the Scene), drag to move it (committed as one
 //! undoable transaction). Undo/redo: Cmd/Ctrl+Z / Shift+Cmd/Ctrl+Z.
+//!
+//! # Debugging & E2E tests
+//!
+//! Two layers (recipes in the repo `Justfile`):
+//! - **`just e2e`** — gpui interaction E2E. The `e2e` module (this crate, `src/e2e.rs`, behind
+//!   `#[cfg(test)]`) drives the real handlers (`on_mouse_down`/`on_key_down`/`on_right_down`, menu
+//!   and editing actions) headlessly through gpui's `TestAppContext` and asserts on the editor's
+//!   real state — no GPU/window needed. Write tests with `#[gpui::test] fn …(cx: &mut
+//!   TestAppContext)`: `cx.new(|cx| HayateApp::new(cx))` to open the editor, `app.update(cx, …)` to
+//!   inject an event/action, `app.read_with(cx, …)` to assert. Prefer asserting on document/scene
+//!   state (`a.pres…`, `a.scene.nodes…`) over pixels. Helpers in `e2e.rs`: `mouse`, `mouse_move`,
+//!   `mouse_up`, `keydown("ctrl-s")` (any `Keystroke::parse` string), `prim_bounds`. Copy an
+//!   existing test as a template; add/adjust one whenever you change UI behavior.
+//! - **`just shots`** — gpui-free PNG snapshots (`debug-shots/*.png`, open with the Read tool) for
+//!   shape/layout/color/transform checks. Not for glyph/caret fidelity (the rasterizer is a
+//!   separate path from gpui paint and renders text as an ASCII bitmap).
+//!
+//! Anything touching gpui (app, e2e, run, clippy) must build inside `nix develop`; the `just`
+//! recipes handle that. Pure crates build with plain `cargo` (`just test`). Run `cargo fmt --all`
+//! before committing.
 
 #![cfg_attr(target_family = "wasm", no_main)]
 
