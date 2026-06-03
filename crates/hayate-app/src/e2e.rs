@@ -938,3 +938,55 @@ fn clicking_empty_inherited_placeholder_promotes(cx: &mut TestAppContext) {
         "clicking the inherited placeholder promotes it and starts editing"
     );
 }
+
+#[gpui::test]
+fn theme_accent_edit_recolors_scene_and_undoes(cx: &mut TestAppContext) {
+    use hayate_ir::color::Rgba;
+    use hayate_render::scene::{Paint, Primitive};
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let red = Rgba::rgb(0xFF, 0x00, 0x00);
+    // The sample deck has Accent1-filled rectangles. Recolour Accent1 to red.
+    app.update(cx, |s, _| s.set_theme_accent(0, red));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.pres.theme_of(s.slide).unwrap().colors.accent
+            [0]),
+        red,
+        "the master theme's Accent1 is now red"
+    );
+    let has_red = app.read_with(cx, |s, _| {
+        s.scene.nodes.iter().any(|n| match &n.prim {
+            Primitive::Quad {
+                fill: Some(Paint::Solid(c)),
+                ..
+            } => *c == red,
+            _ => false,
+        })
+    });
+    assert!(
+        has_red,
+        "an accent-filled shape renders red after the theme edit"
+    );
+    // Undo restores the original accent.
+    app.update(cx, |s, _| {
+        s.history.undo(&mut s.pres.world);
+        s.after_doc_change();
+    });
+    assert_ne!(
+        app.read_with(cx, |s, _| s.pres.theme_of(s.slide).unwrap().colors.accent
+            [0]),
+        red,
+        "undo reverts the theme change"
+    );
+}
+
+#[gpui::test]
+fn apply_color_preset_changes_theme(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let before = app.read_with(cx, |s, _| s.pres.theme_of(s.slide).unwrap().colors.accent);
+    app.update(cx, |s, _| s.apply_color_preset(1)); // "Warm"
+    let after = app.read_with(cx, |s, _| s.pres.theme_of(s.slide).unwrap().colors.accent);
+    assert_ne!(
+        before, after,
+        "applying a colour preset changes the accents"
+    );
+}

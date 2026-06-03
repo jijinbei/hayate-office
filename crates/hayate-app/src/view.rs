@@ -996,10 +996,17 @@ impl HayateApp {
                     .child(name)
                     .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
                         window.focus(&this.focus, cx);
-                        this.run_on_selection_with(
-                            "shape.set_font",
-                            serde_json::json!({ "family": fam.clone() }),
-                        );
+                        match this.font_target {
+                            crate::FontTarget::Selection => this.run_on_selection_with(
+                                "shape.set_font",
+                                serde_json::json!({ "family": fam.clone() }),
+                            ),
+                            crate::FontTarget::ThemeMajor => this.set_theme_font(true, fam.clone()),
+                            crate::FontTarget::ThemeMinor => {
+                                this.set_theme_font(false, fam.clone())
+                            }
+                        }
+                        this.font_target = crate::FontTarget::Selection;
                         this.font_picker = false;
                         cx.notify();
                     })),
@@ -1247,6 +1254,66 @@ impl HayateApp {
                 }))
                 .child(btn("ph_body", "+ Body".to_string(), cx, |a| {
                     a.add_layout_placeholder(PT::Body)
+                })),
+        );
+
+        // Theme: colour-scheme presets, an accent preview, and heading/body fonts. Edits the
+        // current master's theme, so every slide updates at once.
+        col = col.child(
+            div()
+                .mt_2()
+                .text_sm()
+                .text_color(rgb(0x888888))
+                .child("Theme"),
+        );
+        let mut presets_row = div().flex().flex_row().flex_wrap().gap_1();
+        for (i, (pname, _)) in hayate_ir::theme::theme_color_presets()
+            .into_iter()
+            .enumerate()
+        {
+            presets_row = presets_row.child(
+                div()
+                    .id(("cpreset", i))
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .text_sm()
+                    .bg(rgb(0x3a3a3a))
+                    .hover(|s| s.bg(rgb(0x4a4a4a)))
+                    .child(pname)
+                    .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                        window.focus(&this.focus, cx);
+                        this.apply_color_preset(i);
+                        cx.notify();
+                    })),
+            );
+        }
+        col = col.child(presets_row);
+        if let Some(theme) = self.pres.container_theme(self.container()) {
+            let mut sw = div().flex().flex_row().gap_1();
+            for c in theme.colors.accent {
+                sw = sw.child(
+                    div()
+                        .w(px(20.))
+                        .h(px(20.))
+                        .rounded_md()
+                        .bg(rgb(crate::util::rgb_u32(c))),
+                );
+            }
+            col = col.child(sw);
+        }
+        col = col.child(
+            div()
+                .flex()
+                .flex_row()
+                .gap_1()
+                .child(btn("theme_major", "Heading font".to_string(), cx, |a| {
+                    a.font_target = crate::FontTarget::ThemeMajor;
+                    a.font_picker = true;
+                }))
+                .child(btn("theme_minor", "Body font".to_string(), cx, |a| {
+                    a.font_target = crate::FontTarget::ThemeMinor;
+                    a.font_picker = true;
                 })),
         );
         col.into_any_element()

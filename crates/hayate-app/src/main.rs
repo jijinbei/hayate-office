@@ -196,6 +196,8 @@ struct HayateApp {
     scope: EditScope,
     /// Layout being renamed in the Master tab: (layout, edit buffer).
     layout_rename: Option<(Entity, String)>,
+    /// Where the next font-picker choice applies (selection vs. theme fonts).
+    font_target: FontTarget,
     /// Active marquee (rubber-band) selection rect in scene px: (start_x, start_y, cur_x, cur_y).
     marquee: Option<(f32, f32, f32, f32)>,
     /// Last window viewport size; used to refit the slide when the window is resized.
@@ -208,6 +210,14 @@ enum MenuTarget {
     Slide,
     Canvas,
     Layout(Entity),
+}
+
+/// Where the font picker applies its choice: the selected shape, or the theme heading/body font.
+#[derive(Clone, Copy, PartialEq)]
+enum FontTarget {
+    Selection,
+    ThemeMajor,
+    ThemeMinor,
 }
 
 /// Which list the left panel shows.
@@ -340,6 +350,7 @@ impl HayateApp {
             master_layout: None,
             scope: EditScope::Slide(slide),
             layout_rename: None,
+            font_target: FontTarget::Selection,
             marquee: None,
             last_viewport: None,
         }

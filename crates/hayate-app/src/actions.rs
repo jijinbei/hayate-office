@@ -396,6 +396,52 @@ impl HayateApp {
         }
     }
 
+    /// The master whose theme the editor targets (the scope's owning master).
+    pub(crate) fn current_master(&self) -> Option<Entity> {
+        self.pres.owning_master(self.container())
+    }
+
+    /// Clone the current master's theme, let `f` mutate it, and commit it as one undoable change.
+    fn edit_theme(&mut self, f: impl FnOnce(&mut hayate_ir::theme::Theme)) {
+        let Some(master) = self.current_master() else {
+            return;
+        };
+        let Some(mut theme) = self.pres.container_theme(master).cloned() else {
+            return;
+        };
+        f(&mut theme);
+        self.commit_tx(edit::set_master_theme(master, theme));
+    }
+
+    pub(crate) fn set_theme_accent(&mut self, i: usize, rgba: hayate_ir::color::Rgba) {
+        self.edit_theme(|t| {
+            if i < 6 {
+                t.colors.accent[i] = rgba;
+            }
+        });
+    }
+
+    pub(crate) fn apply_color_preset(&mut self, idx: usize) {
+        let presets = hayate_ir::theme::theme_color_presets();
+        if let Some((_, colors)) = presets.get(idx) {
+            let colors = colors.clone();
+            self.edit_theme(|t| t.colors = colors);
+        }
+    }
+
+    pub(crate) fn set_theme_font(&mut self, major: bool, family: String) {
+        self.edit_theme(|t| {
+            let slot = if major {
+                &mut t.fonts.major
+            } else {
+                &mut t.fonts.minor
+            };
+            slot.latin = family.clone();
+            slot.ea = family.clone();
+            slot.cs = family;
+        });
+    }
+
     /// Align the current multi-selection using a registry command.
     pub(crate) fn align(&mut self, cmd_id: &str) {
         let ids: Vec<u64> = self.selected_all().iter().map(|e| e.0).collect();
