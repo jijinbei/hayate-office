@@ -316,3 +316,72 @@ fn container_scene_renders_context_and_editable() {
     assert_eq!(mscene.nodes.len(), 1);
     assert_eq!(mscene.nodes[0].source, Some(m_ph));
 }
+
+#[test]
+fn empty_placeholder_renders_prompt_text() {
+    use hayate_ir::doc::{PlaceholderRef, PlaceholderType};
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Title and Content");
+    let slide = p.add_slide(layout);
+    // A Title placeholder with a frame but NO text, defined on the layout.
+    let ph = p.add_shape(layout);
+    p.world
+        .frames
+        .insert(ph, RectEmu::new(0, 0, 5_000_000, 914_400));
+    p.world.placeholders.insert(
+        ph,
+        PlaceholderRef {
+            ph_type: PlaceholderType::Title,
+            idx: 0,
+        },
+    );
+    let scene = build_slide_scene(&p, slide, PxSize { w: 960.0, h: 540.0 });
+    let has_prompt = scene.nodes.iter().any(|n| match &n.prim {
+        Primitive::Text(tb) => tb
+            .paragraphs
+            .iter()
+            .flat_map(|para| para.runs.iter())
+            .any(|r| r.text == "Click to add title"),
+        _ => false,
+    });
+    assert!(has_prompt, "an empty Title placeholder shows its prompt");
+
+    // Once the slide overrides it with real text, the prompt is gone.
+    let ov = p.add_shape(slide);
+    p.world
+        .frames
+        .insert(ov, RectEmu::new(0, 0, 5_000_000, 914_400));
+    p.world.placeholders.insert(
+        ov,
+        PlaceholderRef {
+            ph_type: PlaceholderType::Title,
+            idx: 0,
+        },
+    );
+    p.world.texts.insert(
+        ov,
+        TextBody {
+            paragraphs: vec![Paragraph::new(vec![Run {
+                text: "Real title".to_string(),
+                font: FontRef::Theme(ThemeFontSlot::Major),
+                size: pt(40),
+                color: Color::theme(ThemeColorToken::Dk1),
+                bold: true,
+                italic: false,
+                underline: false,
+            }])],
+            autofit: false,
+        },
+    );
+    let scene2 = build_slide_scene(&p, slide, PxSize { w: 960.0, h: 540.0 });
+    let still_prompt = scene2.nodes.iter().any(|n| match &n.prim {
+        Primitive::Text(tb) => tb
+            .paragraphs
+            .iter()
+            .flat_map(|para| para.runs.iter())
+            .any(|r| r.text == "Click to add title"),
+        _ => false,
+    });
+    assert!(!still_prompt, "the prompt disappears once real text is set");
+}

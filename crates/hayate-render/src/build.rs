@@ -15,6 +15,46 @@ use hayate_ir::text::TextBody;
 use hayate_ir::theme::Theme;
 use hayate_ir::world::Entity;
 
+/// The dim prompt shown in an empty placeholder, by type (mirrors PowerPoint's "Click to add…").
+pub fn prompt_text(ph: hayate_ir::doc::PlaceholderType) -> &'static str {
+    use hayate_ir::doc::PlaceholderType as PT;
+    match ph {
+        PT::Title | PT::CenteredTitle => "Click to add title",
+        PT::Subtitle => "Click to add subtitle",
+        PT::Body => "Click to add text",
+        PT::Picture => "Click to add a picture",
+        PT::Chart => "Click to add a chart",
+        PT::Table => "Click to add a table",
+        PT::Date => "Date",
+        PT::Footer => "Footer",
+        PT::SlideNumber => "#",
+    }
+}
+
+/// A one-run `TextBody` carrying the placeholder prompt in a muted gray, sized by type.
+fn prompt_body(ph: hayate_ir::doc::PlaceholderType) -> TextBody {
+    use hayate_ir::color::Color;
+    use hayate_ir::doc::PlaceholderType as PT;
+    use hayate_ir::font::{FontRef, ThemeFontSlot};
+    use hayate_ir::text::{Paragraph, Run};
+    let (slot, size) = match ph {
+        PT::Title | PT::CenteredTitle => (ThemeFontSlot::Major, hayate_ir::units::pt(40)),
+        _ => (ThemeFontSlot::Minor, hayate_ir::units::pt(24)),
+    };
+    TextBody {
+        paragraphs: vec![Paragraph::new(vec![Run {
+            text: prompt_text(ph).to_string(),
+            font: FontRef::Theme(slot),
+            size,
+            color: Color::Literal(Rgba::rgb(0x9a, 0xa0, 0xa6)),
+            bold: false,
+            italic: false,
+            underline: false,
+        }])],
+        autofit: false,
+    }
+}
+
 /// Build a vector-shape primitive from a resolved geometry, bounds, and paints. Shared by the
 /// slide's own shapes and by inherited placeholders. A line with no stroke gets a default 2pt
 /// dark stroke so it stays visible.
@@ -87,7 +127,9 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
         } else if let Some(geom) = p.ph_geometry(slide, ph) {
             geometry_prim(&geom, bounds, fill, None, &vp)
         } else {
-            continue;
+            // An empty placeholder shows a dim prompt ("Click to add title", etc.).
+            let body = prompt_body(ph.ph_type);
+            Primitive::Text(resolve_text(&body, &theme, &vp, bounds))
         };
         let source = p.find_placeholder(slide, ph);
         let rotation_deg = source
