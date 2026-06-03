@@ -161,16 +161,6 @@ impl HayateApp {
         v
     }
 
-    /// Add a new (empty) layout under the current master and select it for editing.
-    pub(crate) fn add_layout(&mut self) {
-        let Some(master) = self.pres.master_of(self.slide) else {
-            return;
-        };
-        let n = self.master_layouts().len() + 1;
-        let layout = self.pres.add_layout(master, format!("Layout {n}"));
-        self.master_layout = Some(layout);
-    }
-
     /// Create a layout pre-populated from a standard preset (Title Slide, Title and Content, …)
     /// under the current master, select it for editing, and return it. Placeholders are one
     /// undoable transaction.
@@ -419,6 +409,30 @@ impl HayateApp {
                 t.colors.accent[i] = rgba;
             }
         });
+    }
+
+    /// Cycle accent `i` through the built-in palettes' colour for that slot (a quick recolour
+    /// without a full colour picker).
+    pub(crate) fn cycle_theme_accent(&mut self, i: usize) {
+        if i >= 6 {
+            return;
+        }
+        let candidates: Vec<hayate_ir::color::Rgba> = hayate_ir::theme::theme_color_presets()
+            .into_iter()
+            .map(|(_, c)| c.accent[i])
+            .collect();
+        if candidates.is_empty() {
+            return;
+        }
+        let current = self
+            .current_master()
+            .and_then(|m| self.pres.container_theme(m))
+            .map(|t| t.colors.accent[i]);
+        let next = current
+            .and_then(|cur| candidates.iter().position(|c| *c == cur))
+            .map(|p| (p + 1) % candidates.len())
+            .unwrap_or(0);
+        self.set_theme_accent(i, candidates[next]);
     }
 
     pub(crate) fn apply_color_preset(&mut self, idx: usize) {

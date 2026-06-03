@@ -164,6 +164,7 @@ fn text_draws_some_foreground_pixels() {
                 underline: false,
             }],
             align: HAlign::Left,
+            bullet_level: 0,
         }],
     };
     let scene = Scene {

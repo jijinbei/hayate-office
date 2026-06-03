@@ -51,6 +51,7 @@ fn exports_quad_and_text() {
                         underline: false,
                     }],
                     align: HAlign::Left,
+                    bullet_level: 0,
                 }],
             })),
         ],

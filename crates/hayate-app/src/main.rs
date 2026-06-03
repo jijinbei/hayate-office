@@ -281,11 +281,37 @@ impl Render for SlideDragPreview {
 struct TextEdit {
     entity: Entity,
     original: String,
+    /// Bullet level per line at edit start, for Esc revert (parallel to `original` lines).
+    orig_levels: Vec<u8>,
     buf: String,
+    /// Bullet list level per line of `buf` (index = line number; 0 = no bullet).
+    levels: Vec<u8>,
     /// Caret/selection as a BYTE range into `buf` (caret when start == end).
     selected: Range<usize>,
     /// IME composing (marked) range, as a BYTE range into `buf`.
     marked: Option<Range<usize>>,
+}
+
+impl TextEdit {
+    /// Number of lines in the buffer (paragraphs once committed).
+    fn line_count(&self) -> usize {
+        self.buf.split('\n').count()
+    }
+    /// Line index containing the caret.
+    fn caret_line(&self) -> usize {
+        self.buf[..self.selected.start.min(self.buf.len())]
+            .matches('\n')
+            .count()
+    }
+    /// Keep `levels` the same length as the line count (pad with 0, truncate extras).
+    fn reconcile_levels(&mut self) {
+        let n = self.line_count().max(1);
+        if self.levels.len() < n {
+            self.levels.resize(n, 0);
+        } else {
+            self.levels.truncate(n);
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

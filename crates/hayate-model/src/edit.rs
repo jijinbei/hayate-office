@@ -456,6 +456,52 @@ pub fn set_run_text(world: &World, e: Entity, text: String) -> Transaction {
     )
 }
 
+/// Replace the entity's text with one paragraph per `(text, bullet_level)` line, preserving the
+/// first existing run's character formatting and the first paragraph's alignment. This is the
+/// multi-paragraph counterpart of [`set_run_text`], used by the in-canvas list editor so each
+/// line carries its own bullet level. An empty `lines` yields a single empty paragraph.
+pub fn set_paragraphs(world: &World, e: Entity, lines: &[(String, u8)]) -> Transaction {
+    let existing = world.texts.get(&e);
+    let template = existing
+        .and_then(|b| b.paragraphs.first())
+        .and_then(|p| p.runs.first())
+        .cloned()
+        .unwrap_or_else(|| default_run(String::new()));
+    let align = existing
+        .and_then(|b| b.paragraphs.first())
+        .map(|p| p.align)
+        .unwrap_or(HAlign::Left);
+    let mut paragraphs: Vec<Paragraph> = lines
+        .iter()
+        .map(|(text, level)| {
+            let mut run = template.clone();
+            run.text = text.clone();
+            let mut para = Paragraph::new(vec![run]);
+            para.align = align;
+            para.bullet_level = *level;
+            para
+        })
+        .collect();
+    if paragraphs.is_empty() {
+        let mut run = template.clone();
+        run.text = String::new();
+        let mut para = Paragraph::new(vec![run]);
+        para.align = align;
+        paragraphs.push(para);
+    }
+    let body = TextBody {
+        paragraphs,
+        autofit: existing.map(|b| b.autofit).unwrap_or(false),
+    };
+    Transaction::new(
+        "set paragraphs",
+        vec![Operation::SetComponent {
+            entity: e,
+            value: CompValue::Text(body),
+        }],
+    )
+}
+
 /// Append a new paragraph (a single minimal default run carrying `text`) to the entity's
 /// `TextBody`, creating an empty body first if the entity has none. Emits
 /// `SetComponent(Text)`.

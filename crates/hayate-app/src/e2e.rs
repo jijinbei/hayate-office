@@ -559,25 +559,23 @@ fn enter_inserts_newline_and_click_commits(cx: &mut TestAppContext) {
     });
     assert!(has_nl, "Enter should insert a newline");
     assert!(still_editing, "Enter should not end editing");
-    // A click commits the edit (text edit ends and the run text keeps the newline).
+    // A click commits the edit; each line becomes its own paragraph.
     app.update(cx, |s, cx| {
         let (ex, ey) = (s.scene.size.w * 0.95, s.scene.size.h * 0.95);
         s.on_mouse_down(&mouse(MouseButton::Left, ex, ey), cx)
     });
-    let (done, run_has_nl) = app.read_with(cx, |s, _| {
-        let run = s
+    let (done, paras) = app.read_with(cx, |s, _| {
+        let n = s
             .pres
             .world
             .texts
             .get(&title)
-            .and_then(|t| t.paragraphs.first())
-            .and_then(|p| p.runs.first())
-            .map(|r| r.text.contains('\n'))
-            .unwrap_or(false);
-        (s.text_edit.is_none(), run)
+            .map(|t| t.paragraphs.len())
+            .unwrap_or(0);
+        (s.text_edit.is_none(), n)
     });
     assert!(done, "clicking away should commit and end the text edit");
-    assert!(run_has_nl, "the committed text should keep the newline");
+    assert_eq!(paras, 2, "the newline splits the text into two paragraphs");
 }
 
 #[gpui::test]
@@ -744,7 +742,9 @@ fn layout_placeholder_renders_on_slide(cx: &mut TestAppContext) {
 fn new_layout_switches_current_slide(cx: &mut TestAppContext) {
     let app = cx.new(|cx| HayateApp::new(cx));
     let orig = app.read_with(cx, |s, _| s.pres.layout_of(s.slide));
-    app.update(cx, |s, _| s.add_layout());
+    app.update(cx, |s, _| {
+        s.add_layout_preset(hayate_model::edit::LayoutPreset::Blank);
+    });
     let nl = app.read_with(cx, |s, _| s.master_layout);
     assert!(
         nl.is_some() && nl != orig,
@@ -988,5 +988,77 @@ fn apply_color_preset_changes_theme(cx: &mut TestAppContext) {
     assert_ne!(
         before, after,
         "applying a colour preset changes the accents"
+    );
+}
+
+#[gpui::test]
+fn list_editing_markdown_and_tab(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| s.add_text_box());
+    let e = app.read_with(cx, |s, _| s.selection.unwrap());
+    app.update(cx, |s, _| s.begin_text_edit(e));
+    // Clear the default "Text".
+    app.update(cx, |s, cx| {
+        if let Some(te) = s.text_edit.as_mut() {
+            te.selected = 0..te.buf.len();
+        }
+        s.text_key(&keydown("backspace"), cx);
+    });
+    // Markdown-like: typing "- " turns the line into a bullet and removes the marker.
+    app.update(cx, |s, _| s.apply_ime(None, "- ", false));
+    app.read_with(cx, |s, _| {
+        let te = s.text_edit.as_ref().unwrap();
+        assert_eq!(te.buf, "", "the '- ' marker is stripped");
+        assert_eq!(te.levels, vec![1], "the line becomes a bullet");
+    });
+    app.update(cx, |s, _| s.apply_ime(None, "Item", false));
+    // Enter continues the bullet on a new line at the same level.
+    app.update(cx, |s, cx| s.text_key(&keydown("enter"), cx));
+    app.read_with(cx, |s, _| {
+        let te = s.text_edit.as_ref().unwrap();
+        assert_eq!(te.buf, "Item\n");
+        assert_eq!(te.levels, vec![1, 1], "new line inherits the bullet level");
+    });
+    // Tab demotes the current (second) line to level 2.
+    app.update(cx, |s, cx| s.text_key(&keydown("tab"), cx));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.text_edit.as_ref().unwrap().levels[1]),
+        2
+    );
+    // Enter on the empty bullet exits the list (level back to 0, no new line).
+    app.update(cx, |s, cx| s.text_key(&keydown("enter"), cx));
+    let levels = app.read_with(cx, |s, _| s.text_edit.as_ref().unwrap().levels.clone());
+    assert_eq!(levels, vec![1, 0], "empty-bullet Enter exits the list");
+    // The live text body carries one paragraph per line with its bullet level.
+    let para_levels = app.read_with(cx, |s, _| {
+        s.pres
+            .world
+            .texts
+            .get(&e)
+            .unwrap()
+            .paragraphs
+            .iter()
+            .map(|p| p.bullet_level)
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(para_levels, vec![1, 0]);
+}
+
+#[gpui::test]
+fn shift_tab_outdents(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| s.add_text_box());
+    let e = app.read_with(cx, |s, _| s.selection.unwrap());
+    app.update(cx, |s, _| s.begin_text_edit(e));
+    app.update(cx, |s, cx| s.text_key(&keydown("tab"), cx));
+    app.update(cx, |s, cx| s.text_key(&keydown("tab"), cx));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.text_edit.as_ref().unwrap().levels[0]),
+        2
+    );
+    app.update(cx, |s, cx| s.text_key(&keydown("shift-tab"), cx));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.text_edit.as_ref().unwrap().levels[0]),
+        1
     );
 }

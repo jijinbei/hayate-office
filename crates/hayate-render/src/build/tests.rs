@@ -385,3 +385,39 @@ fn empty_placeholder_renders_prompt_text() {
     });
     assert!(!still_prompt, "the prompt disappears once real text is set");
 }
+
+#[test]
+fn bullet_level_flows_into_resolved_paragraph() {
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Blank");
+    let slide = p.add_slide(layout);
+    let tx = p.add_shape(slide);
+    p.world
+        .frames
+        .insert(tx, RectEmu::new(0, 0, 5_000_000, 3_000_000));
+    let mut body = TextBody {
+        paragraphs: vec![Paragraph::new(vec![Run {
+            text: "Item".to_string(),
+            font: FontRef::Theme(ThemeFontSlot::Minor),
+            size: pt(24),
+            color: Color::theme(ThemeColorToken::Dk1),
+            bold: false,
+            italic: false,
+            underline: false,
+        }])],
+        autofit: false,
+    };
+    body.paragraphs[0].bullet_level = 2;
+    p.world.texts.insert(tx, body);
+    let scene = build_slide_scene(&p, slide, PxSize { w: 960.0, h: 540.0 });
+    let lvl = scene.nodes.iter().find_map(|n| match &n.prim {
+        Primitive::Text(tb) => tb.paragraphs.first().map(|pp| pp.bullet_level),
+        _ => None,
+    });
+    assert_eq!(
+        lvl,
+        Some(2),
+        "the bullet level reaches the resolved paragraph"
+    );
+}

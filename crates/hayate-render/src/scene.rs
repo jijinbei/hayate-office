@@ -94,6 +94,8 @@ pub struct ResolvedRun {
 pub struct ResolvedParagraph {
     pub runs: Vec<ResolvedRun>,
     pub align: HAlign,
+    /// Bullet list level (0 = no bullet). Drives the bullet glyph and indent at paint time.
+    pub bullet_level: u8,
 }
 
 #[derive(Clone, Debug, PartialEq)]

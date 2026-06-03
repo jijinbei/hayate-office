@@ -374,6 +374,7 @@ fn resolve_text(
             ResolvedParagraph {
                 runs,
                 align: para.align,
+                bullet_level: para.bullet_level,
             }
         })
         .collect();

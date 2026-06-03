@@ -20,32 +20,46 @@ use hayate_ir::world::{CompKind, CompValue, Entity};
 use hayate_model::{Operation, Transaction};
 
 impl HayateApp {
-    pub(crate) fn first_run_text(&self, e: Entity) -> String {
-        self.pres
+    pub(crate) fn begin_text_edit(&mut self, e: Entity) {
+        let (buf, levels) = self
+            .pres
             .world
             .texts
             .get(&e)
-            .and_then(|tb| tb.paragraphs.first())
-            .and_then(|p| p.runs.first())
-            .map(|r| r.text.clone())
-            .unwrap_or_default()
-    }
-
-    pub(crate) fn begin_text_edit(&mut self, e: Entity) {
-        let original = self.first_run_text(e);
-        let caret = original.len();
+            .map(text_body_to_lines)
+            .unwrap_or_else(|| (String::new(), vec![0]));
+        let caret = buf.len();
         self.text_edit = Some(TextEdit {
             entity: e,
-            buf: original.clone(),
-            original,
+            original: buf.clone(),
+            orig_levels: levels.clone(),
+            buf,
+            levels,
             selected: caret..caret,
             marked: None,
         });
     }
 
-    /// Apply text to an entity's first run without recording history (live preview).
-    pub(crate) fn live_set_text(&mut self, e: Entity, text: String) {
-        let tx = edit::set_run_text(&self.pres.world, e, text);
+    /// Apply the current edit buffer (one paragraph per line, with bullet levels) live, without
+    /// recording history. Used for the in-canvas preview while editing.
+    pub(crate) fn apply_edit_live(&mut self) {
+        let Some(te) = self.text_edit.as_ref() else {
+            return;
+        };
+        let e = te.entity;
+        let lines = buf_to_lines(&te.buf, &te.levels);
+        let tx = edit::set_paragraphs(&self.pres.world, e, &lines);
+        for op in tx.ops {
+            op.apply(&mut self.pres.world);
+        }
+        self.rebuild();
+    }
+
+    /// Revert an entity's text to the given lines (used to undo the live preview before a commit
+    /// or on Esc), without recording history.
+    pub(crate) fn revert_text_live(&mut self, e: Entity, buf: &str, levels: &[u8]) {
+        let lines = buf_to_lines(buf, levels);
+        let tx = edit::set_paragraphs(&self.pres.world, e, &lines);
         for op in tx.ops {
             op.apply(&mut self.pres.world);
         }
@@ -67,37 +81,84 @@ impl HayateApp {
             cx.notify();
             return;
         }
-        let mut live: Option<(Entity, String)> = None;
+        let mut live = false;
         match key.as_str() {
             "escape" => {
                 if let Some(te) = self.text_edit.take() {
-                    self.live_set_text(te.entity, te.original);
+                    let (e, buf, lv) = (te.entity, te.original, te.orig_levels);
+                    self.revert_text_live(e, &buf, &lv);
+                }
+            }
+            "tab" => {
+                // Tab / Shift+Tab change the current line's bullet level (PowerPoint-style).
+                if let Some(te) = self.text_edit.as_mut() {
+                    te.reconcile_levels();
+                    let li = te.caret_line();
+                    if let Some(l) = te.levels.get_mut(li) {
+                        *l = if mods.shift {
+                            l.saturating_sub(1)
+                        } else {
+                            (*l + 1).min(LIST_MAX_LEVEL)
+                        };
+                    }
+                    live = true;
                 }
             }
             "enter" => {
-                // Enter inserts a newline (multi-line text). Commit happens on click-away (or
-                // Esc cancels). Shaping treats '\n' as a hard line break.
                 if let Some(te) = self.text_edit.as_mut() {
-                    te.buf.replace_range(te.selected.clone(), "\n");
-                    let c = te.selected.start + 1;
-                    te.selected = c..c;
+                    te.reconcile_levels();
+                    let li = te.caret_line();
+                    let line_text = te.buf.split('\n').nth(li).unwrap_or("");
+                    let on_empty_bullet =
+                        line_text.is_empty() && te.levels.get(li).copied().unwrap_or(0) > 0;
+                    if on_empty_bullet {
+                        // Enter on an empty bullet exits the list (Markdown/Notion behaviour).
+                        if let Some(l) = te.levels.get_mut(li) {
+                            *l = 0;
+                        }
+                    } else {
+                        // Split the line; the new line inherits this line's bullet level.
+                        te.buf.replace_range(te.selected.clone(), "\n");
+                        let c = te.selected.start + 1;
+                        te.selected = c..c;
+                        let level = te.levels.get(li).copied().unwrap_or(0);
+                        te.levels.insert((li + 1).min(te.levels.len()), level);
+                    }
                     te.marked = None;
-                    live = Some((te.entity, te.buf.clone()));
+                    live = true;
                 }
             }
             "backspace" => {
                 if let Some(te) = self.text_edit.as_mut() {
-                    if te.selected.start != te.selected.end {
+                    te.reconcile_levels();
+                    let li = te.caret_line();
+                    let at_line_start = te.selected.start == te.selected.end
+                        && te.buf[..te.selected.start].chars().last() != Some('\n')
+                        && (te.selected.start == 0
+                            || te.buf.as_bytes()[te.selected.start - 1] == b'\n');
+                    if te.selected.start == te.selected.end
+                        && at_line_start
+                        && te.levels.get(li).copied().unwrap_or(0) > 0
+                    {
+                        // Backspace at the start of a bulleted line outdents instead of merging.
+                        if let Some(l) = te.levels.get_mut(li) {
+                            *l = l.saturating_sub(1);
+                        }
+                    } else if te.selected.start != te.selected.end {
                         te.buf.replace_range(te.selected.clone(), "");
                         let c = te.selected.start;
                         te.selected = c..c;
                     } else if te.selected.start > 0 {
                         let p = prev_char_boundary(&te.buf, te.selected.start);
+                        let merged_line = te.buf.as_bytes()[te.selected.start - 1] == b'\n';
                         te.buf.replace_range(p..te.selected.start, "");
                         te.selected = p..p;
+                        if merged_line && li < te.levels.len() {
+                            te.levels.remove(li); // this line merged into the previous one
+                        }
                     }
                     te.marked = None;
-                    live = Some((te.entity, te.buf.clone()));
+                    live = true;
                 }
             }
             "delete" => {
@@ -108,11 +169,16 @@ impl HayateApp {
                         te.selected = c..c;
                     } else if te.selected.end < te.buf.len() {
                         let n = next_char_boundary(&te.buf, te.selected.end);
+                        let merged_line = te.buf.as_bytes()[te.selected.end] == b'\n';
+                        let next_li = te.caret_line() + 1;
                         te.buf.replace_range(te.selected.end..n, "");
+                        if merged_line && next_li < te.levels.len() {
+                            te.levels.remove(next_li);
+                        }
                         // Caret stays at the deletion point.
                     }
                     te.marked = None;
-                    live = Some((te.entity, te.buf.clone()));
+                    live = true;
                 }
             }
             "left" => {
@@ -133,8 +199,11 @@ impl HayateApp {
             }
             _ => {}
         }
-        if let Some((e, buf)) = live {
-            self.live_set_text(e, buf);
+        if live {
+            if let Some(te) = self.text_edit.as_mut() {
+                te.reconcile_levels();
+            }
+            self.apply_edit_live();
         }
         cx.notify();
     }
@@ -148,7 +217,7 @@ impl HayateApp {
         new_text: &str,
         mark: bool,
     ) {
-        let (e, buf) = {
+        {
             let te = match self.text_edit.as_mut() {
                 Some(t) => t,
                 None => return,
@@ -165,9 +234,23 @@ impl HayateApp {
                 None
             };
             te.selected = new_end..new_end;
-            (te.entity, te.buf.clone())
-        };
-        self.live_set_text(e, buf);
+            te.reconcile_levels();
+            // Markdown-like auto-bullet: typing "- " (or "* ") at the start of a line turns it
+            // into a bullet and removes the marker. Only when not composing (no marked range).
+            if te.marked.is_none() {
+                let li = te.caret_line();
+                let line_start = te.selected.start - line_prefix_len(&te.buf, te.selected.start);
+                let line = te.buf.split('\n').nth(li).unwrap_or("");
+                if (line == "- " || line == "* ") && te.levels.get(li).copied().unwrap_or(0) == 0 {
+                    te.buf.replace_range(line_start..line_start + 2, "");
+                    te.selected = line_start..line_start;
+                    if let Some(l) = te.levels.get_mut(li) {
+                        *l = 1;
+                    }
+                }
+            }
+        }
+        self.apply_edit_live();
     }
 
     /// Handle a key while a numeric field is being edited (digits / . / -).
@@ -764,4 +847,41 @@ impl EntityInputHandler for HayateApp {
     fn accepts_text_input(&self, _window: &mut Window, _cx: &mut Context<Self>) -> bool {
         self.text_edit.is_some()
     }
+}
+
+/// Maximum bullet indent level (0 = none).
+const LIST_MAX_LEVEL: u8 = 4;
+
+/// Reconstruct the edit buffer (lines joined by '\n') and per-line bullet levels from a text body.
+/// Legacy single-paragraph bodies with embedded newlines are split into one line per newline,
+/// each carrying that paragraph's bullet level.
+fn text_body_to_lines(tb: &hayate_ir::text::TextBody) -> (String, Vec<u8>) {
+    let mut lines: Vec<String> = Vec::new();
+    let mut levels: Vec<u8> = Vec::new();
+    for para in &tb.paragraphs {
+        let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+        for line in text.split('\n') {
+            lines.push(line.to_string());
+            levels.push(para.bullet_level);
+        }
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+        levels.push(0);
+    }
+    (lines.join("\n"), levels)
+}
+
+/// Split the edit buffer into `(line, bullet_level)` pairs (one paragraph per line).
+pub(crate) fn buf_to_lines(buf: &str, levels: &[u8]) -> Vec<(String, u8)> {
+    buf.split('\n')
+        .enumerate()
+        .map(|(i, line)| (line.to_string(), levels.get(i).copied().unwrap_or(0)))
+        .collect()
+}
+
+/// Number of bytes from the start of the line containing byte offset `pos` up to `pos`.
+fn line_prefix_len(buf: &str, pos: usize) -> usize {
+    let start = buf[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
+    pos - start
 }

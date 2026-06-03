@@ -53,19 +53,39 @@ pub(crate) fn paint_text(
     let left = ox + px(tb.bounds.x);
     let mut top = oy + px(tb.bounds.y);
     for para in &tb.paragraphs {
-        if para.runs.is_empty() {
-            continue;
-        }
         let align = match para.align {
             HAlign::Center => gpui::TextAlign::Center,
             HAlign::Right => gpui::TextAlign::Right,
             HAlign::Left | HAlign::Justify => gpui::TextAlign::Left,
         };
-        let font_size = px(para.runs.iter().map(|r| r.size_px).fold(0.0, f32::max));
+        let size_val = para.runs.iter().map(|r| r.size_px).fold(0.0, f32::max);
+        let font_size = px(if size_val > 0.0 { size_val } else { 24.0 });
         let line_height = font_size * 1.3;
+        // Each list level indents the line; the bullet glyph is prepended to the text so it
+        // shapes and baseline-aligns with the content.
+        let indent = font_size * (1.2 * para.bullet_level as f32);
 
         let mut text = String::new();
         let mut runs: Vec<TextRun> = Vec::new();
+        if para.bullet_level > 0 {
+            let glyph = match para.bullet_level {
+                1 => "\u{2022} ", // •
+                2 => "\u{25E6} ", // ◦
+                _ => "\u{25AA} ", // ▪
+            };
+            let style = para.runs.first();
+            text.push_str(glyph);
+            runs.push(TextRun {
+                len: glyph.len(),
+                font: style
+                    .map(run_font)
+                    .unwrap_or_else(|| gpui::font("sans-serif")),
+                color: hsla_of(style.map(|r| r.color).unwrap_or(Rgba::rgb(0, 0, 0))),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            });
+        }
         for r in &para.runs {
             let len = r.text.len();
             if len == 0 {
@@ -81,29 +101,36 @@ pub(crate) fn paint_text(
                 strikethrough: None,
             });
         }
+        // An empty line (no bullet, no text) still advances one row so following lines don't
+        // collapse onto it.
         if runs.is_empty() {
+            top += line_height;
             continue;
         }
-        // Shape with wrapping at the box width so long paragraphs flow onto multiple rows
-        // instead of overflowing to the right. `shape_text` returns one `WrappedLine` per
-        // hard line break; each may itself contain soft wrap boundaries. Passing `None` as
-        // `bounds` to `paint` makes alignment use the layout's `wrap_width` (the box width).
+        // Wrap within the box width minus the indent so bulleted lines wrap under their text.
+        let wrap_w = (tb.bounds.w - f32::from(indent)).max(1.0);
         match window.text_system().shape_text(
             SharedString::from(text),
             font_size,
             &runs,
-            Some(px(tb.bounds.w)),
+            Some(px(wrap_w)),
             None,
         ) {
             Ok(lines) => {
                 for line in lines.iter() {
-                    let _ = line.paint(point(left, top), line_height, align, None, window, cx);
-                    // A wrapped line occupies one row per soft wrap boundary plus one.
+                    let _ = line.paint(
+                        point(left + indent, top),
+                        line_height,
+                        align,
+                        None,
+                        window,
+                        cx,
+                    );
                     let rows = line.wrap_boundaries.len() + 1;
                     top += line_height * (rows as f32);
                 }
             }
-            Err(_) => {} // skip this paragraph on shaping error
+            Err(_) => {}
         }
     }
 }

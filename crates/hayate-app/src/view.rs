@@ -1336,14 +1336,22 @@ impl HayateApp {
         }
         col = col.child(presets_row);
         if let Some(theme) = self.pres.container_theme(self.container()) {
+            let accents = theme.colors.accent;
             let mut sw = div().flex().flex_row().gap_1();
-            for c in theme.colors.accent {
+            for (i, c) in accents.into_iter().enumerate() {
                 sw = sw.child(
                     div()
+                        .id(("accent", i))
                         .w(px(20.))
                         .h(px(20.))
                         .rounded_md()
-                        .bg(rgb(crate::util::rgb_u32(c))),
+                        .bg(rgb(crate::util::rgb_u32(c)))
+                        .hover(|s| s.border_1().border_color(rgb(0xffffff)))
+                        .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                            window.focus(&this.focus, cx);
+                            this.cycle_theme_accent(i);
+                            cx.notify();
+                        })),
                 );
             }
             col = col.child(sw);
