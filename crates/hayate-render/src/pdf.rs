@@ -57,8 +57,6 @@ fn flate(data: &[u8]) -> Vec<u8> {
 struct Glyph {
     font_id: cosmic_text::fontdb::ID,
     glyph_id: u16,
-    /// Cluster text, for the ToUnicode map.
-    text: String,
     x: f32,
     baseline_y: f32,
     size: f32,
@@ -415,11 +413,10 @@ fn shape_block(
                         .entry(g.font_id)
                         .or_default()
                         .entry(g.glyph_id)
-                        .or_insert(text.clone());
+                        .or_insert(text);
                     out.push(Glyph {
                         font_id: g.font_id,
                         glyph_id: g.glyph_id,
-                        text,
                         x: tb.bounds.x + indent + g.x,
                         baseline_y: para_top + run.line_y,
                         size: g.font_size,

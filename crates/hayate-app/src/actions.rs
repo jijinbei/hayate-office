@@ -170,6 +170,13 @@ impl HayateApp {
         let layout = self
             .pres
             .add_layout(master, format!("{} {}", preset.name(), n));
+        self.fill_layout_preset(layout, preset);
+        self.master_layout = Some(layout);
+        Some(layout)
+    }
+
+    /// Populate `layout` with a preset's placeholders (Title/Body/…) as one undoable transaction.
+    pub(crate) fn fill_layout_preset(&mut self, layout: Entity, preset: edit::LayoutPreset) {
         let specs = edit::preset_placeholders(preset, self.pres.slide_size);
         let mut ops = Vec::new();
         let mut order = FracIndex::after(None);
@@ -195,8 +202,6 @@ impl HayateApp {
         if !ops.is_empty() {
             self.commit_tx(Transaction::new("add layout preset", ops));
         }
-        self.master_layout = Some(layout);
-        Some(layout)
     }
 
     /// Point the current slide at `layout` (undoable). Inherited placeholders update immediately.

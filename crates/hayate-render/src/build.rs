@@ -112,6 +112,16 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
 
     let mut nodes = Vec::new();
 
+    // Master/layout decorations (their non-placeholder shapes, e.g. logos or accent bars) render
+    // behind everything and are display-only on the slide, so editing the master or layout
+    // updates every slide that uses it.
+    if let Some(master) = p.owning_master(slide) {
+        push_raw_children(p, master, &theme, &vp, true, false, 1.0, &mut nodes);
+    }
+    if let Some(layout) = p.layout_of(slide) {
+        push_raw_children(p, layout, &theme, &vp, true, false, 1.0, &mut nodes);
+    }
+
     // Inherited placeholders are drawn first (behind the slide's own content). Each
     // placeholder's fields resolve slide -> layout -> master independently, so a frame may come
     // from the layout while the text comes from the slide. A placeholder the slide overrides

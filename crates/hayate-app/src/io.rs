@@ -40,7 +40,10 @@ impl HayateApp {
     pub(crate) fn save(&self) {
         let path = self.doc_path.clone();
         match hayate_format::save(&self.pres, &path) {
-            Ok(()) => eprintln!("saved to {path}"),
+            Ok(()) => {
+                eprintln!("saved to {path}");
+                crate::recent::add(&path);
+            }
             Err(e) => eprintln!("save error: {e}"),
         }
     }
@@ -81,6 +84,7 @@ impl HayateApp {
                 self.history = History::new();
                 self.selection = None;
                 self.rebuild();
+                crate::recent::add(&path);
                 eprintln!("opened {path}");
             }
             Err(e) => eprintln!("open error: {e}"),

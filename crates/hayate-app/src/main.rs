@@ -52,6 +52,7 @@ use hayate_render::scene::{PxSize, Scene};
 use hayate_render::{build_slide_scene, Guide};
 
 mod actions;
+mod home;
 mod icons;
 mod input;
 mod io;
@@ -59,6 +60,7 @@ mod layers;
 mod menu;
 mod mouse;
 mod paint;
+mod recent;
 mod slides;
 mod util;
 mod view;
@@ -231,6 +233,13 @@ struct HayateApp {
     marquee: Option<(f32, f32, f32, f32)>,
     /// Last window viewport size; used to refit the slide when the window is resized.
     last_viewport: Option<gpui::Size<gpui::Pixels>>,
+    /// Whether the home/start screen is shown instead of the editor. True at launch; left when a
+    /// presentation is created ("New") or opened from the recents list.
+    home: bool,
+    /// Recent presentations (with thumbnails) for the home screen, built lazily on first show.
+    home_recents: Vec<RecentThumb>,
+    /// Whether `home_recents` has been built since the home screen was last shown.
+    home_loaded: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -367,6 +376,15 @@ struct PaletteState {
     sel: usize,
 }
 
+/// A recent presentation shown on the home screen: its file path, display name, and a pre-built
+/// first-slide scene (+ media) rendered as the thumbnail.
+struct RecentThumb {
+    path: String,
+    name: String,
+    scene: Scene,
+    media: std::collections::BTreeMap<String, Vec<u8>>,
+}
+
 impl HayateApp {
     fn new(cx: &mut Context<Self>) -> Self {
         let pres = sample_presentation();
@@ -412,6 +430,9 @@ impl HayateApp {
             resizing_sidebar: false,
             marquee: None,
             last_viewport: None,
+            home: true,
+            home_recents: Vec::new(),
+            home_loaded: false,
         }
     }
 }

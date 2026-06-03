@@ -27,6 +27,14 @@ impl Render for HayateApp {
             self.focused_once = true;
         }
 
+        // Home/start screen: shown at launch and via the Home button. Recents are built lazily.
+        if self.home {
+            if !self.home_loaded {
+                self.load_home_recents();
+            }
+            return self.render_home(window, cx);
+        }
+
         // Fullscreen presentation mode: the slide fit to the whole window, no panels.
         if self.present {
             let vp = window.viewport_size();
@@ -136,7 +144,7 @@ impl Render for HayateApp {
                         if let Primitive::Text(tb) = &node.prim {
                             if !tb.paragraphs.is_empty() {
                                 // (paragraph index, x in px, y top in px, line height) for a byte.
-                                let mut pos_of = |byte: usize, window: &mut Window| {
+                                let pos_of = |byte: usize, window: &mut Window| {
                                     // Locate the paragraph and local byte offset.
                                     let mut start = 0usize;
                                     let mut pi = 0usize;
@@ -924,7 +932,18 @@ impl Render for HayateApp {
                     .flex_row()
                     .justify_between()
                     .items_center()
-                    .child(div().text_xl().child(title))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_2()
+                            .items_center()
+                            .child(tool_button("go_home", "\u{2302} Home", cx, |t, _w, cx| {
+                                t.go_home();
+                                cx.notify();
+                            }))
+                            .child(div().text_xl().child(title)),
+                    )
                     // Shape-creation tools.
                     .child(
                         div()
@@ -1088,6 +1107,102 @@ impl Render for HayateApp {
 }
 
 impl HayateApp {
+    /// The home/start screen: a "New presentation" card plus a thumbnailed grid of recently
+    /// opened files. Shown at launch and via the Home button; leaving it opens the editor.
+    fn render_home(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        // The "New presentation" card opens a fresh template deck in master-edit mode.
+        let new_card = div()
+            .id("home_new")
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .gap_2()
+            .w(px(240.))
+            .h(px(135.))
+            .border_2()
+            .border_color(rgb(SELECTION))
+            .bg(rgb(0x2a2a2a))
+            .cursor_pointer()
+            .child(div().text_3xl().child("+"))
+            .child(div().text_sm().child("New presentation"))
+            .on_click(cx.listener(|this, _ev: &ClickEvent, _w, cx| {
+                this.new_presentation();
+                cx.notify();
+            }));
+
+        let mut grid = div().flex().flex_row().flex_wrap().gap_4().child(
+            div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .child(new_card)
+                .child(div().text_sm().text_color(rgb(0x8a8a8a)).child("Blank")),
+        );
+
+        for (i, thumb) in self.home_recents.iter().enumerate() {
+            let scene = thumb.scene.clone();
+            let media = thumb.media.clone();
+            let path = thumb.path.clone();
+            let name = thumb.name.clone();
+            let (w, h) = (scene.size.w, scene.size.h);
+            let tcanvas = canvas(
+                |_, _, _| {},
+                move |b, _, window, cx| paint_scene(&scene, b.origin, &media, 0.5, window, cx),
+            )
+            .size_full();
+            grid = grid.child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id(("recent", i))
+                            .w(px(w.max(240.)))
+                            .h(px(h.max(135.)))
+                            .border_1()
+                            .border_color(rgb(0x3a3a3a))
+                            .bg(rgb(0xffffff))
+                            .cursor_pointer()
+                            .child(tcanvas)
+                            .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
+                                this.open_recent(path.clone());
+                                cx.notify();
+                            })),
+                    )
+                    .child(div().text_sm().child(name)),
+            );
+        }
+
+        let recents_section = if self.home_recents.is_empty() {
+            div()
+                .text_sm()
+                .text_color(rgb(0x8a8a8a))
+                .child("No recent presentations yet \u{2014} create one to get started.")
+        } else {
+            div()
+                .text_sm()
+                .text_color(rgb(0x8a8a8a))
+                .child("Recent presentations")
+        };
+
+        div()
+            .track_focus(&self.focus)
+            .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| this.on_key_down(ev, cx)))
+            .size_full()
+            .bg(rgb(0x1e1e1e))
+            .text_color(rgb(0xffffff))
+            .flex()
+            .flex_col()
+            .gap_6()
+            .p_8()
+            .child(div().text_2xl().child("HayateOffice"))
+            .child(recents_section)
+            .child(grid)
+            .into_any_element()
+    }
+
     /// The font-picker overlay: a scrollable list of available font families. Clicking one sets
     /// the selected text shape's font via the `shape.set_font` command.
     fn font_overlay(

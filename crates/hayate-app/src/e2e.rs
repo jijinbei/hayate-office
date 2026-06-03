@@ -3,7 +3,7 @@
 //! asserting on the editor's real state. They run under `cargo test -p hayate-app` (the
 //! `test-support` feature pulls the windowing libs, so use `just e2e` to run in the Nix shell).
 
-use super::{HayateApp, MenuTarget};
+use super::{EditScope, HayateApp, LeftTab, MenuTarget};
 use gpui::{
     point, px, AppContext, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, TestAppContext,
@@ -1148,4 +1148,121 @@ fn ctrl_shift_p_shows_pdf_notice(cx: &mut TestAppContext) {
         "Esc dismisses the notice"
     );
     let _ = std::fs::remove_file(&pdf);
+}
+
+#[gpui::test]
+fn home_shown_at_launch(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    assert!(
+        app.read_with(cx, |s, _| s.home),
+        "the home screen is shown at launch"
+    );
+}
+
+#[gpui::test]
+fn home_new_presentation_opens_template_in_master_scope(cx: &mut TestAppContext) {
+    use hayate_ir::doc::PlaceholderType as PT;
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| s.new_presentation());
+
+    // Leaves home and enters layout (master) edit mode on the template's layout.
+    assert!(
+        !app.read_with(cx, |s, _| s.home),
+        "New leaves the home screen"
+    );
+    assert!(
+        !app.read_with(cx, |s, _| s.scope.is_slide()),
+        "New opens the template in master/layout edit mode"
+    );
+
+    // The edited layout carries the Title + Body placeholders from the preset.
+    let kinds: Vec<PT> = app.read_with(cx, |s, _| {
+        let layout = s.container();
+        s.pres
+            .placeholder_shapes(layout)
+            .iter()
+            .filter_map(|e| s.pres.world.placeholders.get(e).map(|p| p.ph_type))
+            .collect()
+    });
+    assert!(
+        kinds.contains(&PT::Title) && kinds.contains(&PT::Body),
+        "template layout has Title + Body placeholders, got {kinds:?}"
+    );
+
+    // Editing the layout propagates to the slide that uses it (inherited placeholders render).
+    let nodes = app.read_with(cx, |s, _| {
+        let slide = s.pres.slides()[0];
+        hayate_render::build_slide_scene(&s.pres, slide, super::view_px(&s.pres, 1.0))
+            .nodes
+            .len()
+    });
+    assert!(
+        nodes > 0,
+        "the slide renders the inherited template placeholders"
+    );
+}
+
+#[gpui::test]
+fn home_go_home_returns_to_start(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| s.new_presentation());
+    assert!(!app.read_with(cx, |s, _| s.home));
+    app.update(cx, |s, _| s.go_home());
+    assert!(
+        app.read_with(cx, |s, _| s.home && !s.home_loaded),
+        "Home returns to the start screen and forces a recents refresh"
+    );
+}
+
+#[gpui::test]
+fn launches_on_home_screen(cx: &mut TestAppContext) {
+    // A fresh app opens on the home/start screen, not directly in a deck.
+    let app = cx.new(|cx| HayateApp::new(cx));
+    assert!(
+        app.read_with(cx, |a, _| a.home),
+        "the app starts on the home screen"
+    );
+}
+
+#[gpui::test]
+fn new_presentation_opens_template_in_master_scope(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |a, _| a.new_presentation());
+    app.read_with(cx, |a, _| {
+        assert!(!a.home, "creating a deck leaves the home screen");
+        assert!(
+            matches!(a.scope, EditScope::Layout(_)),
+            "New opens in layout (master-edit) scope so the template can be tailored"
+        );
+        assert!(a.left_tab == LeftTab::Master, "the Master tab is shown");
+        // The slide inherits the layout's Title + Body placeholders from the template.
+        let phs = a.pres.effective_placeholders(a.slide);
+        assert!(
+            phs.len() >= 2,
+            "the template slide inherits Title + Body placeholders, got {}",
+            phs.len()
+        );
+        // The master carries a decoration shape (the accent bar) drawn behind every slide.
+        let master = a.pres.master_of(a.slide).expect("slide has a master");
+        assert!(
+            !a.pres.children(master).is_empty(),
+            "the master has a decoration shape"
+        );
+    });
+}
+
+#[gpui::test]
+fn go_home_returns_to_the_home_screen(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // Enter a deck, then go back home.
+    app.update(cx, |a, _| a.new_presentation());
+    assert!(app.read_with(cx, |a, _| !a.home));
+    app.update(cx, |a, _| a.go_home());
+    app.read_with(cx, |a, _| {
+        assert!(a.home, "go_home returns to the home screen");
+        assert!(
+            !a.home_loaded,
+            "the recents list refreshes on the next home render"
+        );
+    });
 }
