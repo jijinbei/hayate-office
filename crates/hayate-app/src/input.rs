@@ -550,6 +550,9 @@ impl HayateApp {
         let k = &ev.keystroke;
         let cmd = k.modifiers.platform || k.modifiers.control;
         match k.key.as_str() {
+            // Ctrl/Cmd+Shift+P exports a PDF (P = PDF). Must come before the plain Ctrl/Cmd+P
+            // palette arm, which would otherwise also match the shift chord.
+            "p" if cmd && k.modifiers.shift => self.export_pdf(),
             "p" if cmd => {
                 self.palette = Some(PaletteState {
                     query: String::new(),
@@ -559,8 +562,6 @@ impl HayateApp {
             }
             "e" if cmd && k.modifiers.shift => self.export_pptx(),
             "e" if cmd => self.export_svg(),
-            // Ctrl/Cmd+Shift+P exports a PDF (P = PDF); plain Ctrl/Cmd+P opens the palette below.
-            "p" if cmd && k.modifiers.shift => self.export_pdf(),
             "f5" => {
                 self.present = true;
                 self.present_t = 0;
