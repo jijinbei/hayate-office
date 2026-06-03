@@ -198,6 +198,10 @@ struct HayateApp {
     layout_rename: Option<(Entity, String)>,
     /// Where the next font-picker choice applies (selection vs. theme fonts).
     font_target: FontTarget,
+    /// Width of the left sidebar in px (user-draggable).
+    sidebar_w: f32,
+    /// Whether the sidebar divider is being dragged.
+    resizing_sidebar: bool,
     /// Active marquee (rubber-band) selection rect in scene px: (start_x, start_y, cur_x, cur_y).
     marquee: Option<(f32, f32, f32, f32)>,
     /// Last window viewport size; used to refit the slide when the window is resized.
@@ -351,6 +355,8 @@ impl HayateApp {
             scope: EditScope::Slide(slide),
             layout_rename: None,
             font_target: FontTarget::Selection,
+            sidebar_w: 208.0,
+            resizing_sidebar: false,
             marquee: None,
             last_viewport: None,
         }

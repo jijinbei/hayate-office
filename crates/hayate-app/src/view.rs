@@ -542,8 +542,9 @@ impl Render for HayateApp {
         let sidebar = div()
             .flex()
             .flex_col()
+            .flex_none()
             .gap_2()
-            .w(px(208.))
+            .w(px(self.sidebar_w))
             .h_full()
             .p_2()
             .bg(rgb(0x252525))
@@ -802,6 +803,22 @@ impl Render for HayateApp {
         div()
             .track_focus(&self.focus)
             .on_key_down(cx.listener(|this, ev: &KeyDownEvent, _, cx| this.on_key_down(ev, cx)))
+            // While dragging the sidebar divider, the cursor tracks anywhere in the window.
+            .on_mouse_move(cx.listener(|this, ev: &MouseMoveEvent, _w, cx| {
+                if this.resizing_sidebar {
+                    this.sidebar_w = f32::from(ev.position.x).clamp(140.0, 480.0);
+                    cx.notify();
+                }
+            }))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _ev: &MouseUpEvent, _w, cx| {
+                    if this.resizing_sidebar {
+                        this.resizing_sidebar = false;
+                        cx.notify();
+                    }
+                }),
+            )
             .flex()
             .flex_col()
             .gap_3()
@@ -887,6 +904,28 @@ impl Render for HayateApp {
                     .min_h(px(0.))
                     .gap_3()
                     .child(sidebar)
+                    // Draggable divider: drag to resize the sidebar.
+                    .child(
+                        div()
+                            .id("sidebar_divider")
+                            .w(px(5.))
+                            .h_full()
+                            .flex_none()
+                            .cursor_col_resize()
+                            .bg(rgb(if self.resizing_sidebar {
+                                SELECTION
+                            } else {
+                                0x333333
+                            }))
+                            .hover(|s| s.bg(rgb(SELECTION)))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _ev: &MouseDownEvent, _w, cx| {
+                                    this.resizing_sidebar = true;
+                                    cx.notify();
+                                }),
+                            ),
+                    )
                     // Canvas viewport: takes the remaining width and scrolls if the slide is
                     // larger than the area, so it never overlaps the Format pane.
                     .child(
@@ -1069,6 +1108,8 @@ impl HayateApp {
             let name_child = if let Some(buf) = renaming {
                 div()
                     .flex_1()
+                    .min_w(px(0.))
+                    .truncate()
                     .px_2()
                     .py_1()
                     .rounded_md()
@@ -1082,6 +1123,8 @@ impl HayateApp {
                 div()
                     .id(("layout", layout.0 as usize))
                     .flex_1()
+                    .min_w(px(0.))
+                    .truncate()
                     .px_2()
                     .py_1()
                     .rounded_md()
@@ -1116,12 +1159,13 @@ impl HayateApp {
                 &ttheme,
                 tbg,
                 &tctx,
-                PxSize { w: 64.0, h: 36.0 },
+                PxSize { w: 48.0, h: 27.0 },
             );
             let tmedia = self.pres.media.clone();
             let thumb = div()
-                .w(px(64.))
-                .h(px(36.))
+                .flex_none()
+                .w(px(48.))
+                .h(px(27.))
                 .border_1()
                 .border_color(rgb(0x444444))
                 .child(
@@ -1136,6 +1180,7 @@ impl HayateApp {
                     .id(("layout_row", layout.0 as usize))
                     .flex()
                     .flex_row()
+                    .w_full()
                     .items_center()
                     .gap_1()
                     .child(thumb)
@@ -1144,6 +1189,7 @@ impl HayateApp {
                         // Edit opens the layout on the canvas (master edit mode).
                         div()
                             .id(("layout_edit", layout.0 as usize))
+                            .flex_none()
                             .px_2()
                             .py_1()
                             .rounded_md()
