@@ -2664,7 +2664,10 @@ name = "hayate-render"
 version = "0.0.0"
 dependencies = [
  "cosmic-text",
+ "flate2",
  "hayate-ir",
+ "image",
+ "ttf-parser",
 ]
 
 [[package]]

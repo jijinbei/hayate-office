@@ -9,6 +9,11 @@ repository.workspace = true
 [dependencies]
 hayate-ir.workspace = true
 # Real-font text rasterization for the headless rasterizer (shapes + renders with system fonts,
-# incl. CJK), matching the on-screen gpui text closely. Same version gpui already resolves, so it
-# adds nothing new to the lockfile.
+# incl. CJK), matching the on-screen gpui text closely. Same versions gpui already resolves, so
+# these add nothing new to the lockfile.
 cosmic-text = "0.19"
+# Vector PDF export: ttf-parser reads font metrics for embedded CID fonts, flate2 compresses
+# stream data (FlateDecode), and image decodes embedded pictures to RGB for image XObjects.
+ttf-parser = "0.25"
+flate2 = "1"
+image = "0.25"

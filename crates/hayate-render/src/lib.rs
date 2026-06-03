@@ -9,6 +9,7 @@ pub mod handles;
 pub mod hit;
 pub mod linebreak;
 pub mod pdf;
+pub mod pdf_font;
 pub mod png;
 pub mod raster;
 pub mod scene;

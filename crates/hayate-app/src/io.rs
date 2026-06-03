@@ -48,8 +48,16 @@ impl HayateApp {
     /// Export every slide to a multi-page PDF next to the document (raster pages at ~2x so text
     /// stays crisp). The output file is the document path with a `.pdf` extension.
     pub(crate) fn export_pdf(&self) {
-        let bytes = hayate_render::export_pdf(&self.pres, 2.0);
         let path = pdf_path(&self.doc_path);
+        let opts = hayate_render::pdf::PdfOptions {
+            title: std::path::Path::new(&path)
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|s| s.to_string()),
+            list_indent_em: self.list_indent_em,
+            image_dpi: 150.0,
+        };
+        let bytes = hayate_render::pdf::export_pdf(&self.pres, &opts);
         match std::fs::write(&path, bytes) {
             Ok(()) => eprintln!("exported {path}"),
             Err(e) => eprintln!("pdf export error: {e}"),

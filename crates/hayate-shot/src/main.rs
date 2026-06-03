@@ -376,7 +376,8 @@ fn main() {
     // a shape) to a real PDF. `just pdf-shot` renders it with poppler so the end-to-end PDF
     // (structure + embedded image) can be eyeballed; the same content also appears in the PNG
     // shots above, so the two can be compared.
-    let pdf = hayate_render::export_pdf(&pdf_demo(), 2.0);
+    let pdf =
+        hayate_render::pdf::export_pdf(&pdf_demo(), &hayate_render::pdf::PdfOptions::default());
     let pdf_path = out_dir.join("deck.pdf");
     std::fs::write(&pdf_path, pdf).expect("write pdf");
     eprintln!("wrote {}", pdf_path.display());

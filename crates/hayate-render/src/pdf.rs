@@ -1,181 +1,900 @@
-//! Dependency-free PDF export: one page per slide, each carrying a rasterized image of the
-//! slide. Vector-faithful export is future work; embedding a raster keeps this self-contained
-//! (it reuses [`crate::rasterize`]) and prints at the slide's true physical size.
-//!
-//! The only binary payload is the per-image FlateDecode stream, built from the same stored
-//! (uncompressed) DEFLATE + Adler-32 zlib framing as [`crate::png`]. Everything else is ASCII,
-//! and the cross-reference table records exact byte offsets.
+//! Vector PDF export. Each slide becomes a PDF page whose content is built from the slide's
+//! `Scene`: shapes are drawn as vector paths, text is shaped with cosmic-text and shown with
+//! embedded CID fonts (selectable/extractable, resolution-independent), and pictures are embedded
+//! as image XObjects. Streams are FlateDecode-compressed. Page size is the slide size in points,
+//! so the document prints at its true physical size and stays crisp at any zoom.
+
+use std::cell::RefCell;
+use std::collections::BTreeMap;
+use std::fmt::Write as _;
+use std::io::Write as _;
+
+use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, Weight};
 
 use hayate_ir::presentation::Presentation;
+use hayate_ir::text::HAlign;
 
-use crate::{build_slide_scene, rasterize, PxSize};
+use crate::build_slide_scene;
+use crate::pdf_font::build_type0_font;
+use crate::scene::{Paint, Primitive, PxRect, PxSize, Scene, StrokePx, TextBlock};
 
 /// 1 PDF point = 1/72 inch = 12700 EMU.
 const EMU_PER_POINT: f32 = 12_700.0;
 
-/// Render every slide of `p` to a raster and assemble a multi-page PDF (one page per slide).
-/// `scale` multiplies the raster resolution (e.g. 2.0 ≈ 144 DPI); each page's size stays the
-/// slide size in points, so the document prints at the true physical size.
-pub fn export_pdf(p: &Presentation, scale: f32) -> Vec<u8> {
-    let scale = if scale.is_finite() && scale > 0.0 {
-        scale
-    } else {
-        1.0
-    };
-    let slides = p.slides();
-    let n = slides.len();
-    let pt_w = p.slide_size.w as f32 / EMU_PER_POINT;
-    let pt_h = p.slide_size.h as f32 / EMU_PER_POINT;
+/// Options for [`export_pdf`].
+#[derive(Clone, Debug)]
+pub struct PdfOptions {
+    /// Document title (written to the `/Info` dictionary), if any.
+    pub title: Option<String>,
+    /// Bullet-list indent per level, in ems (match the editor's `list_indent_em`).
+    pub list_indent_em: f32,
+    /// Max DPI for embedded raster images; larger sources are downscaled to bound file size.
+    pub image_dpi: f32,
+}
 
-    // Object numbering: 1 = Catalog, 2 = Pages, then per slide k (0-based) a Page (3 + 3k),
-    // a content stream (4 + 3k), and an image XObject (5 + 3k).
-    let total_objs = 2 + n * 3;
-    let mut out: Vec<u8> = Vec::new();
-    let mut offsets = vec![0usize; total_objs + 1]; // 1-based; index 0 is the free entry
-
-    // Header. The binary comment marks the file as containing binary data.
-    out.extend_from_slice(b"%PDF-1.7\n");
-    out.extend_from_slice(&[b'%', 0xE2, 0xE3, 0xCF, 0xD3, b'\n']);
-
-    // Catalog.
-    offsets[1] = out.len();
-    out.extend_from_slice(b"1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n");
-
-    // Pages tree.
-    offsets[2] = out.len();
-    let mut kids = String::new();
-    for k in 0..n {
-        kids.push_str(&format!("{} 0 R ", 3 + k * 3));
-    }
-    out.extend_from_slice(
-        format!("2 0 obj\n<< /Type /Pages /Kids [ {kids}] /Count {n} >>\nendobj\n").as_bytes(),
-    );
-
-    let pw = fmt_num(pt_w);
-    let ph = fmt_num(pt_h);
-    for (k, &slide) in slides.iter().enumerate() {
-        let page_id = 3 + k * 3;
-        let content_id = 4 + k * 3;
-        let image_id = 5 + k * 3;
-
-        let px_w = ((pt_w * scale).round() as i64).max(1) as u32;
-        let px_h = ((pt_h * scale).round() as i64).max(1) as u32;
-        let scene = build_slide_scene(
-            p,
-            slide,
-            PxSize {
-                w: px_w as f32,
-                h: px_h as f32,
-            },
-        );
-        let rgba = rasterize(&scene, px_w, px_h);
-        // Drop the alpha channel: slides are opaque, so the raw RGB is what we embed.
-        let mut rgb = Vec::with_capacity(rgba.len() / 4 * 3);
-        for px in rgba.chunks_exact(4) {
-            rgb.extend_from_slice(&px[..3]);
+impl Default for PdfOptions {
+    fn default() -> Self {
+        PdfOptions {
+            title: None,
+            list_indent_em: 0.5,
+            image_dpi: 150.0,
         }
-        let zlib = zlib_store(&rgb);
+    }
+}
 
-        // Page.
-        offsets[page_id] = out.len();
-        out.extend_from_slice(
-            format!(
-                "{page_id} 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {pw} {ph}] \
-                 /Resources << /XObject << /Im0 {image_id} 0 R >> >> /Contents {content_id} 0 R >>\nendobj\n"
-            )
-            .as_bytes(),
-        );
+thread_local! {
+    static FONTS: RefCell<FontSystem> = RefCell::new(FontSystem::new());
+}
 
-        // Content stream: map the unit image space onto the whole page.
-        let content = format!("q\n{pw} 0 0 {ph} 0 0 cm\n/Im0 Do\nQ\n");
-        offsets[content_id] = out.len();
-        out.extend_from_slice(
-            format!(
-                "{content_id} 0 obj\n<< /Length {} >>\nstream\n{content}endstream\nendobj\n",
-                content.len()
-            )
-            .as_bytes(),
-        );
+/// zlib-compress `data` for a `/FlateDecode` stream.
+fn flate(data: &[u8]) -> Vec<u8> {
+    let mut e = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let _ = e.write_all(data);
+    e.finish().unwrap_or_default()
+}
 
-        // Image XObject.
-        offsets[image_id] = out.len();
-        out.extend_from_slice(
-            format!(
-                "{image_id} 0 obj\n<< /Type /XObject /Subtype /Image /Width {px_w} /Height {px_h} \
-                 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
-                zlib.len()
-            )
-            .as_bytes(),
-        );
-        out.extend_from_slice(&zlib);
-        out.extend_from_slice(b"\nendstream\nendobj\n");
+/// One positioned glyph in a text run (scene/point coordinates, baseline origin).
+struct Glyph {
+    font_id: cosmic_text::fontdb::ID,
+    glyph_id: u16,
+    /// Cluster text, for the ToUnicode map.
+    text: String,
+    x: f32,
+    baseline_y: f32,
+    size: f32,
+    color: (u8, u8, u8),
+}
+
+/// A drawing operation on a page, in scene/point coordinates (top-left origin, y down).
+enum Op {
+    Rect {
+        b: PxRect,
+        radius: f32,
+        fill: Option<(u8, u8, u8)>,
+        stroke: Option<((u8, u8, u8), f32)>,
+        rot: f32,
+    },
+    Ellipse {
+        b: PxRect,
+        fill: Option<(u8, u8, u8)>,
+        stroke: Option<((u8, u8, u8), f32)>,
+        rot: f32,
+    },
+    Line {
+        from: (f32, f32),
+        to: (f32, f32),
+        color: (u8, u8, u8),
+        width: f32,
+        start_arrow: bool,
+        end_arrow: bool,
+    },
+    Image {
+        b: PxRect,
+        key: String,
+        rot: f32,
+    },
+    Glyphs(Vec<Glyph>),
+}
+
+/// A page ready to serialize: its background and ordered draw ops.
+struct Page {
+    background: (u8, u8, u8),
+    ops: Vec<Op>,
+}
+
+/// Render every slide of `p` to a vector PDF page.
+pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
+    let slides = p.slides();
+    let pt_w = (p.slide_size.w as f32 / EMU_PER_POINT).max(1.0);
+    let pt_h = (p.slide_size.h as f32 / EMU_PER_POINT).max(1.0);
+
+    // Pass 1: build each page's draw ops, collecting the glyphs each font needs and the images
+    // used. Shaping happens once here.
+    let mut pages: Vec<Page> = Vec::new();
+    let mut font_glyphs: BTreeMap<cosmic_text::fontdb::ID, BTreeMap<u16, String>> = BTreeMap::new();
+    let mut used_images: Vec<String> = Vec::new();
+    for &slide in &slides {
+        let scene = build_slide_scene(p, slide, PxSize { w: pt_w, h: pt_h });
+        let page = build_page(&scene, opts, &mut font_glyphs);
+        for op in &page.ops {
+            if let Op::Image { key, .. } = op {
+                if !used_images.contains(key) {
+                    used_images.push(key.clone());
+                }
+            }
+        }
+        pages.push(page);
     }
 
-    // Cross-reference table.
-    let xref_pos = out.len();
-    out.extend_from_slice(format!("xref\n0 {}\n", total_objs + 1).as_bytes());
-    out.extend_from_slice(b"0000000000 65535 f \n");
-    for i in 1..=total_objs {
-        out.extend_from_slice(format!("{:010} 00000 n \n", offsets[i]).as_bytes());
-    }
-    out.extend_from_slice(
-        format!(
-            "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n",
-            total_objs + 1
+    // Build embedded fonts (one Type0 per font id actually used by some glyph).
+    let mut pdf = PdfWriter::new();
+    let catalog = pdf.alloc();
+    let pages_id = pdf.alloc();
+    let info_id = pdf.alloc();
+
+    let mut font_res: BTreeMap<cosmic_text::fontdb::ID, (String, u32)> = BTreeMap::new();
+    FONTS.with(|fs| {
+        let mut fs = fs.borrow_mut();
+        for (fi, (font_id, glyphs)) in font_glyphs.iter().enumerate() {
+            if glyphs.is_empty() {
+                continue;
+            }
+            let Some(font) = fs.get_font(*font_id, cosmic_text::fontdb::Weight::NORMAL) else {
+                continue;
+            };
+            let base = pdf.peek();
+            let subtag = format!("F{fi}");
+            let built = build_type0_font(font.data(), glyphs, base, &subtag);
+            if built.obj_count == 0 {
+                continue;
+            }
+            pdf.reserve(built.obj_count);
+            for (id, body) in built.objects {
+                pdf.put(id, body);
+            }
+            font_res.insert(*font_id, (format!("F{fi}"), built.font_obj_id));
+        }
+    });
+
+    // Build image XObjects (one per used media key).
+    let mut image_res: BTreeMap<String, (String, u32)> = BTreeMap::new();
+    for (ii, key) in used_images.iter().enumerate() {
+        let Some(bytes) = p.media.get(key) else {
+            continue;
+        };
+        let Some((iw, ih, filter, data)) = embed_image(bytes, opts.image_dpi, pt_w, pt_h) else {
+            continue;
+        };
+        let id = pdf.alloc();
+        let mut body = format!(
+            "<< /Type /XObject /Subtype /Image /Width {iw} /Height {ih} /ColorSpace /DeviceRGB \
+             /BitsPerComponent 8 /Filter /{filter} /Length {} >>\nstream\n",
+            data.len()
         )
-        .as_bytes(),
+        .into_bytes();
+        body.extend_from_slice(&data);
+        body.extend_from_slice(b"\nendstream");
+        pdf.put(id, obj_bytes(id, &body));
+        image_res.insert(key.clone(), (format!("Im{ii}"), id));
+    }
+
+    // Shared resources dictionary (fonts + images), referenced by every page.
+    let mut res = String::from("<< ");
+    if !font_res.is_empty() {
+        res.push_str("/Font << ");
+        for (name, id) in font_res.values() {
+            let _ = write!(res, "/{name} {id} 0 R ");
+        }
+        res.push_str(">> ");
+    }
+    if !image_res.is_empty() {
+        res.push_str("/XObject << ");
+        for (name, id) in image_res.values() {
+            let _ = write!(res, "/{name} {id} 0 R ");
+        }
+        res.push_str(">> ");
+    }
+    res.push_str(">>");
+
+    // Pass 2: serialize each page's content stream + page object.
+    let mut page_ids: Vec<u32> = Vec::new();
+    for page in &pages {
+        let content = serialize_page(page, pt_w, pt_h, &font_res, &image_res);
+        let zipped = flate(content.as_bytes());
+        let content_id = pdf.alloc();
+        let mut cbody = format!(
+            "<< /Length {} /Filter /FlateDecode >>\nstream\n",
+            zipped.len()
+        )
+        .into_bytes();
+        cbody.extend_from_slice(&zipped);
+        cbody.extend_from_slice(b"\nendstream");
+        pdf.put(content_id, obj_bytes(content_id, &cbody));
+
+        let page_id = pdf.alloc();
+        page_ids.push(page_id);
+        let page_dict = format!(
+            "<< /Type /Page /Parent {pages_id} 0 R /MediaBox [0 0 {} {}] /Resources {res} \
+             /Contents {content_id} 0 R >>",
+            fmt(pt_w),
+            fmt(pt_h)
+        );
+        pdf.put(page_id, obj_bytes(page_id, page_dict.as_bytes()));
+    }
+
+    // Catalog / Pages / Info.
+    pdf.put(
+        catalog,
+        obj_bytes(
+            catalog,
+            format!("<< /Type /Catalog /Pages {pages_id} 0 R >>").as_bytes(),
+        ),
     );
+    let kids: String = page_ids.iter().map(|id| format!("{id} 0 R ")).collect();
+    pdf.put(
+        pages_id,
+        obj_bytes(
+            pages_id,
+            format!(
+                "<< /Type /Pages /Kids [ {kids}] /Count {} >>",
+                page_ids.len()
+            )
+            .as_bytes(),
+        ),
+    );
+    let title = opts.title.as_deref().unwrap_or("HayateOffice presentation");
+    pdf.put(
+        info_id,
+        obj_bytes(
+            info_id,
+            format!(
+                "<< /Title ({}) /Producer (HayateOffice) /Creator (HayateOffice) >>",
+                pdf_text_escape(title)
+            )
+            .as_bytes(),
+        ),
+    );
+
+    pdf.finish(catalog, info_id)
+}
+
+/// Build the ordered draw ops for a slide scene, collecting per-font used glyphs along the way.
+fn build_page(
+    scene: &Scene,
+    opts: &PdfOptions,
+    font_glyphs: &mut BTreeMap<cosmic_text::fontdb::ID, BTreeMap<u16, String>>,
+) -> Page {
+    let mut ops = Vec::new();
+    for node in &scene.nodes {
+        let rot = node.rotation_deg;
+        match &node.prim {
+            Primitive::Quad {
+                bounds,
+                corner_radius,
+                fill,
+                stroke,
+            } => ops.push(Op::Rect {
+                b: *bounds,
+                radius: *corner_radius,
+                fill: solid(fill),
+                stroke: stroke.as_ref().map(strokepx),
+                rot,
+            }),
+            Primitive::Ellipse {
+                bounds,
+                fill,
+                stroke,
+            } => ops.push(Op::Ellipse {
+                b: *bounds,
+                fill: solid(fill),
+                stroke: stroke.as_ref().map(strokepx),
+                rot,
+            }),
+            Primitive::Line {
+                from,
+                to,
+                stroke,
+                start_arrow,
+                end_arrow,
+            } => {
+                if let Some((color, width)) = stroke.as_ref().map(strokepx) {
+                    ops.push(Op::Line {
+                        from: *from,
+                        to: *to,
+                        color,
+                        width,
+                        start_arrow: *start_arrow,
+                        end_arrow: *end_arrow,
+                    });
+                }
+            }
+            Primitive::Image { bounds, media_key } => ops.push(Op::Image {
+                b: *bounds,
+                key: media_key.clone(),
+                rot,
+            }),
+            Primitive::Text(tb) => {
+                let glyphs = shape_block(tb, opts.list_indent_em, font_glyphs);
+                if !glyphs.is_empty() {
+                    ops.push(Op::Glyphs(glyphs));
+                }
+            }
+        }
+    }
+    Page {
+        background: (scene.background.r, scene.background.g, scene.background.b),
+        ops,
+    }
+}
+
+/// Shape a text block with cosmic-text, returning positioned glyphs and recording the glyph ids
+/// each font needs (with a representative unicode string for the ToUnicode map).
+fn shape_block(
+    tb: &TextBlock,
+    indent_em: f32,
+    font_glyphs: &mut BTreeMap<cosmic_text::fontdb::ID, BTreeMap<u16, String>>,
+) -> Vec<Glyph> {
+    let mut out = Vec::new();
+    FONTS.with(|fs| {
+        let mut fs = fs.borrow_mut();
+        let bw = tb.bounds.w.max(1.0);
+        let mut para_top = tb.bounds.y;
+        for para in &tb.paragraphs {
+            let size = para
+                .runs
+                .iter()
+                .map(|r| r.size_px)
+                .fold(0.0, f32::max)
+                .max(1.0);
+            let line_height = size * 1.3;
+            let indent = size * (indent_em * para.bullet_level as f32);
+            let metrics = Metrics::new(size, line_height);
+
+            let bullet = match para.bullet_level {
+                0 => "",
+                1 => "\u{2022} ",
+                2 => "\u{25E6} ",
+                _ => "\u{25AA} ",
+            };
+            let mut spans: Vec<(&str, Attrs)> = Vec::new();
+            if !bullet.is_empty() {
+                let c = para
+                    .runs
+                    .first()
+                    .map(|r| r.color)
+                    .unwrap_or(hayate_ir::color::Rgba::rgb(0, 0, 0));
+                spans.push((
+                    bullet,
+                    Attrs::new()
+                        .metrics(metrics)
+                        .color(cosmic_text::Color::rgb(c.r, c.g, c.b)),
+                ));
+            }
+            for run in &para.runs {
+                if run.text.is_empty() {
+                    continue;
+                }
+                let mut a = Attrs::new()
+                    .family(Family::Name(&run.family))
+                    .metrics(metrics)
+                    .color(cosmic_text::Color::rgb(
+                        run.color.r,
+                        run.color.g,
+                        run.color.b,
+                    ));
+                if run.bold {
+                    a = a.weight(Weight::BOLD);
+                }
+                if run.italic {
+                    a = a.style(Style::Italic);
+                }
+                spans.push((run.text.as_str(), a));
+            }
+            if spans.is_empty() {
+                para_top += line_height;
+                continue;
+            }
+            let align = match para.align {
+                HAlign::Center => Some(cosmic_text::Align::Center),
+                HAlign::Right => Some(cosmic_text::Align::Right),
+                HAlign::Left | HAlign::Justify => None,
+            };
+            let mut buf = Buffer::new_empty(metrics);
+            buf.set_size(Some((bw - indent).max(1.0)), None);
+            buf.set_rich_text(spans, &Attrs::new(), Shaping::Advanced, align);
+            buf.shape_until_scroll(&mut fs, false);
+
+            for run in buf.layout_runs() {
+                for g in run.glyphs {
+                    let color = g.color_opt.map(|c| {
+                        let [r, gg, b, _] = c.as_rgba();
+                        (r, gg, b)
+                    });
+                    let text: String = run.text.get(g.start..g.end).unwrap_or("").to_string();
+                    font_glyphs
+                        .entry(g.font_id)
+                        .or_default()
+                        .entry(g.glyph_id)
+                        .or_insert(text.clone());
+                    out.push(Glyph {
+                        font_id: g.font_id,
+                        glyph_id: g.glyph_id,
+                        text,
+                        x: tb.bounds.x + indent + g.x,
+                        baseline_y: para_top + run.line_y,
+                        size: g.font_size,
+                        color: color.unwrap_or((0, 0, 0)),
+                    });
+                }
+            }
+            let rows = buf.layout_runs().count().max(1);
+            para_top += line_height * rows as f32;
+        }
+    });
     out
 }
 
-/// Format a coordinate with up to 3 decimals and no trailing zeros (PDF accepts plain decimals).
-fn fmt_num(v: f32) -> String {
-    let s = format!("{v:.3}");
+/// Serialize a page's ops into a PDF content stream. Scene coords are top-left/y-down; PDF is
+/// bottom-left/y-up, so y is flipped by `page_h`.
+fn serialize_page(
+    page: &Page,
+    page_w: f32,
+    page_h: f32,
+    font_res: &BTreeMap<cosmic_text::fontdb::ID, (String, u32)>,
+    image_res: &BTreeMap<String, (String, u32)>,
+) -> String {
+    let mut s = String::new();
+    // Background.
+    let (br, bg, bb) = page.background;
+    let _ = writeln!(
+        s,
+        "{} {} {} rg\n0 0 {} {} re\nf",
+        c(br),
+        c(bg),
+        c(bb),
+        fmt(page_w),
+        fmt(page_h)
+    );
+
+    for op in &page.ops {
+        match op {
+            Op::Rect {
+                b,
+                radius,
+                fill,
+                stroke,
+                rot,
+            } => {
+                let pre = rot_wrap(*rot, b, page_h);
+                s.push_str(&pre.0);
+                rect_path(&mut s, b, *radius, page_h);
+                paint_op(&mut s, fill, stroke);
+                s.push_str(&pre.1);
+            }
+            Op::Ellipse {
+                b,
+                fill,
+                stroke,
+                rot,
+            } => {
+                let pre = rot_wrap(*rot, b, page_h);
+                s.push_str(&pre.0);
+                ellipse_path(&mut s, b, page_h);
+                paint_op(&mut s, fill, stroke);
+                s.push_str(&pre.1);
+            }
+            Op::Line {
+                from,
+                to,
+                color,
+                width,
+                start_arrow,
+                end_arrow,
+            } => {
+                let (r, g, bl) = *color;
+                let _ = writeln!(
+                    s,
+                    "{} {} {} RG\n{} w\n{} {} m\n{} {} l\nS",
+                    c(r),
+                    c(g),
+                    c(bl),
+                    fmt(*width),
+                    fmt(from.0),
+                    fmt(page_h - from.1),
+                    fmt(to.0),
+                    fmt(page_h - to.1)
+                );
+                if *end_arrow {
+                    arrowhead(&mut s, *from, *to, *width, *color, page_h);
+                }
+                if *start_arrow {
+                    arrowhead(&mut s, *to, *from, *width, *color, page_h);
+                }
+            }
+            Op::Image { b, key, rot } => {
+                if let Some((name, _)) = image_res.get(key) {
+                    let pre = rot_wrap(*rot, b, page_h);
+                    s.push_str(&pre.0);
+                    // Map the unit image square onto the image rect (PDF y-up).
+                    let _ = writeln!(
+                        s,
+                        "q\n{} 0 0 {} {} {} cm\n/{name} Do\nQ",
+                        fmt(b.w),
+                        fmt(b.h),
+                        fmt(b.x),
+                        fmt(page_h - b.y - b.h),
+                        name = name
+                    );
+                    s.push_str(&pre.1);
+                }
+            }
+            Op::Glyphs(glyphs) => {
+                for g in glyphs {
+                    let Some((name, _)) = font_res.get(&g.font_id) else {
+                        continue;
+                    };
+                    let (r, gg, b) = g.color;
+                    let _ = writeln!(
+                        s,
+                        "BT\n{} {} {} rg\n/{name} {} Tf\n1 0 0 1 {} {} Tm\n<{:04X}> Tj\nET",
+                        c(r),
+                        c(gg),
+                        c(b),
+                        fmt(g.size),
+                        fmt(g.x),
+                        fmt(page_h - g.baseline_y),
+                        g.glyph_id,
+                        name = name
+                    );
+                }
+            }
+        }
+    }
+    s
+}
+
+/// `q`/cm prefix + `Q` suffix that rotates the node's content clockwise (screen sense) about its
+/// center. Returns ("", "") when `deg` is ~0.
+fn rot_wrap(deg: f32, b: &PxRect, page_h: f32) -> (String, String) {
+    if deg.abs() < 1e-3 {
+        return (String::new(), String::new());
+    }
+    let cx = b.x + b.w * 0.5;
+    let cy = page_h - (b.y + b.h * 0.5);
+    let phi = -deg.to_radians(); // screen-clockwise = negative angle in PDF (y-up)
+    let (s, co) = (phi.sin(), phi.cos());
+    let e = cx - cx * co + cy * s;
+    let f = cy - cx * s - cy * co;
+    (
+        format!(
+            "q\n{} {} {} {} {} {} cm\n",
+            fmt(co),
+            fmt(s),
+            fmt(-s),
+            fmt(co),
+            fmt(e),
+            fmt(f)
+        ),
+        "Q\n".to_string(),
+    )
+}
+
+/// Append a rectangle (optionally rounded) path in PDF coords.
+fn rect_path(s: &mut String, b: &PxRect, radius: f32, page_h: f32) {
+    let x0 = b.x;
+    let x1 = b.x + b.w;
+    let y0 = page_h - (b.y + b.h); // bottom
+    let y1 = page_h - b.y; // top
+    let r = radius.min(b.w * 0.5).min(b.h * 0.5).max(0.0);
+    if r <= 0.5 {
+        let _ = writeln!(s, "{} {} {} {} re", fmt(x0), fmt(y0), fmt(b.w), fmt(b.h));
+        return;
+    }
+    let k = r * 0.5523; // circle bezier constant
+    let _ = writeln!(s, "{} {} m", fmt(x0 + r), fmt(y0));
+    let _ = writeln!(s, "{} {} l", fmt(x1 - r), fmt(y0));
+    let _ = writeln!(
+        s,
+        "{} {} {} {} {} {} c",
+        fmt(x1 - r + k),
+        fmt(y0),
+        fmt(x1),
+        fmt(y0 + r - k),
+        fmt(x1),
+        fmt(y0 + r)
+    );
+    let _ = writeln!(s, "{} {} l", fmt(x1), fmt(y1 - r));
+    let _ = writeln!(
+        s,
+        "{} {} {} {} {} {} c",
+        fmt(x1),
+        fmt(y1 - r + k),
+        fmt(x1 - r + k),
+        fmt(y1),
+        fmt(x1 - r),
+        fmt(y1)
+    );
+    let _ = writeln!(s, "{} {} l", fmt(x0 + r), fmt(y1));
+    let _ = writeln!(
+        s,
+        "{} {} {} {} {} {} c",
+        fmt(x0 + r - k),
+        fmt(y1),
+        fmt(x0),
+        fmt(y1 - r + k),
+        fmt(x0),
+        fmt(y1 - r)
+    );
+    let _ = writeln!(s, "{} {} l", fmt(x0), fmt(y0 + r));
+    let _ = writeln!(
+        s,
+        "{} {} {} {} {} {} c",
+        fmt(x0),
+        fmt(y0 + r - k),
+        fmt(x0 + r - k),
+        fmt(y0),
+        fmt(x0 + r),
+        fmt(y0)
+    );
+    s.push_str("h\n");
+}
+
+/// Append an ellipse path (4 bezier arcs) inscribed in `b`, in PDF coords.
+fn ellipse_path(s: &mut String, b: &PxRect, page_h: f32) {
+    let rx = b.w * 0.5;
+    let ry = b.h * 0.5;
+    let cx = b.x + rx;
+    let cy = page_h - (b.y + ry);
+    let kx = rx * 0.5523;
+    let ky = ry * 0.5523;
+    let _ = writeln!(s, "{} {} m", fmt(cx + rx), fmt(cy));
+    let _ = writeln!(
+        s,
+        "{} {} {} {} {} {} c",
+        fmt(cx + rx),
+        fmt(cy + ky),
+        fmt(cx + kx),
+        fmt(cy + ry),
+        fmt(cx),
+        fmt(cy + ry)
+    );
+    let _ = writeln!(
+        s,
+        "{} {} {} {} {} {} c",
+        fmt(cx - kx),
+        fmt(cy + ry),
+        fmt(cx - rx),
+        fmt(cy + ky),
+        fmt(cx - rx),
+        fmt(cy)
+    );
+    let _ = writeln!(
+        s,
+        "{} {} {} {} {} {} c",
+        fmt(cx - rx),
+        fmt(cy - ky),
+        fmt(cx - kx),
+        fmt(cy - ry),
+        fmt(cx),
+        fmt(cy - ry)
+    );
+    let _ = writeln!(
+        s,
+        "{} {} {} {} {} {} c",
+        fmt(cx + kx),
+        fmt(cy - ry),
+        fmt(cx + rx),
+        fmt(cy - ky),
+        fmt(cx + rx),
+        fmt(cy)
+    );
+    s.push_str("h\n");
+}
+
+/// Emit the fill/stroke painting operator for the current path.
+fn paint_op(s: &mut String, fill: &Option<(u8, u8, u8)>, stroke: &Option<((u8, u8, u8), f32)>) {
+    if let Some((r, g, b)) = fill {
+        let _ = writeln!(s, "{} {} {} rg", c(*r), c(*g), c(*b));
+    }
+    if let Some(((r, g, b), w)) = stroke {
+        let _ = writeln!(s, "{} {} {} RG\n{} w", c(*r), c(*g), c(*b), fmt(*w));
+    }
+    match (fill.is_some(), stroke.is_some()) {
+        (true, true) => s.push_str("B\n"),
+        (true, false) => s.push_str("f\n"),
+        (false, true) => s.push_str("S\n"),
+        (false, false) => s.push_str("n\n"),
+    }
+}
+
+/// Draw a small filled arrowhead at `tip`, pointing away from `tail`.
+fn arrowhead(
+    s: &mut String,
+    tail: (f32, f32),
+    tip: (f32, f32),
+    width: f32,
+    color: (u8, u8, u8),
+    page_h: f32,
+) {
+    let dx = tip.0 - tail.0;
+    let dy = tip.1 - tail.1;
+    let len = (dx * dx + dy * dy).sqrt().max(1e-3);
+    let (ux, uy) = (dx / len, dy / len);
+    let size = (width * 3.5).max(6.0);
+    // Two barb points, rotated +/- ~25deg from the reverse direction.
+    let ang = 0.45_f32;
+    let (ca, sa) = (ang.cos(), ang.sin());
+    let bx = -ux;
+    let by = -uy;
+    let p1 = (
+        tip.0 + (bx * ca - by * sa) * size,
+        tip.1 + (bx * sa + by * ca) * size,
+    );
+    let p2 = (
+        tip.0 + (bx * ca + by * sa) * size,
+        tip.1 + (-bx * sa + by * ca) * size,
+    );
+    let (r, g, b) = color;
+    let _ = writeln!(
+        s,
+        "{} {} {} rg\n{} {} m\n{} {} l\n{} {} l\nf",
+        c(r),
+        c(g),
+        c(b),
+        fmt(tip.0),
+        fmt(page_h - tip.1),
+        fmt(p1.0),
+        fmt(page_h - p1.1),
+        fmt(p2.0),
+        fmt(page_h - p2.1)
+    );
+}
+
+/// Decode an embedded image to an image XObject payload: `(width, height, filter, data)`.
+/// JPEG is passed through as `DCTDecode`; other formats are decoded to RGB and `FlateDecode`d.
+/// Images larger than `image_dpi` over the page are downscaled to bound size.
+fn embed_image(
+    bytes: &[u8],
+    image_dpi: f32,
+    _pt_w: f32,
+    _pt_h: f32,
+) -> Option<(u32, u32, &'static str, Vec<u8>)> {
+    let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
+    let img = image::load_from_memory(bytes).ok()?;
+    let (mut w, mut h) = (img.width(), img.height());
+    if w == 0 || h == 0 {
+        return None;
+    }
+    // Cap dimensions to keep files reasonable (image_dpi over a ~13in page).
+    let max_dim = (image_dpi * 14.0).max(64.0) as u32;
+    if is_jpeg {
+        // Pass the original JPEG bytes through (no re-encode); DCTDecode handles it.
+        return Some((w, h, "DCTDecode", bytes.to_vec()));
+    }
+    let mut rgb = img.to_rgb8();
+    if w > max_dim || h > max_dim {
+        let scale = (max_dim as f32 / w as f32).min(max_dim as f32 / h as f32);
+        let nw = ((w as f32 * scale) as u32).max(1);
+        let nh = ((h as f32 * scale) as u32).max(1);
+        rgb = image::imageops::resize(&rgb, nw, nh, image::imageops::FilterType::Triangle);
+        w = nw;
+        h = nh;
+    }
+    Some((w, h, "FlateDecode", flate(rgb.as_raw())))
+}
+
+fn solid(fill: &Option<Paint>) -> Option<(u8, u8, u8)> {
+    match fill {
+        Some(Paint::Solid(c)) => Some((c.r, c.g, c.b)),
+        // A gradient is approximated by its start color (PDF shading is future work).
+        Some(Paint::Linear { from, .. }) => Some((from.r, from.g, from.b)),
+        None => None,
+    }
+}
+
+fn strokepx(s: &StrokePx) -> ((u8, u8, u8), f32) {
+    ((s.color.r, s.color.g, s.color.b), s.width.max(0.5))
+}
+
+/// Format a coordinate with up to 2 decimals, no trailing zeros.
+fn fmt(v: f32) -> String {
+    let s = format!("{v:.2}");
     let s = s.trim_end_matches('0').trim_end_matches('.');
     if s.is_empty() {
-        "0".to_string()
+        "0".into()
     } else {
-        s.to_string()
+        s.into()
     }
 }
 
-/// Wrap `data` in a minimal zlib stream using only stored (uncompressed) DEFLATE blocks.
-/// Mirrors the technique in [`crate::png`] but kept local so the PDF writer is self-contained.
-fn zlib_store(data: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(data.len() + data.len() / 0xFFFF * 5 + 16);
-    out.push(0x78); // CMF: deflate, 32K window
-    out.push(0x01); // FLG: fastest; check bits make the header %31 == 0
-    if data.is_empty() {
-        out.push(1);
-        out.extend_from_slice(&0u16.to_le_bytes());
-        out.extend_from_slice(&(!0u16).to_le_bytes());
-    } else {
-        let mut pos = 0usize;
-        while pos < data.len() {
-            let chunk = (data.len() - pos).min(0xFFFF);
-            let is_final = pos + chunk >= data.len();
-            out.push(if is_final { 1 } else { 0 }); // BFINAL bit, BTYPE = 00 (stored)
-            let len = chunk as u16;
-            out.extend_from_slice(&len.to_le_bytes());
-            out.extend_from_slice(&(!len).to_le_bytes());
-            out.extend_from_slice(&data[pos..pos + chunk]);
-            pos += chunk;
+/// Normalize an 8-bit channel to a 0..1 PDF color component.
+fn c(v: u8) -> String {
+    fmt(v as f32 / 255.0)
+}
+
+/// Escape a string for a PDF literal `( ... )`.
+fn pdf_text_escape(s: &str) -> String {
+    let mut out = String::new();
+    for ch in s.chars() {
+        match ch {
+            '(' | ')' | '\\' => {
+                out.push('\\');
+                out.push(ch);
+            }
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(ch),
         }
     }
-    out.extend_from_slice(&adler32(data).to_be_bytes());
     out
 }
 
-/// Adler-32 checksum (RFC 1950).
-fn adler32(data: &[u8]) -> u32 {
-    const MOD: u32 = 65521;
-    let mut a: u32 = 1;
-    let mut b: u32 = 0;
-    for &byte in data {
-        a = (a + byte as u32) % MOD;
-        b = (b + a) % MOD;
+/// Wrap a dictionary/stream `body` into a full PDF object `"N 0 obj\n...\nendobj\n"`.
+fn obj_bytes(id: u32, body: &[u8]) -> Vec<u8> {
+    let mut v = format!("{id} 0 obj\n").into_bytes();
+    v.extend_from_slice(body);
+    v.extend_from_slice(b"\nendobj\n");
+    v
+}
+
+/// Incremental PDF object writer that tracks ids and emits a correct xref table.
+struct PdfWriter {
+    objects: Vec<(u32, Vec<u8>)>,
+    next: u32,
+}
+
+impl PdfWriter {
+    fn new() -> Self {
+        PdfWriter {
+            objects: Vec::new(),
+            next: 1,
+        }
     }
-    (b << 16) | a
+    /// Allocate one object id.
+    fn alloc(&mut self) -> u32 {
+        let id = self.next;
+        self.next += 1;
+        id
+    }
+    /// The next id that would be allocated (without consuming it).
+    fn peek(&self) -> u32 {
+        self.next
+    }
+    /// Reserve `n` ids (used after an external builder consumed a block starting at `peek`).
+    fn reserve(&mut self, n: u32) {
+        self.next += n;
+    }
+    /// Store a fully-serialized object (the complete `"N 0 obj ... endobj\n"` bytes).
+    fn put(&mut self, id: u32, full: Vec<u8>) {
+        self.objects.push((id, full));
+    }
+    /// Serialize the whole document.
+    fn finish(mut self, catalog: u32, info: u32) -> Vec<u8> {
+        self.objects.sort_by_key(|(id, _)| *id);
+        let max_id = self.objects.iter().map(|(id, _)| *id).max().unwrap_or(0);
+        let mut out: Vec<u8> = Vec::new();
+        out.extend_from_slice(b"%PDF-1.7\n");
+        out.extend_from_slice(&[b'%', 0xE2, 0xE3, 0xCF, 0xD3, b'\n']);
+        let mut offsets = vec![0usize; (max_id + 1) as usize];
+        for (id, full) in &self.objects {
+            offsets[*id as usize] = out.len();
+            out.extend_from_slice(full);
+        }
+        let xref_pos = out.len();
+        out.extend_from_slice(format!("xref\n0 {}\n", max_id + 1).as_bytes());
+        out.extend_from_slice(b"0000000000 65535 f \n");
+        for id in 1..=max_id {
+            out.extend_from_slice(format!("{:010} 00000 n \n", offsets[id as usize]).as_bytes());
+        }
+        out.extend_from_slice(
+            format!(
+                "trailer\n<< /Size {} /Root {catalog} 0 R /Info {info} 0 R >>\nstartxref\n{xref_pos}\n%%EOF\n",
+                max_id + 1
+            )
+            .as_bytes(),
+        );
+        out
+    }
 }
 
 #[cfg(test)]
@@ -216,26 +935,20 @@ mod tests {
 
     #[test]
     fn exports_one_page_per_slide() {
-        let p = deck(3);
-        let pdf = export_pdf(&p, 1.0);
-        assert!(pdf.starts_with(b"%PDF-"), "has a PDF header");
-        assert!(count(&pdf, b"%%EOF") >= 1, "has an EOF marker");
-        assert_eq!(
-            count(&pdf, b"/Type /Page /Parent"),
-            3,
-            "one Page object per slide"
-        );
-        assert!(count(&pdf, b"/Subtype /Image") >= 3, "an image per slide");
+        let pdf = export_pdf(&deck(3), &PdfOptions::default());
+        assert!(pdf.starts_with(b"%PDF-"));
+        assert!(count(&pdf, b"%%EOF") >= 1);
+        assert_eq!(count(&pdf, b"/Type /Page /Parent"), 3);
         assert!(
             count(&pdf, b"/FlateDecode") >= 3,
-            "image streams are deflated"
+            "content streams are compressed"
         );
+        assert!(count(&pdf, b"/Info") >= 1, "has document metadata");
     }
 
     #[test]
-    fn empty_deck_is_still_valid() {
-        let p = deck(0);
-        let pdf = export_pdf(&p, 1.0);
+    fn empty_deck_is_valid() {
+        let pdf = export_pdf(&deck(0), &PdfOptions::default());
         assert!(pdf.starts_with(b"%PDF-"));
         assert!(count(&pdf, b"%%EOF") >= 1);
         assert!(count(&pdf, b"/Count 0") >= 1);
