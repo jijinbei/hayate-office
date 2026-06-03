@@ -1062,3 +1062,63 @@ fn shift_tab_outdents(cx: &mut TestAppContext) {
         1
     );
 }
+
+#[gpui::test]
+fn copy_paste_shape_core(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| s.add_rect());
+    let e = app.read_with(cx, |s, _| s.selection.unwrap());
+    let before = app.read_with(cx, |s, _| s.pres.children(s.slide).len());
+    app.update(cx, |s, _| s.copy_selection());
+    assert!(
+        app.read_with(cx, |s, _| s.clipboard.is_some()),
+        "copy stores the shape"
+    );
+    app.update(cx, |s, _| s.paste_clipboard());
+    let after = app.read_with(cx, |s, _| s.pres.children(s.slide).len());
+    assert_eq!(after, before + 1, "paste adds one shape");
+    let sel = app.read_with(cx, |s, _| s.selection.unwrap());
+    assert_ne!(sel, e, "pasted copy becomes the selection");
+}
+
+#[gpui::test]
+fn ctrl_c_ctrl_v_keys_paste(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| s.add_rect());
+    let before = app.read_with(cx, |s, _| s.pres.children(s.slide).len());
+    app.update(cx, |s, cx| s.on_key_down(&keydown("ctrl-c"), cx));
+    app.update(cx, |s, cx| s.on_key_down(&keydown("ctrl-v"), cx));
+    let after = app.read_with(cx, |s, _| s.pres.children(s.slide).len());
+    assert_eq!(after, before + 1, "Ctrl+C then Ctrl+V pastes a copy");
+}
+
+#[gpui::test]
+fn copy_paste_multi_makes_a_group(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // Select the first two sample shapes and copy both.
+    let (a, b) = app.read_with(cx, |s, _| {
+        let k = s.pres.children(s.slide);
+        (k[1], k[2])
+    });
+    let before = app.read_with(cx, |s, _| s.pres.children(s.slide).len());
+    app.update(cx, |s, _| {
+        s.selection = Some(a);
+        s.also = vec![b];
+        s.copy_selection();
+        s.paste_clipboard();
+    });
+    let after = app.read_with(cx, |s, _| s.pres.children(s.slide).len());
+    assert_eq!(after, before + 2, "pasting two shapes adds two");
+    // The two pasted copies share one (fresh) group key.
+    let (sel, also) = app.read_with(cx, |s, _| (s.selection.unwrap(), s.also.clone()));
+    let (g1, g2) = app.read_with(cx, |s, _| {
+        (
+            hayate_model::edit::outer_group(&s.pres.world, sel),
+            hayate_model::edit::outer_group(&s.pres.world, also[0]),
+        )
+    });
+    assert!(
+        g1.is_some() && g1 == g2,
+        "pasted multi-selection forms one group"
+    );
+}

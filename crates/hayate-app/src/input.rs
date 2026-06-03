@@ -628,7 +628,12 @@ impl HayateApp {
             }
             "c" if cmd => self.copy_selection(),
             "v" if cmd => {
-                if !self.paste_clipboard_image(cx) {
+                // Prefer an in-app copied shape so Ctrl+C/Ctrl+V of objects is reliable and is
+                // never hijacked by a stale system-clipboard image (or a slow wl-paste call).
+                // Only reach for a system-clipboard image when nothing was copied in-app.
+                if self.clipboard.is_some() {
+                    self.paste_clipboard();
+                } else if !self.paste_clipboard_image(cx) {
                     self.paste_clipboard();
                 }
                 cx.notify();

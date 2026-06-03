@@ -186,7 +186,8 @@ struct HayateApp {
     /// Active resize-by-handle drag, if any.
     resize: Option<ResizeDrag>,
     /// Copied shape components (Ctrl+C / Ctrl+V).
-    clipboard: Option<Vec<CompValue>>,
+    /// Copied shapes' components (Ctrl+C / Ctrl+V), one inner Vec per shape.
+    clipboard: Option<Vec<Vec<CompValue>>>,
     /// In-canvas text editing state, if any.
     text_edit: Option<TextEdit>,
     /// Additional selected entities (besides `selection`) for multi-select align.

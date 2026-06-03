@@ -924,8 +924,18 @@ impl HayateApp {
         }
     }
 
+    /// Copy every selected shape (primary + multi-selection / group) to the in-app clipboard.
     pub(crate) fn copy_selection(&mut self) {
-        self.clipboard = self.selection.map(|e| self.pres.world.components_of(e));
+        let sel = self.selected_all();
+        self.clipboard = if sel.is_empty() {
+            None
+        } else {
+            Some(
+                sel.iter()
+                    .map(|e| self.pres.world.components_of(*e))
+                    .collect(),
+            )
+        };
     }
 
     /// Try to paste an image from the system clipboard. If the clipboard holds an image entry,
@@ -974,40 +984,61 @@ impl HayateApp {
     }
 
     pub(crate) fn paste_clipboard(&mut self) {
-        let Some(comps) = self.clipboard.clone() else {
+        let Some(shapes) = self.clipboard.clone() else {
             return;
         };
-        let order = {
+        if shapes.is_empty() {
+            return;
+        }
+        const OFFSET: i64 = 182_880; // ~0.2 inch, so the copy is visibly nudged
+                                     // A multi-shape paste forms a fresh group so the copies stay together.
+        let group_key = (shapes.len() > 1).then(|| self.pres.world.reserve_id().0);
+        let mut order = {
             let kids = self.pres.children(self.container());
-            let last = kids.last().and_then(|e| self.pres.world.order.get(e));
-            FracIndex::after(last)
+            FracIndex::after(kids.last().and_then(|e| self.pres.world.order.get(e)))
         };
-        let ne = self.pres.world.reserve_id();
-        let mut ops = vec![Operation::Spawn { entity: ne }];
-        for comp in comps {
-            let comp = match comp {
-                CompValue::Frame(f) => CompValue::Frame(RectEmu {
-                    origin: PointEmu::new(f.origin.x + 182_880, f.origin.y + 182_880),
-                    size: f.size,
-                }),
-                other => other,
-            };
+        let mut ops = Vec::new();
+        let mut new_ids: Vec<Entity> = Vec::new();
+        for comps in shapes {
+            let ne = self.pres.world.reserve_id();
+            new_ids.push(ne);
+            ops.push(Operation::Spawn { entity: ne });
+            for comp in comps {
+                match comp {
+                    // Parent/Order/Group are assigned explicitly below.
+                    CompValue::Parent(_) | CompValue::Order(_) | CompValue::Group(_) => {}
+                    CompValue::Frame(f) => ops.push(Operation::SetComponent {
+                        entity: ne,
+                        value: CompValue::Frame(RectEmu {
+                            origin: PointEmu::new(f.origin.x + OFFSET, f.origin.y + OFFSET),
+                            size: f.size,
+                        }),
+                    }),
+                    other => ops.push(Operation::SetComponent {
+                        entity: ne,
+                        value: other,
+                    }),
+                }
+            }
             ops.push(Operation::SetComponent {
                 entity: ne,
-                value: comp,
+                value: CompValue::Parent(self.container()),
             });
+            ops.push(Operation::SetComponent {
+                entity: ne,
+                value: CompValue::Order(order.clone()),
+            });
+            if let Some(k) = group_key {
+                ops.push(Operation::SetComponent {
+                    entity: ne,
+                    value: CompValue::Group(vec![k]),
+                });
+            }
+            order = FracIndex::after(Some(&order));
         }
-        // Ensure it lands on the current container, appended in order.
-        ops.push(Operation::SetComponent {
-            entity: ne,
-            value: CompValue::Parent(self.container()),
-        });
-        ops.push(Operation::SetComponent {
-            entity: ne,
-            value: CompValue::Order(order),
-        });
         self.commit_tx(Transaction::new("paste", ops));
-        self.selection = Some(ne);
+        self.selection = new_ids.first().copied();
+        self.also = new_ids.into_iter().skip(1).collect();
     }
 }
 
