@@ -142,11 +142,22 @@ impl HayateApp {
                             cx.notify();
                         },
                     ))
-                    .child(menu_divider())
-                    .child(menu_item("m_delete", "Delete", cx, |t, _w, cx| {
-                        t.delete_selection();
-                        cx.notify();
-                    }));
+                    .child(menu_divider());
+                if self.selection_is_slide_placeholder() {
+                    menu = menu.child(menu_item(
+                        "m_reset_ph",
+                        "Reset to Layout",
+                        cx,
+                        |t, _w, cx| {
+                            t.reset_selected_placeholder();
+                            cx.notify();
+                        },
+                    ));
+                }
+                menu = menu.child(menu_item("m_delete", "Delete", cx, |t, _w, cx| {
+                    t.delete_selection();
+                    cx.notify();
+                }));
             }
             MenuTarget::Slide => {
                 menu = menu

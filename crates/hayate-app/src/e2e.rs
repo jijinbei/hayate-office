@@ -861,3 +861,80 @@ fn delete_layout_in_use_is_refused(cx: &mut TestAppContext) {
         "in-use layout kept"
     );
 }
+
+#[gpui::test]
+fn promote_and_reset_inherited_placeholder(cx: &mut TestAppContext) {
+    use hayate_ir::doc::{PlaceholderRef, PlaceholderType};
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // Define a Title placeholder on the slide's layout (inherited by the slide).
+    app.update(cx, |s, _| s.add_layout_placeholder(PlaceholderType::Title));
+    let slide = app.read_with(cx, |s, _| s.slide);
+    let title = PlaceholderRef {
+        ph_type: PlaceholderType::Title,
+        idx: 0,
+    };
+    // Inherited frame resolves from the layout; no slide-level override yet.
+    assert!(app.read_with(cx, |s, _| s.pres.find_placeholder(slide, title).is_none()));
+
+    let before = app.read_with(cx, |s, _| s.pres.children(slide).len());
+    app.update(cx, |s, _| s.promote_and_edit(title));
+    assert_eq!(
+        app.read_with(cx, |s, _| s.pres.children(slide).len()),
+        before + 1,
+        "promote creates a slide-level override"
+    );
+    assert!(
+        app.read_with(cx, |s, _| s.text_edit.is_some()),
+        "editing starts"
+    );
+    assert!(app.read_with(cx, |s, _| s.selection_is_slide_placeholder()));
+
+    // Reset removes the override; the placeholder falls back to the layout.
+    app.update(cx, |s, _| {
+        s.text_edit = None;
+        s.reset_selected_placeholder();
+    });
+    assert_eq!(
+        app.read_with(cx, |s, _| s.pres.children(slide).len()),
+        before,
+        "reset removes the override"
+    );
+    assert!(app.read_with(cx, |s, _| s.pres.find_placeholder(slide, title).is_none()));
+}
+
+#[gpui::test]
+fn clicking_empty_inherited_placeholder_promotes(cx: &mut TestAppContext) {
+    use hayate_ir::doc::{PlaceholderRef, PlaceholderType};
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // Start from an empty slide so a click lands on the placeholder, not sample content.
+    app.update(cx, |s, _| {
+        let kids = s.pres.children(s.slide);
+        for e in kids {
+            s.pres.world.despawn(e);
+        }
+        s.add_layout_placeholder(PlaceholderType::Title);
+        s.rebuild();
+    });
+    let slide = app.read_with(cx, |s, _| s.slide);
+    let title = PlaceholderRef {
+        ph_type: PlaceholderType::Title,
+        idx: 0,
+    };
+    // A point near the centre of the inherited Title frame, in canvas px.
+    let (px_x, px_y) = app.read_with(cx, |s, _| {
+        let fr = s.pres.ph_frame(slide, title).unwrap();
+        let sc = s.scale();
+        (
+            ((fr.origin.x + fr.size.w / 2) as f64 * sc) as f32,
+            ((fr.origin.y + fr.size.h / 2) as f64 * sc) as f32,
+        )
+    });
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, px_x, px_y), cx)
+    });
+    assert!(
+        app.read_with(cx, |s, _| s.selection_is_slide_placeholder()
+            && s.text_edit.is_some()),
+        "clicking the inherited placeholder promotes it and starts editing"
+    );
+}

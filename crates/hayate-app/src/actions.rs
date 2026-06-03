@@ -362,6 +362,40 @@ impl HayateApp {
         self.commit_tx(tx);
     }
 
+    /// Promote an inherited placeholder to an editable slide-level override and start editing it.
+    /// Used when the user clicks an inherited placeholder/prompt on a slide.
+    pub(crate) fn promote_and_edit(&mut self, ph: hayate_ir::doc::PlaceholderRef) {
+        let reserved = self.pres.world.reserve_id();
+        let order = self.append_order();
+        if let Some(tx) = edit::promote_placeholder(&self.pres, self.slide, ph, reserved, order) {
+            self.commit_tx(tx);
+            self.selection = Some(reserved);
+            self.also.clear();
+            self.begin_text_edit(reserved);
+        }
+    }
+
+    /// Whether the selected entity is a slide-level placeholder override (eligible for reset).
+    pub(crate) fn selection_is_slide_placeholder(&self) -> bool {
+        self.selection.is_some_and(|e| {
+            self.pres.world.placeholders.contains_key(&e)
+                && self.pres.world.parent.get(&e) == Some(&self.slide)
+        })
+    }
+
+    /// Remove the selected slide-level placeholder override so it falls back to the layout/master.
+    pub(crate) fn reset_selected_placeholder(&mut self) {
+        if let Some(e) = self.selection {
+            if self.selection_is_slide_placeholder() {
+                self.commit_tx(Transaction::new(
+                    "reset placeholder",
+                    vec![Operation::Despawn { entity: e }],
+                ));
+                self.selection = None;
+            }
+        }
+    }
+
     /// Align the current multi-selection using a registry command.
     pub(crate) fn align(&mut self, cmd_id: &str) {
         let ids: Vec<u64> = self.selected_all().iter().map(|e| e.0).collect();

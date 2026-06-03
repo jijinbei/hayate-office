@@ -50,6 +50,38 @@ impl HayateApp {
                 return;
             }
         }
+        // Click an inherited placeholder/prompt on a slide: promote it to an editable slide-level
+        // override and start typing. Inherited placeholders are display-only (no scene `source`),
+        // so they are not found by `hit_test`; test their resolved bounds directly.
+        // Only when no real shape is under the cursor, so on-slide content wins over a template
+        // placeholder beneath it.
+        if self.scope.is_slide() && hit_test(&self.scene, x, y).is_none() {
+            let scale = self.scale();
+            if scale > 0.0 {
+                let ex = (x as f64 / scale) as i64;
+                let ey = (y as f64 / scale) as i64;
+                for ph in self.pres.effective_placeholders(self.slide) {
+                    if self.pres.find_placeholder(self.slide, ph).is_some() {
+                        continue; // already overridden on the slide (hit-tested normally)
+                    }
+                    if let Some(fr) = self.pres.ph_frame(self.slide, ph) {
+                        let (x0, x1) = (
+                            fr.origin.x.min(fr.origin.x + fr.size.w),
+                            fr.origin.x.max(fr.origin.x + fr.size.w),
+                        );
+                        let (y0, y1) = (
+                            fr.origin.y.min(fr.origin.y + fr.size.h),
+                            fr.origin.y.max(fr.origin.y + fr.size.h),
+                        );
+                        if ex >= x0 && ex <= x1 && ey >= y0 && ey <= y1 {
+                            self.promote_and_edit(ph);
+                            cx.notify();
+                            return;
+                        }
+                    }
+                }
+            }
+        }
         // Grab a line endpoint? A line is moved by its two endpoints, which lets it point in any
         // direction (the frame size may become negative).
         if let Some(sel) = self.selection {
