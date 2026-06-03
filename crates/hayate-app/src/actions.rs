@@ -991,8 +991,6 @@ impl HayateApp {
             return;
         }
         const OFFSET: i64 = 182_880; // ~0.2 inch, so the copy is visibly nudged
-                                     // A multi-shape paste forms a fresh group so the copies stay together.
-        let group_key = (shapes.len() > 1).then(|| self.pres.world.reserve_id().0);
         let mut order = {
             let kids = self.pres.children(self.container());
             FracIndex::after(kids.last().and_then(|e| self.pres.world.order.get(e)))
@@ -1005,7 +1003,8 @@ impl HayateApp {
             ops.push(Operation::Spawn { entity: ne });
             for comp in comps {
                 match comp {
-                    // Parent/Order/Group are assigned explicitly below.
+                    // Parent/Order assigned explicitly below; Group is dropped so the copies are
+                    // independent (no new group is formed on paste).
                     CompValue::Parent(_) | CompValue::Order(_) | CompValue::Group(_) => {}
                     CompValue::Frame(f) => ops.push(Operation::SetComponent {
                         entity: ne,
@@ -1028,12 +1027,6 @@ impl HayateApp {
                 entity: ne,
                 value: CompValue::Order(order.clone()),
             });
-            if let Some(k) = group_key {
-                ops.push(Operation::SetComponent {
-                    entity: ne,
-                    value: CompValue::Group(vec![k]),
-                });
-            }
             order = FracIndex::after(Some(&order));
         }
         self.commit_tx(Transaction::new("paste", ops));

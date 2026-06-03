@@ -1093,7 +1093,7 @@ fn ctrl_c_ctrl_v_keys_paste(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn copy_paste_multi_makes_a_group(cx: &mut TestAppContext) {
+fn copy_paste_multi_adds_both_ungrouped(cx: &mut TestAppContext) {
     let app = cx.new(|cx| HayateApp::new(cx));
     // Select the first two sample shapes and copy both.
     let (a, b) = app.read_with(cx, |s, _| {
@@ -1109,8 +1109,9 @@ fn copy_paste_multi_makes_a_group(cx: &mut TestAppContext) {
     });
     let after = app.read_with(cx, |s, _| s.pres.children(s.slide).len());
     assert_eq!(after, before + 2, "pasting two shapes adds two");
-    // The two pasted copies share one (fresh) group key.
+    // Both copies are selected and ungrouped (paste forms no new group).
     let (sel, also) = app.read_with(cx, |s, _| (s.selection.unwrap(), s.also.clone()));
+    assert_eq!(also.len(), 1, "both copies are selected");
     let (g1, g2) = app.read_with(cx, |s, _| {
         (
             hayate_model::edit::outer_group(&s.pres.world, sel),
@@ -1118,7 +1119,7 @@ fn copy_paste_multi_makes_a_group(cx: &mut TestAppContext) {
         )
     });
     assert!(
-        g1.is_some() && g1 == g2,
-        "pasted multi-selection forms one group"
+        g1.is_none() && g2.is_none(),
+        "pasted copies are not grouped"
     );
 }
