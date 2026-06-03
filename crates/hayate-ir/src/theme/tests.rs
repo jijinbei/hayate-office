@@ -34,12 +34,30 @@ fn resolve_token_with_transform() {
 
 #[test]
 fn font_picks_script_slot() {
-    let t = Theme::default();
+    // Use distinct families per script so the slot-selection mechanism is exercised
+    // independently of the default theme's font choice.
+    let mut t = Theme::default();
+    t.fonts.minor = ScriptFonts {
+        latin: "LatinFace".into(),
+        ea: "EaFace".into(),
+        cs: "CsFace".into(),
+    };
     let body = FontRef::Theme(ThemeFontSlot::Minor);
-    assert_eq!(t.font_family(&body, Script::Latin), "DejaVu Sans");
-    assert_eq!(t.font_family(&body, Script::Ea), "Noto Sans CJK JP");
+    assert_eq!(t.font_family(&body, Script::Latin), "LatinFace");
+    assert_eq!(t.font_family(&body, Script::Ea), "EaFace");
+    assert_eq!(t.font_family(&body, Script::Cs), "CsFace");
     assert_eq!(
         t.font_family(&FontRef::Family("Mincho".into()), Script::Latin),
         "Mincho"
     );
+}
+
+#[test]
+fn default_uses_one_family_for_all_scripts() {
+    // The default theme uses a single family across scripts so list bullets stay a consistent
+    // size regardless of whether a line contains CJK.
+    let t = Theme::default();
+    let body = FontRef::Theme(ThemeFontSlot::Minor);
+    assert_eq!(t.font_family(&body, Script::Latin), "Noto Sans CJK JP");
+    assert_eq!(t.font_family(&body, Script::Ea), "Noto Sans CJK JP");
 }

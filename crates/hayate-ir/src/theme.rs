@@ -156,13 +156,14 @@ impl Default for Theme {
                 hlink: Rgba::rgb(0x00, 0x00, 0xEE),
                 fol_hlink: Rgba::rgb(0x80, 0x00, 0x80),
             },
-            // Use family names the platform font systems actually register, so a requested
-            // bold weight resolves to a real bold face (gpui/font-kit does not synthesize bold).
-            // "Arial"/"Noto Sans JP" were not found on Linux, so bold silently fell back to a
-            // regular face on screen while the PDF (cosmic-text, fuzzy match) rendered bold.
+            // One family for every script. Noto Sans CJK JP covers Latin + CJK and ships a real
+            // Bold face, so bold resolves on screen (gpui/font-kit does not synthesize bold) and
+            // matches the PDF. Using a single family also keeps list bullets a consistent size:
+            // the bullet glyph no longer depends on whether a line happens to contain CJK (which
+            // used to switch the resolved family, and thus the bullet's font/size, per line).
             fonts: FontScheme {
-                major: mk("DejaVu Sans", "Noto Sans CJK JP"),
-                minor: mk("DejaVu Sans", "Noto Sans CJK JP"),
+                major: mk("Noto Sans CJK JP", "Noto Sans CJK JP"),
+                minor: mk("Noto Sans CJK JP", "Noto Sans CJK JP"),
             },
         }
     }
