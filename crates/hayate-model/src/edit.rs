@@ -196,6 +196,132 @@ pub fn create_placeholder(
     Transaction::new("create placeholder", ops)
 }
 
+/// A standard slide layout, mirroring the common PowerPoint/OnlyOffice set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LayoutPreset {
+    TitleSlide,
+    TitleAndContent,
+    SectionHeader,
+    TwoContent,
+    TitleOnly,
+    Blank,
+}
+
+/// One placeholder a preset defines: where it sits and how its prompt text looks.
+#[derive(Clone, Copy, Debug)]
+pub struct PlaceholderSpec {
+    pub ph: PlaceholderRef,
+    pub frame: RectEmu,
+    pub label: &'static str,
+    pub slot: ThemeFontSlot,
+    pub size_pt: i64,
+    pub bold: bool,
+}
+
+impl LayoutPreset {
+    /// A human-friendly default name for the preset.
+    pub fn name(self) -> &'static str {
+        match self {
+            LayoutPreset::TitleSlide => "Title Slide",
+            LayoutPreset::TitleAndContent => "Title and Content",
+            LayoutPreset::SectionHeader => "Section Header",
+            LayoutPreset::TwoContent => "Two Content",
+            LayoutPreset::TitleOnly => "Title Only",
+            LayoutPreset::Blank => "Blank",
+        }
+    }
+}
+
+/// The placeholders a preset defines, with frames scaled to `slide_size` so presets adapt to
+/// any aspect ratio. Frames use fractions of the slide so 4:3 and 16:9 both look reasonable.
+pub fn preset_placeholders(
+    preset: LayoutPreset,
+    slide_size: hayate_ir::geom::SizeEmu,
+) -> Vec<PlaceholderSpec> {
+    use hayate_ir::doc::PlaceholderType as PT;
+    let (w, h) = (slide_size.w as f64, slide_size.h as f64);
+    // Rect from fractional (x, y, w, h) of the slide.
+    let r = |fx: f64, fy: f64, fw: f64, fh: f64| {
+        RectEmu::new(
+            (w * fx) as i64,
+            (h * fy) as i64,
+            (w * fw) as i64,
+            (h * fh) as i64,
+        )
+    };
+    let title = |idx, frame, label, size, bold| PlaceholderSpec {
+        ph: PlaceholderRef {
+            ph_type: PT::Title,
+            idx,
+        },
+        frame,
+        label,
+        slot: ThemeFontSlot::Major,
+        size_pt: size,
+        bold,
+    };
+    let ctitle = |frame, label, size| PlaceholderSpec {
+        ph: PlaceholderRef {
+            ph_type: PT::CenteredTitle,
+            idx: 0,
+        },
+        frame,
+        label,
+        slot: ThemeFontSlot::Major,
+        size_pt: size,
+        bold: true,
+    };
+    let sub = |frame, label| PlaceholderSpec {
+        ph: PlaceholderRef {
+            ph_type: PT::Subtitle,
+            idx: 0,
+        },
+        frame,
+        label,
+        slot: ThemeFontSlot::Minor,
+        size_pt: 24,
+        bold: false,
+    };
+    let body = |idx, frame| PlaceholderSpec {
+        ph: PlaceholderRef {
+            ph_type: PT::Body,
+            idx,
+        },
+        frame,
+        label: "Click to add text",
+        slot: ThemeFontSlot::Minor,
+        size_pt: 24,
+        bold: false,
+    };
+    match preset {
+        LayoutPreset::TitleSlide => vec![
+            ctitle(r(0.08, 0.35, 0.84, 0.18), "Click to add title", 44),
+            sub(r(0.08, 0.56, 0.84, 0.12), "Click to add subtitle"),
+        ],
+        LayoutPreset::TitleAndContent => vec![
+            title(0, r(0.05, 0.04, 0.90, 0.15), "Click to add title", 40, true),
+            body(0, r(0.05, 0.22, 0.90, 0.72)),
+        ],
+        LayoutPreset::SectionHeader => vec![
+            ctitle(r(0.08, 0.40, 0.84, 0.16), "Click to add section title", 40),
+            sub(r(0.08, 0.58, 0.84, 0.10), "Click to add text"),
+        ],
+        LayoutPreset::TwoContent => vec![
+            title(0, r(0.05, 0.04, 0.90, 0.15), "Click to add title", 40, true),
+            body(0, r(0.05, 0.22, 0.43, 0.72)),
+            body(1, r(0.52, 0.22, 0.43, 0.72)),
+        ],
+        LayoutPreset::TitleOnly => vec![title(
+            0,
+            r(0.05, 0.04, 0.90, 0.15),
+            "Click to add title",
+            40,
+            true,
+        )],
+        LayoutPreset::Blank => Vec::new(),
+    }
+}
+
 /// Rebase `slide` onto a different `layout` by setting its `SlideInfo`.
 pub fn set_slide_layout(slide: Entity, layout: Entity) -> Transaction {
     Transaction::new(

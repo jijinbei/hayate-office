@@ -607,3 +607,30 @@ fn add_entrance_creates_step_appends_second_and_undoes() {
     assert!(h.undo(&mut w));
     assert!(w.timelines.get(&slide).is_none());
 }
+
+#[test]
+fn preset_placeholders_shapes() {
+    use hayate_ir::doc::PlaceholderType as PT;
+    use hayate_ir::geom::SizeEmu;
+    use hayate_ir::units::inch_f;
+    let size = SizeEmu::new(inch_f(13.333), inch_f(7.5));
+
+    // Title and Content yields a Title plus one Body, vertically non-overlapping.
+    let tc = preset_placeholders(LayoutPreset::TitleAndContent, size);
+    assert_eq!(tc.len(), 2);
+    let title = tc.iter().find(|s| s.ph.ph_type == PT::Title).unwrap();
+    let body = tc.iter().find(|s| s.ph.ph_type == PT::Body).unwrap();
+    assert!(
+        title.frame.origin.y + title.frame.size.h <= body.frame.origin.y,
+        "title sits above body"
+    );
+
+    // Two Content yields two Body placeholders with distinct idx, side by side.
+    let two = preset_placeholders(LayoutPreset::TwoContent, size);
+    let bodies: Vec<_> = two.iter().filter(|s| s.ph.ph_type == PT::Body).collect();
+    assert_eq!(bodies.len(), 2);
+    assert_ne!(bodies[0].ph.idx, bodies[1].ph.idx);
+
+    // Blank defines nothing.
+    assert!(preset_placeholders(LayoutPreset::Blank, size).is_empty());
+}
