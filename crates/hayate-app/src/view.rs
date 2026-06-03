@@ -124,50 +124,111 @@ impl Render for HayateApp {
 
                 paint_scene(&scene, o, &media, window, cx);
 
-                // Text-edit caret + selection highlight.
+                // Text-edit caret + selection highlight. The edit buffer's byte offsets span all
+                // lines (paragraphs joined by '\n'), so map an offset to its paragraph/line, then
+                // place the caret on that row accounting for the bullet indent and glyph.
                 if let Some((ent, sel)) = &caret {
                     if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(*ent)) {
                         if let Primitive::Text(tb) = &node.prim {
-                            if let Some((para, run0)) = tb
-                                .paragraphs
-                                .first()
-                                .and_then(|p| p.runs.first().map(|r| (p, r)))
-                            {
-                                let font_size =
-                                    px(para.runs.iter().map(|r| r.size_px).fold(0.0, f32::max));
-                                let line_height = font_size * 1.3;
-                                // Pixel x of a byte offset into the first run (shaped prefix width).
-                                let x_at = |upto_byte: usize, window: &mut Window| -> f32 {
-                                    let upto = upto_byte.min(run0.text.len());
-                                    if upto == 0 {
-                                        return 0.0;
+                            if !tb.paragraphs.is_empty() {
+                                // (paragraph index, x in px, y top in px, line height) for a byte.
+                                let mut pos_of = |byte: usize, window: &mut Window| {
+                                    // Locate the paragraph and local byte offset.
+                                    let mut start = 0usize;
+                                    let mut pi = 0usize;
+                                    let mut local = 0usize;
+                                    for (i, para) in tb.paragraphs.iter().enumerate() {
+                                        let len: usize =
+                                            para.runs.iter().map(|r| r.text.len()).sum();
+                                        pi = i;
+                                        if byte <= start + len {
+                                            local = byte - start;
+                                            break;
+                                        }
+                                        local = len;
+                                        start += len + 1; // + newline
                                     }
-                                    let prefix = &run0.text[..upto];
-                                    let trun = TextRun {
-                                        len: prefix.len(),
-                                        font: run_font(run0),
-                                        color: hsla_of(run0.color),
-                                        background_color: None,
-                                        underline: None,
-                                        strikethrough: None,
+                                    let para = &tb.paragraphs[pi];
+                                    let fs_of = |p: &hayate_render::scene::ResolvedParagraph| {
+                                        p.runs
+                                            .iter()
+                                            .map(|r| r.size_px)
+                                            .fold(0.0, f32::max)
+                                            .max(1.0)
                                     };
-                                    let shaped = window.text_system().shape_line(
-                                        SharedString::from(prefix.to_string()),
-                                        font_size,
-                                        &[trun],
-                                        None,
+                                    let font_size = px(fs_of(para));
+                                    // y = sum of preceding paragraph line heights (one row each).
+                                    let mut y = px(tb.bounds.y);
+                                    for p in &tb.paragraphs[..pi] {
+                                        y += px(fs_of(p) * 1.3);
+                                    }
+                                    let indent = font_size * (1.2 * para.bullet_level as f32);
+                                    let style = para.runs.first();
+                                    let font = style
+                                        .map(run_font)
+                                        .unwrap_or_else(|| gpui::font("sans-serif"));
+                                    let color = hsla_of(
+                                        style
+                                            .map(|r| r.color)
+                                            .unwrap_or(hayate_ir::color::Rgba::rgb(0, 0, 0)),
                                     );
-                                    f32::from(shaped.width)
+                                    let shape_w = |s: &str, window: &mut Window| -> f32 {
+                                        if s.is_empty() {
+                                            return 0.0;
+                                        }
+                                        let trun = TextRun {
+                                            len: s.len(),
+                                            font: font.clone(),
+                                            color,
+                                            background_color: None,
+                                            underline: None,
+                                            strikethrough: None,
+                                        };
+                                        f32::from(
+                                            window
+                                                .text_system()
+                                                .shape_line(
+                                                    SharedString::from(s.to_string()),
+                                                    font_size,
+                                                    &[trun],
+                                                    None,
+                                                )
+                                                .width,
+                                        )
+                                    };
+                                    let bullet_w = if para.bullet_level > 0 {
+                                        let glyph = match para.bullet_level {
+                                            1 => "\u{2022} ",
+                                            2 => "\u{25E6} ",
+                                            _ => "\u{25AA} ",
+                                        };
+                                        shape_w(glyph, window)
+                                    } else {
+                                        0.0
+                                    };
+                                    let line_text: String =
+                                        para.runs.iter().map(|r| r.text.as_str()).collect();
+                                    let upto = local.min(line_text.len());
+                                    let text_x = shape_w(&line_text[..upto], window);
+                                    (
+                                        pi,
+                                        f32::from(indent) + bullet_w + text_x,
+                                        y,
+                                        font_size * 1.3,
+                                    )
                                 };
-                                let x0 = x_at(sel.start, window);
-                                let x1 = x_at(sel.end, window);
-                                let top = o.y + px(tb.bounds.y);
-                                // Selection highlight when the range is non-empty.
-                                if (x1 - x0).abs() > 0.5 {
+
+                                let (pi_e, x1, y_e, lh) = pos_of(sel.end, window);
+                                let (pi_s, x0, _y_s, _) = pos_of(sel.start, window);
+                                // Same-line selection highlight.
+                                if pi_s == pi_e && (x1 - x0).abs() > 0.5 {
                                     window.paint_quad(quad(
                                         Bounds {
-                                            origin: point(o.x + px(tb.bounds.x + x0.min(x1)), top),
-                                            size: size(px((x1 - x0).abs()), line_height),
+                                            origin: point(
+                                                o.x + px(tb.bounds.x) + px(x0.min(x1)),
+                                                o.y + y_e,
+                                            ),
+                                            size: size(px((x1 - x0).abs()), lh),
                                         },
                                         px(0.),
                                         Background::from(gpui::rgba(0x1166DD55)),
@@ -176,11 +237,11 @@ impl Render for HayateApp {
                                         Default::default(),
                                     ));
                                 }
-                                // Caret bar at the selection end (the insertion point).
+                                // Caret bar at the insertion point.
                                 window.paint_quad(quad(
                                     Bounds {
-                                        origin: point(o.x + px(tb.bounds.x + x1), top),
-                                        size: size(px(2.0), line_height),
+                                        origin: point(o.x + px(tb.bounds.x) + px(x1), o.y + y_e),
+                                        size: size(px(2.0), lh),
                                     },
                                     px(0.),
                                     Background::from(rgb(0x1166DD)),
