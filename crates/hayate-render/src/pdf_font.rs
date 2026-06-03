@@ -115,10 +115,16 @@ pub fn build_type0_font(
         objects.push((descr_id, serialize_obj(descr_id, &body)));
     }
 
-    // 4. FontFile2 stream: zlib-compressed font program. A TrueType Collection (.ttc) is not a
-    // valid FontFile2 payload, so extract face 0 into a standalone sfnt first.
+    // 4. FontFile2 stream: zlib-compressed font program. Prefer a glyf subset containing only the
+    // used glyphs (shrinks large CJK faces dramatically); fall back to the whole face, de-collected
+    // from a .ttc into a standalone sfnt (a .ttc is not a valid FontFile2 payload).
     {
-        let sfnt = extract_sfnt(font_data);
+        let used: std::collections::BTreeSet<u16> = used_glyphs.keys().copied().collect();
+        let sfnt: std::borrow::Cow<[u8]> = match crate::pdf_subset::subset_to_glyf(font_data, &used)
+        {
+            Some(v) => std::borrow::Cow::Owned(v),
+            None => extract_sfnt(font_data),
+        };
         let compressed = zlib_compress(&sfnt);
         let dict = format!(
             "<< /Filter /FlateDecode /Length {} /Length1 {} >>",

@@ -947,6 +947,57 @@ mod tests {
     }
 
     #[test]
+    fn text_pdf_embeds_small_subset_font() {
+        use hayate_ir::font::{FontRef, ThemeFontSlot};
+        use hayate_ir::text::{Paragraph, Run, TextBody};
+        use hayate_ir::units::pt;
+        let mut p = Presentation::new();
+        let m = p.add_master(Theme::default());
+        let l = p.add_layout(m, "Blank");
+        let s = p.add_slide(l);
+        let t = p.add_shape(s);
+        p.world.frames.insert(
+            t,
+            RectEmu::new(inch_f(0.5), inch_f(0.5), inch_f(9.0), inch_f(1.0)),
+        );
+        p.world.texts.insert(
+            t,
+            TextBody {
+                paragraphs: vec![Paragraph::new(vec![Run {
+                    text: "Hello 日本語".to_string(),
+                    font: FontRef::Theme(ThemeFontSlot::Major),
+                    size: pt(40),
+                    color: Color::theme(ThemeColorToken::Dk1),
+                    bold: true,
+                    italic: false,
+                    underline: false,
+                }])],
+                autofit: false,
+            },
+        );
+        let pdf = export_pdf(&p, &PdfOptions::default());
+        // Text is a real embedded, selectable font — not a raster image.
+        assert!(
+            count(&pdf, b"/Type0") >= 1,
+            "text uses an embedded Type0 font"
+        );
+        assert!(
+            count(&pdf, b"/FontFile2") >= 1,
+            "the font program is embedded"
+        );
+        assert!(
+            count(&pdf, b"/ToUnicode") >= 1,
+            "text is extractable (ToUnicode)"
+        );
+        // Subsetting keeps it small even though the source CJK face is ~20 MB.
+        assert!(
+            pdf.len() < 300_000,
+            "subset keeps the file small: {} bytes",
+            pdf.len()
+        );
+    }
+
+    #[test]
     fn empty_deck_is_valid() {
         let pdf = export_pdf(&deck(0), &PdfOptions::default());
         assert!(pdf.starts_with(b"%PDF-"));
