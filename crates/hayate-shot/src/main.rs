@@ -372,7 +372,94 @@ fn main() {
     }
     let _ = std::fs::remove_file(&tmp);
 
+    // PDF integrity snapshot: export a representative deck (Japanese title + a bulleted list +
+    // a shape) to a real PDF. `just pdf-shot` renders it with poppler so the end-to-end PDF
+    // (structure + embedded image) can be eyeballed; the same content also appears in the PNG
+    // shots above, so the two can be compared.
+    let pdf = hayate_render::export_pdf(&pdf_demo(), 2.0);
+    let pdf_path = out_dir.join("deck.pdf");
+    std::fs::write(&pdf_path, pdf).expect("write pdf");
+    eprintln!("wrote {}", pdf_path.display());
+
     println!("wrote {idx} snapshots to {}", out_dir.display());
+}
+
+/// A small deck exercising the PDF path's text: a bold Japanese+Latin title, a two-level bullet
+/// list (JP and Latin), and an accent rectangle.
+fn pdf_demo() -> Presentation {
+    use hayate_ir::color::{Color, ThemeColorToken};
+    use hayate_ir::font::{FontRef, ThemeFontSlot};
+    use hayate_ir::geom::RectEmu;
+    use hayate_ir::paint::Fill;
+    use hayate_ir::shape::Geometry;
+    use hayate_ir::text::{Paragraph, Run, TextBody};
+    use hayate_ir::theme::Theme;
+    use hayate_ir::units::{inch_f, pt};
+
+    let run = |text: &str, slot, size, bold| Run {
+        text: text.to_string(),
+        font: FontRef::Theme(slot),
+        size: pt(size),
+        color: Color::theme(ThemeColorToken::Dk1),
+        bold,
+        italic: false,
+        underline: false,
+    };
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Blank");
+    let slide = p.add_slide(layout);
+
+    let title = p.add_shape(slide);
+    p.world.frames.insert(
+        title,
+        RectEmu::new(inch_f(0.5), inch_f(0.3), inch_f(9.0), inch_f(1.0)),
+    );
+    p.world.texts.insert(
+        title,
+        TextBody {
+            paragraphs: vec![Paragraph::new(vec![run(
+                "Hayate プレゼンテーション",
+                ThemeFontSlot::Major,
+                40,
+                true,
+            )])],
+            autofit: false,
+        },
+    );
+
+    let body = p.add_shape(slide);
+    p.world.frames.insert(
+        body,
+        RectEmu::new(inch_f(0.5), inch_f(1.8), inch_f(9.0), inch_f(3.0)),
+    );
+    let bullet = |text: &str, level: u8| {
+        let mut para = Paragraph::new(vec![run(text, ThemeFontSlot::Minor, 24, false)]);
+        para.bullet_level = level;
+        para
+    };
+    p.world.texts.insert(
+        body,
+        TextBody {
+            paragraphs: vec![
+                bullet("最初の項目", 1),
+                bullet("子項目 child item", 2),
+                bullet("Back to level 1", 1),
+            ],
+            autofit: false,
+        },
+    );
+
+    let rect = p.add_shape(slide);
+    p.world.frames.insert(
+        rect,
+        RectEmu::new(inch_f(0.5), inch_f(5.0), inch_f(1.6), inch_f(1.6)),
+    );
+    p.world.geometries.insert(rect, Geometry::Rect);
+    p.world
+        .fills
+        .insert(rect, Fill::Solid(Color::theme(ThemeColorToken::Accent1)));
+    p
 }
 
 /// Apply a registry command, committing it to history. Logs a no-op if the command is unknown

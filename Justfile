@@ -19,6 +19,19 @@ test:
 shots:
     cargo run -p hayate-shot
 
+# PDF integrity snapshot: write debug-shots/deck.pdf, then render it to PNG with poppler
+# (pdftoppm) so the end-to-end PDF can be eyeballed. Skips the render step if poppler is absent.
+pdf-shot:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cargo run -p hayate-shot
+    if command -v pdftoppm >/dev/null; then
+        pdftoppm -png -r 96 debug-shots/deck.pdf debug-shots/deck-pdf
+        echo "rendered debug-shots/deck-pdf-*.png from debug-shots/deck.pdf"
+    else
+        echo "pdftoppm (poppler-utils) not found; wrote debug-shots/deck.pdf only"
+    fi
+
 # Build the core crates (pure Rust).
 build:
     cargo build -p hayate-ir -p hayate-model -p hayate-render -p hayate-format

@@ -13,7 +13,9 @@ open `target/doc/hayate_app/index.html` ("Debugging & E2E tests").
   real state. **Read `e2e.rs` for the patterns/helpers** (`mouse`/`keydown`/`prim_bounds`,
   `app.update`/`read_with`); copy an existing test. Add/adjust one when you change UI behavior.
 - **`just shots`** — gpui-free PNG snapshots to `debug-shots/*.png` (open with Read) for shape/layout/
-  color/transform checks. Not for glyph/caret fidelity (rasterizer ≠ gpui paint; text is ASCII-only).
+  color/text checks (real fonts via cosmic-text; the same image the PDF embeds).
+- **`just pdf-shot`** — writes `debug-shots/deck.pdf` and renders it to PNG via poppler (`pdftoppm`)
+  for end-to-end PDF-integrity eyeballing.
 
 Other: `just test` (pure crates), `just build-app`, `just run`, `cargo fmt --all`. Loop: change →
 `just test` for logic / `just e2e` for UI / `just shots` to eyeball → fmt → commit when green.
