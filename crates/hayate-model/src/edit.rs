@@ -322,6 +322,18 @@ pub fn preset_placeholders(
     }
 }
 
+/// Replace a master's whole theme in one undoable op. `MasterInfo` is a single component, so the
+/// `SetComponent` undo captures the prior theme exactly — no special history handling needed.
+pub fn set_master_theme(master: Entity, theme: hayate_ir::theme::Theme) -> Transaction {
+    Transaction::new(
+        "set theme",
+        vec![Operation::SetComponent {
+            entity: master,
+            value: CompValue::Master(hayate_ir::doc::MasterInfo { theme }),
+        }],
+    )
+}
+
 /// Rebase `slide` onto a different `layout` by setting its `SlideInfo`.
 pub fn set_slide_layout(slide: Entity, layout: Entity) -> Transaction {
     Transaction::new(

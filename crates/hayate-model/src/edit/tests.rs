@@ -634,3 +634,30 @@ fn preset_placeholders_shapes() {
     // Blank defines nothing.
     assert!(preset_placeholders(LayoutPreset::Blank, size).is_empty());
 }
+
+#[test]
+fn set_master_theme_applies_and_undo_restores() {
+    use hayate_ir::theme::Theme;
+    let mut p = hayate_ir::presentation::Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Blank");
+    let slide = p.add_slide(layout);
+
+    let old = p.theme_of(slide).unwrap().clone();
+    let mut new_theme = old.clone();
+    new_theme.colors.accent[0] = Rgba::rgb(0xFF, 0x00, 0x00);
+
+    let mut h = History::new();
+    h.commit(&mut p.world, set_master_theme(master, new_theme.clone()));
+    assert_eq!(
+        p.theme_of(slide).unwrap().colors.accent[0],
+        Rgba::rgb(0xFF, 0, 0)
+    );
+
+    h.undo(&mut p.world);
+    assert_eq!(
+        p.theme_of(slide).unwrap(),
+        &old,
+        "undo restores the exact prior theme"
+    );
+}

@@ -73,6 +73,64 @@ impl Theme {
     }
 }
 
+/// A few built-in color schemes (name + colors) the UI can apply to a master's theme.
+pub fn theme_color_presets() -> Vec<(&'static str, ThemeColors)> {
+    let base = |accent: [Rgba; 6], dk2: Rgba| ThemeColors {
+        dk1: Rgba::rgb(0, 0, 0),
+        lt1: Rgba::rgb(255, 255, 255),
+        dk2,
+        lt2: Rgba::rgb(238, 238, 238),
+        accent,
+        hlink: Rgba::rgb(0x00, 0x00, 0xEE),
+        fol_hlink: Rgba::rgb(0x80, 0x00, 0x80),
+    };
+    vec![
+        ("Office", Theme::default().colors),
+        (
+            "Warm",
+            base(
+                [
+                    Rgba::rgb(0xC0, 0x39, 0x2B),
+                    Rgba::rgb(0xE6, 0x7E, 0x22),
+                    Rgba::rgb(0xF1, 0xC4, 0x0F),
+                    Rgba::rgb(0xD3, 0x5F, 0x5F),
+                    Rgba::rgb(0xA9, 0x3A, 0x26),
+                    Rgba::rgb(0x8E, 0x44, 0x22),
+                ],
+                Rgba::rgb(0x5A, 0x2A, 0x1E),
+            ),
+        ),
+        (
+            "Cool",
+            base(
+                [
+                    Rgba::rgb(0x2E, 0x86, 0xC1),
+                    Rgba::rgb(0x16, 0xA0, 0x85),
+                    Rgba::rgb(0x6C, 0x3A, 0xB7),
+                    Rgba::rgb(0x21, 0x9E, 0xBC),
+                    Rgba::rgb(0x27, 0xAE, 0x60),
+                    Rgba::rgb(0x34, 0x95, 0xDB),
+                ],
+                Rgba::rgb(0x1B, 0x2A, 0x4A),
+            ),
+        ),
+        (
+            "Mono",
+            base(
+                [
+                    Rgba::rgb(0x33, 0x33, 0x33),
+                    Rgba::rgb(0x55, 0x55, 0x55),
+                    Rgba::rgb(0x77, 0x77, 0x77),
+                    Rgba::rgb(0x99, 0x99, 0x99),
+                    Rgba::rgb(0xBB, 0xBB, 0xBB),
+                    Rgba::rgb(0x22, 0x22, 0x22),
+                ],
+                Rgba::rgb(0x33, 0x33, 0x33),
+            ),
+        ),
+    ]
+}
+
 impl Default for Theme {
     /// A neutral light theme, useful for new presentations and tests.
     fn default() -> Self {
