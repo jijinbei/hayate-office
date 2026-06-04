@@ -90,7 +90,6 @@ impl Render for HayateApp {
         let input_entity = cx.entity();
         let input_focus = self.focus.clone();
         let (sw, sh) = (scene.size.w, scene.size.h);
-        let title: SharedString = "HayateOffice".into();
 
         let palette_panel = self.palette.as_ref().map(|p| {
             let list = self.palette_commands();
@@ -927,12 +926,16 @@ impl Render for HayateApp {
             .size_full()
             .bg(rgb(0x1e1e1e))
             .text_color(rgb(0xffffff))
+            // Window title bar (controls live here, ONLYOFFICE-style).
+            .child(self.title_bar(cx))
+            // Toolbar: Home + shape-creation tools on the left, zoom on the right.
             .child(
                 div()
                     .flex()
                     .flex_row()
                     .justify_between()
                     .items_center()
+                    .px_2()
                     .child(
                         div()
                             .flex()
@@ -943,38 +946,41 @@ impl Render for HayateApp {
                                 t.go_home();
                                 cx.notify();
                             }))
-                            .child(div().text_xl().child(title)),
-                    )
-                    // Shape-creation tools.
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap_1()
-                            .child(icon_button("tool_rect", "square", cx, |t, _w, cx| {
-                                t.add_rect();
-                                cx.notify();
-                            }))
-                            .child(icon_button("tool_ellipse", "circle", cx, |t, _w, cx| {
-                                t.add_ellipse();
-                                cx.notify();
-                            }))
-                            .child(icon_button("tool_line", "line", cx, |t, _w, cx| {
-                                t.add_line(false);
-                                cx.notify();
-                            }))
-                            .child(icon_button("tool_arrow", "arrow", cx, |t, _w, cx| {
-                                t.add_line(true);
-                                cx.notify();
-                            }))
-                            .child(icon_button("tool_text", "type", cx, |t, _w, cx| {
-                                t.add_text_box();
-                                cx.notify();
-                            }))
-                            .child(icon_button("tool_image", "image", cx, |t, _w, cx| {
-                                t.insert_image(cx);
-                                cx.notify();
-                            })),
+                            .child(
+                                div()
+                                    .flex()
+                                    .flex_row()
+                                    .gap_1()
+                                    .child(icon_button("tool_rect", "square", cx, |t, _w, cx| {
+                                        t.add_rect();
+                                        cx.notify();
+                                    }))
+                                    .child(icon_button(
+                                        "tool_ellipse",
+                                        "circle",
+                                        cx,
+                                        |t, _w, cx| {
+                                            t.add_ellipse();
+                                            cx.notify();
+                                        },
+                                    ))
+                                    .child(icon_button("tool_line", "line", cx, |t, _w, cx| {
+                                        t.add_line(false);
+                                        cx.notify();
+                                    }))
+                                    .child(icon_button("tool_arrow", "arrow", cx, |t, _w, cx| {
+                                        t.add_line(true);
+                                        cx.notify();
+                                    }))
+                                    .child(icon_button("tool_text", "type", cx, |t, _w, cx| {
+                                        t.add_text_box();
+                                        cx.notify();
+                                    }))
+                                    .child(icon_button("tool_image", "image", cx, |t, _w, cx| {
+                                        t.insert_image(cx);
+                                        cx.notify();
+                                    })),
+                            ),
                     )
                     .child(
                         div()
@@ -995,15 +1001,6 @@ impl Render for HayateApp {
                                 t.fit_zoom(w);
                                 t.rebuild();
                                 cx.notify();
-                            }))
-                            .child(icon_button("min", "minus", cx, |_this, window, _cx| {
-                                window.minimize_window();
-                            }))
-                            .child(icon_button("max", "square", cx, |_this, window, _cx| {
-                                window.zoom_window();
-                            }))
-                            .child(icon_button("close", "x", cx, |_this, window, _cx| {
-                                window.remove_window();
                             })),
                     ),
             )
@@ -1110,6 +1107,62 @@ impl Render for HayateApp {
 }
 
 impl HayateApp {
+    /// Custom window title bar (the window is client-side decorated, so we draw our own controls).
+    /// The left region drags the window; the right cluster minimizes / maximizes / closes it.
+    /// Shown at the very top of both the home screen and the editor.
+    fn title_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .flex()
+            .flex_row()
+            .items_center()
+            .justify_between()
+            .h(px(34.))
+            .w_full()
+            .flex_none()
+            .bg(rgb(0x171717))
+            .border_b_1()
+            .border_color(rgb(0x2a2a2a))
+            // Draggable region: the title/logo area moves the window (controls are excluded).
+            .child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .h_full()
+                    .items_center()
+                    .gap_2()
+                    .px_3()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_t, _ev: &MouseDownEvent, window, _cx| {
+                            window.start_window_move();
+                        }),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(rgb(0xdddddd))
+                            .child("HayateOffice"),
+                    ),
+            )
+            // Window controls.
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .items_center()
+                    .child(icon_button("win_min", "minus", cx, |_t, window, _cx| {
+                        window.minimize_window();
+                    }))
+                    .child(icon_button("win_max", "square", cx, |_t, window, _cx| {
+                        window.zoom_window();
+                    }))
+                    .child(icon_button("win_close", "x", cx, |_t, window, _cx| {
+                        window.remove_window();
+                    })),
+            )
+            .into_any_element()
+    }
+
     /// The home/start screen: a "New presentation" card plus a thumbnailed grid of recently
     /// opened files. Shown at launch and via the Home button; leaving it opens the editor.
     fn render_home(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
@@ -1198,11 +1251,19 @@ impl HayateApp {
             .text_color(rgb(0xffffff))
             .flex()
             .flex_col()
-            .gap_6()
-            .p_8()
-            .child(div().text_2xl().child("HayateOffice"))
-            .child(recents_section)
-            .child(grid)
+            // Window title bar with controls, then the padded home content.
+            .child(self.title_bar(cx))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .gap_6()
+                    .p_8()
+                    .child(div().text_2xl().child("HayateOffice"))
+                    .child(recents_section)
+                    .child(grid),
+            )
             .into_any_element()
     }
 
