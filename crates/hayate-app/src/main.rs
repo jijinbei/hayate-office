@@ -175,10 +175,13 @@ struct HayateApp {
     /// View zoom (display scale only; document coordinates stay in absolute points).
     /// 1.0 = 100% (1pt -> 1px). Independent of window size.
     zoom: f32,
-    /// Command registry (palette / scripts / AI surface).
-    registry: CommandRegistry,
+    /// Command registry (palette / scripts / AI surface). `Rc` so the script runtime can hold
+    /// it across the engine's `'static` host closures.
+    registry: Rc<CommandRegistry>,
     /// Command palette state when open.
     palette: Option<PaletteState>,
+    /// Open script console (editable buffer), if any. Ctrl+Shift+R toggles it.
+    script_panel: Option<ScriptPanel>,
     /// Numeric field being typed into (rotation/position/size/opacity), if any.
     field_edit: Option<FieldEdit>,
     /// Alignment guides shown while dragging (scene/px coords relative to the slide origin).
@@ -402,7 +405,7 @@ impl HayateApp {
             focus: cx.focus_handle(),
             focused_once: false,
             zoom,
-            registry: hayate_core::builtins(),
+            registry: Rc::new(hayate_core::builtins()),
             palette: None,
             field_edit: None,
             guides: Vec::new(),
@@ -420,6 +423,7 @@ impl HayateApp {
             line_drag: None,
             doc_path: DOC_PATH.to_string(),
             save_modal: None,
+            script_panel: None,
             notice: None,
             master_layout: None,
             scope: EditScope::Slide(slide),
@@ -439,6 +443,12 @@ impl HayateApp {
 
 /// "Save As" dialog state: an editable filename buffer.
 struct SaveModal {
+    buf: String,
+}
+
+/// Script console state: an editable Rhai source buffer. Run with Ctrl/Cmd+Enter; the result
+/// (op count / print log / error) is shown in the notice modal.
+struct ScriptPanel {
     buf: String,
 }
 

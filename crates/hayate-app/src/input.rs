@@ -13,7 +13,7 @@ use hayate_model::edit;
 use crate::util::{
     next_char_boundary, prev_char_boundary, range_from_utf16, range_to_utf16, utf16_to_byte,
 };
-use crate::{pt_to_emu, FieldEdit, FieldKind, HayateApp, PaletteState, TextEdit};
+use crate::{pt_to_emu, FieldEdit, FieldKind, HayateApp, PaletteState, ScriptPanel, TextEdit};
 
 use hayate_ir::geom::RectEmu;
 use hayate_ir::world::{CompKind, CompValue, Entity};
@@ -361,6 +361,48 @@ impl HayateApp {
         cx.notify();
     }
 
+    /// Key handling for the script console. Ctrl/Cmd+Enter runs the buffer (and closes the
+    /// panel); plain Enter inserts a newline; Esc closes. Editing mirrors the save dialog.
+    pub(crate) fn script_panel_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        let k = &ev.keystroke;
+        let cmd = k.modifiers.platform || k.modifiers.control;
+        match k.key.as_str() {
+            "escape" => self.script_panel = None,
+            "enter" if cmd => {
+                if let Some(p) = self.script_panel.take() {
+                    self.run_script_src(&p.buf);
+                }
+            }
+            "enter" => {
+                if let Some(p) = self.script_panel.as_mut() {
+                    p.buf.push('\n');
+                }
+            }
+            "backspace" => {
+                if let Some(p) = self.script_panel.as_mut() {
+                    p.buf.pop();
+                }
+            }
+            "space" => {
+                if let Some(p) = self.script_panel.as_mut() {
+                    p.buf.push(' ');
+                }
+            }
+            "tab" => {
+                if let Some(p) = self.script_panel.as_mut() {
+                    p.buf.push_str("  ");
+                }
+            }
+            s if s.chars().count() == 1 => {
+                if let Some(p) = self.script_panel.as_mut() {
+                    p.buf.push_str(s);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
     pub(crate) fn field_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.as_str();
         match key {
@@ -518,6 +560,10 @@ impl HayateApp {
             self.rename_key(ev, cx);
             return;
         }
+        if self.script_panel.is_some() {
+            self.script_panel_key(ev, cx);
+            return;
+        }
         if self.palette.is_some() {
             self.palette_key(ev, cx);
             return;
@@ -567,6 +613,11 @@ impl HayateApp {
                     query: String::new(),
                     sel: 0,
                 });
+                cx.notify();
+            }
+            // Ctrl/Cmd+Shift+R opens the script console (R = Run script).
+            "r" if cmd && k.modifiers.shift => {
+                self.script_panel = Some(ScriptPanel { buf: String::new() });
                 cx.notify();
             }
             "e" if cmd && k.modifiers.shift => self.export_pptx(),

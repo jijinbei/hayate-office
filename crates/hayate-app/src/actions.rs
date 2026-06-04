@@ -24,6 +24,37 @@ impl HayateApp {
         v
     }
 
+    /// Run a Rhai script against the current document and commit everything it issued as ONE
+    /// undoable change. `current_slide()`/`selection()` in the script reflect the live editor.
+    /// The op count + print log (or the error) is reported in the notice modal.
+    pub(crate) fn run_script_src(&mut self, src: &str) {
+        let ctx = hayate_core::ScriptContext {
+            current_slide: Some(self.slide),
+            selection: self.selected_all(),
+        };
+        match hayate_core::run_script(std::rc::Rc::clone(&self.registry), &self.pres, &ctx, src) {
+            Ok(out) => {
+                let n = out.ops.len();
+                if n > 0 {
+                    self.history.commit(
+                        &mut self.pres.world,
+                        Transaction::new("Run Script", out.ops),
+                    );
+                    self.selection = None;
+                    self.also.clear();
+                    self.rebuild();
+                }
+                let mut msg = format!("スクリプト実行: {n} 操作を適用しました");
+                if !out.log.is_empty() {
+                    msg.push('\n');
+                    msg.push_str(&out.log.join("\n"));
+                }
+                self.notice = Some(msg);
+            }
+            Err(e) => self.notice = Some(format!("スクリプトエラー\n{e}")),
+        }
+    }
+
     /// File extensions accepted by the "Insert Image" picker.
     const IMAGE_EXTS: &'static [&'static str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp"];
 

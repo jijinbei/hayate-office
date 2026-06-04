@@ -1102,6 +1102,7 @@ impl Render for HayateApp {
             .children(self.menu_overlay(cx))
             .children(self.font_overlay(window, cx))
             .children(self.save_overlay(cx))
+            .children(self.script_overlay(cx))
             .children(self.notice_overlay(cx))
             .into_any_element()
     }
@@ -1685,6 +1686,75 @@ impl HayateApp {
 
     /// The "Save As" dialog: a centered modal over a dimmed backdrop with an editable filename.
     /// Enter saves, Esc cancels (both handled by `save_modal_key`); clicking the backdrop cancels.
+    /// The script console overlay: an editable multi-line Rhai buffer. Lines are rendered
+    /// individually (gpui does not break a single text child on `\n`); a caret marks the end.
+    fn script_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let p = self.script_panel.as_ref()?;
+        let mut body = div()
+            .flex()
+            .flex_col()
+            .w_full()
+            .min_h(px(220.))
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .bg(rgb(0x1f1f1f))
+            .border_1()
+            .border_color(rgb(0x3b82f6))
+            .text_color(rgb(0xeaeaea))
+            .font_family("monospace");
+        let lines: Vec<&str> = p.buf.split('\n').collect();
+        let last = lines.len().saturating_sub(1);
+        for (i, line) in lines.iter().enumerate() {
+            // Caret on the final line; non-breaking space keeps empty lines from collapsing.
+            let text = if i == last {
+                format!("{line}|")
+            } else if line.is_empty() {
+                "\u{00a0}".to_string()
+            } else {
+                line.to_string()
+            };
+            body = body.child(div().child(text));
+        }
+        let dialog = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w(px(640.))
+            .p_4()
+            .bg(rgb(0x2b2b2b))
+            .border_1()
+            .border_color(rgb(0x555555))
+            .rounded_lg()
+            .shadow_lg()
+            .text_color(rgb(0xffffff))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xaaaaaa))
+                    .child("Script Console (Rhai)"),
+            )
+            .child(body)
+            .child(div().text_xs().text_color(rgb(0x888888)).child(
+                "Ctrl/Cmd+Enter to run · Enter for newline · Esc to close — \
+                     e.g. for e in selection() { shape_set_fill(e, \"#ff0000\"); }",
+            ));
+        let backdrop = div()
+            .id("script_backdrop")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x00000088))
+            .on_click(cx.listener(|this, _ev: &ClickEvent, _window, cx| {
+                this.script_panel = None;
+                cx.notify();
+            }))
+            .child(dialog);
+        Some(backdrop.into_any_element())
+    }
+
     fn save_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let m = self.save_modal.as_ref()?;
         let field = div()

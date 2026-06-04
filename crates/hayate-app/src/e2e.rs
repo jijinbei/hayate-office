@@ -1266,3 +1266,40 @@ fn go_home_returns_to_the_home_screen(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui::test]
+fn script_console_runs_and_commits(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // Ctrl+Shift+R opens the script console.
+    app.update(cx, |a, cx| a.on_key_down(&keydown("ctrl-shift-r"), cx));
+    assert!(
+        app.read_with(cx, |a, _| a.script_panel.is_some()),
+        "Ctrl+Shift+R opens the script console"
+    );
+
+    let before = app.read_with(cx, |a, _| a.pres.children(a.slide).len());
+    // Type a script that creates a rectangle on the current slide, then run it (Ctrl+Enter).
+    app.update(cx, |a, _| {
+        a.script_panel = Some(super::ScriptPanel {
+            buf: "let s = current_slide(); shape_add_rect(s, 10, 10, 100, 50);".to_string(),
+        });
+    });
+    app.update(cx, |a, cx| a.on_key_down(&keydown("ctrl-enter"), cx));
+
+    app.read_with(cx, |a, _| {
+        assert!(a.script_panel.is_none(), "running closes the console");
+        assert_eq!(
+            a.pres.children(a.slide).len(),
+            before + 1,
+            "the script added one shape to the slide"
+        );
+    });
+
+    // The whole script is one undo step.
+    app.update(cx, |a, cx| a.on_key_down(&keydown("ctrl-z"), cx));
+    assert_eq!(
+        app.read_with(cx, |a, _| a.pres.children(a.slide).len()),
+        before,
+        "one undo reverts the entire script"
+    );
+}
