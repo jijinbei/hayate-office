@@ -60,3 +60,11 @@ Each command is exposed to Rhai scripts as the listed function (positional argum
 | `shapes_align_bottom(entities)` | `shapes.align_bottom` | Align the selected shapes' bottom edges to the group bounding box. |
 | `shapes_distribute_h(entities)` | `shapes.distribute_h` | Evenly distribute the selected shapes along the horizontal axis. |
 | `shapes_distribute_v(entities)` | `shapes.distribute_v` | Evenly distribute the selected shapes along the vertical axis. |
+
+## Create
+
+| Script call | Command id | Description |
+| --- | --- | --- |
+| `shape_add_rect(parent, x, y, w, h)` | `shape.add_rect` | Create a rectangle on a slide/group at (x, y) with size (w, h), in points. |
+| `shape_add_ellipse(parent, x, y, w, h)` | `shape.add_ellipse` | Create an ellipse on a slide/group at (x, y) with size (w, h), in points. |
+| `shape_add_text(parent, x, y, w, h, text)` | `shape.add_text` | Create a text box on a slide/group at (x, y) with size (w, h) in points and the given text. |

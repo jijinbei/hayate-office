@@ -16,4 +16,5 @@ serde_json = "1"
 schemars = "1"
 # Embedded sandboxed scripting runtime (DESIGN 6.x extension system). Pure Rust, no IO; we do
 # not enable the `sync` feature, so registered host functions can capture Rc/RefCell state.
-rhai = "1"
+# `metadata` exports the registered-function signatures (script_api_metadata) for autocomplete/AI.
+rhai = { version = "1", features = ["metadata"] }

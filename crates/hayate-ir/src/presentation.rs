@@ -13,7 +13,7 @@ use crate::world::{Entity, World};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Presentation {
     pub world: World,
     pub slide_size: SizeEmu,

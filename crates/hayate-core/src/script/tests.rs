@@ -3,113 +3,175 @@
 use std::rc::Rc;
 
 use hayate_ir::geom::RectEmu;
-use hayate_ir::world::{CompKind, CompValue, World};
-use hayate_model::{History, Transaction};
+use hayate_ir::presentation::Presentation;
+use hayate_ir::theme::Theme;
+use hayate_ir::world::{CompKind, CompValue, Entity};
+use hayate_model::{History, Operation, Transaction};
 
-use crate::{builtins, run_script};
+use crate::{builtins, run_script, script_api_metadata, ScriptContext};
 
-/// A world with a single framed shape; returns (world, entity-id).
-fn framed_world() -> (World, u64) {
-    let mut w = World::new();
-    let e = w.spawn();
-    w.set(e, CompValue::Frame(RectEmu::new(10, 20, 100, 50)));
-    (w, e.0)
+/// A presentation with one framed shape directly in the world; returns (pres, shape id).
+fn framed_pres() -> (Presentation, u64) {
+    let mut p = Presentation::new();
+    let e = p.world.spawn();
+    p.world
+        .set(e, CompValue::Frame(RectEmu::new(10, 20, 100, 50)));
+    (p, e.0)
 }
 
-/// Commit a script's ops to `w` as one transaction and return the resulting world.
-fn apply(mut w: World, ops: Vec<hayate_model::Operation>) -> World {
+/// Commit a script's ops to `pres` as one transaction.
+fn apply(pres: &mut Presentation, ops: Vec<Operation>) {
     let mut h = History::new();
-    h.commit(&mut w, Transaction::new("script", ops));
-    w
+    h.commit(&mut pres.world, Transaction::new("script", ops));
 }
 
 #[test]
 fn generated_command_function_issues_ops() {
-    let (w, e) = framed_world();
+    let (mut p, e) = framed_pres();
     let out = run_script(
         Rc::new(builtins()),
-        &w,
+        &p,
+        &ScriptContext::default(),
         &format!("shape_move({e}, 100, 0);"),
     )
     .expect("script runs");
-    assert!(!out.ops.is_empty(), "shape_move issued operations");
-
-    let w = apply(w, out.ops);
-    let frame = w.get(crate_entity(e), CompKind::Frame);
+    assert!(!out.ops.is_empty());
+    apply(&mut p, out.ops);
     assert_eq!(
-        frame,
-        Some(CompValue::Frame(RectEmu::new(110, 20, 100, 50))),
-        "frame translated by dx=100"
+        p.world.get(Entity(e), CompKind::Frame),
+        Some(CompValue::Frame(RectEmu::new(110, 20, 100, 50)))
     );
 }
 
 #[test]
-fn entities_query_drives_a_loop() {
-    let mut w = World::new();
-    let a = w.spawn();
-    w.set(a, CompValue::Frame(RectEmu::new(0, 0, 10, 10)));
-    let b = w.spawn();
-    w.set(b, CompValue::Frame(RectEmu::new(50, 50, 10, 10)));
-
+fn create_returns_new_entity_id_and_chains() {
+    let mut p = Presentation::new();
+    let parent = p.world.spawn();
+    // The new rect's id flows straight into set_fill.
     let out = run_script(
         Rc::new(builtins()),
-        &w,
-        "for e in entities() { shape_move(e, 5, 0); }",
+        &p,
+        &ScriptContext::default(),
+        &format!(
+            "let e = shape_add_rect({0}, 0, 0, 100, 50); shape_set_fill(e, \"#ff0000\");",
+            parent.0
+        ),
     )
     .expect("script runs");
+    apply(&mut p, out.ops);
 
-    let w = apply(w, out.ops);
+    // A new child of `parent` exists, carries a Frame, and is filled red.
+    let child = p
+        .world
+        .iter()
+        .find(|&c| matches!(p.world.get(c, CompKind::Parent), Some(CompValue::Parent(pp)) if pp == parent))
+        .expect("a child shape was created");
+    assert!(matches!(
+        p.world.get(child, CompKind::Frame),
+        Some(CompValue::Frame(_))
+    ));
+    assert!(
+        matches!(p.world.get(child, CompKind::Fill), Some(CompValue::Fill(_))),
+        "the returned id chained into shape_set_fill"
+    );
+}
+
+#[test]
+fn sequential_creates_get_distinct_ids() {
+    let mut p = Presentation::new();
+    let parent = p.world.spawn();
+    let out = run_script(
+        Rc::new(builtins()),
+        &p,
+        &ScriptContext::default(),
+        &format!(
+            "shape_add_rect({0}, 0, 0, 10, 10); shape_add_rect({0}, 20, 0, 10, 10);",
+            parent.0
+        ),
+    )
+    .expect("runs");
+    apply(&mut p, out.ops);
+    let children = p
+        .world
+        .iter()
+        .filter(|&c| matches!(p.world.get(c, CompKind::Parent), Some(CompValue::Parent(pp)) if pp == parent))
+        .count();
+    assert_eq!(children, 2, "two distinct shapes were created");
+}
+
+#[test]
+fn queries_expose_slides_and_selection() {
+    // A real slide via master/layout/slide, plus a framed shape on it.
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Blank");
+    let slide = p.add_slide(layout);
+    let shape = p.add_shape(slide);
+    p.world
+        .set(shape, CompValue::Frame(RectEmu::new(0, 0, 10, 10)));
+
+    let ctx = ScriptContext {
+        current_slide: Some(slide),
+        selection: vec![shape],
+    };
+    // Move everything in the selection; also confirm slides()/current_slide() are callable.
+    let out = run_script(
+        Rc::new(builtins()),
+        &p,
+        &ctx,
+        "let n = slides().len(); let s = current_slide(); for e in selection() { shape_move(e, 5, 0); }",
+    )
+    .expect("runs");
+    apply(&mut p, out.ops);
     assert_eq!(
-        w.get(a, CompKind::Frame),
+        p.world.get(shape, CompKind::Frame),
         Some(CompValue::Frame(RectEmu::new(5, 0, 10, 10)))
-    );
-    assert_eq!(
-        w.get(b, CompKind::Frame),
-        Some(CompValue::Frame(RectEmu::new(55, 50, 10, 10)))
-    );
-}
-
-#[test]
-fn later_calls_see_earlier_effects() {
-    // set_font_size then set_text on the same entity in one script: the second call observes the
-    // text created/edited by surrounding state on the scratch world. Here we just verify two
-    // sequential ops on one entity both land.
-    let (w, e) = framed_world();
-    let out = run_script(
-        Rc::new(builtins()),
-        &w,
-        &format!("shape_move({e}, 10, 0); shape_move({e}, 0, 7);"),
-    )
-    .expect("script runs");
-    let w = apply(w, out.ops);
-    assert_eq!(
-        w.get(crate_entity(e), CompKind::Frame),
-        Some(CompValue::Frame(RectEmu::new(20, 27, 100, 50))),
-        "both translations applied in sequence"
     );
 }
 
 #[test]
 fn print_is_captured() {
-    let (w, _e) = framed_world();
-    let out = run_script(Rc::new(builtins()), &w, r#"print("hello");"#).expect("runs");
+    let (p, _e) = framed_pres();
+    let out = run_script(
+        Rc::new(builtins()),
+        &p,
+        &ScriptContext::default(),
+        r#"print("hello");"#,
+    )
+    .expect("runs");
     assert!(out.log.iter().any(|l| l.contains("hello")));
 }
 
 #[test]
 fn sandbox_caps_runaway_loop() {
-    let (w, _e) = framed_world();
-    let err = run_script(Rc::new(builtins()), &w, "let x = 0; loop { x += 1; }");
-    assert!(err.is_err(), "an infinite loop must hit the operation cap");
+    let (p, _e) = framed_pres();
+    assert!(run_script(
+        Rc::new(builtins()),
+        &p,
+        &ScriptContext::default(),
+        "let x = 0; loop { x += 1; }",
+    )
+    .is_err());
 }
 
 #[test]
 fn unknown_function_errors() {
-    let (w, _e) = framed_world();
-    assert!(run_script(Rc::new(builtins()), &w, "no_such_command(1);").is_err());
+    let (p, _e) = framed_pres();
+    assert!(run_script(
+        Rc::new(builtins()),
+        &p,
+        &ScriptContext::default(),
+        "no_such_command(1);",
+    )
+    .is_err());
 }
 
-/// Build an `Entity` from a raw id for assertions.
-fn crate_entity(id: u64) -> hayate_ir::world::Entity {
-    hayate_ir::world::Entity(id)
+#[test]
+fn metadata_lists_callable_functions() {
+    let json = script_api_metadata(Rc::new(builtins()));
+    assert!(
+        json.contains("shape_set_fill"),
+        "metadata names command fns"
+    );
+    assert!(json.contains("entities"), "metadata names query helpers");
 }

@@ -170,6 +170,15 @@ impl World {
         e
     }
 
+    /// The id the next `spawn`/`reserve_id` would allocate, WITHOUT advancing. Lets a
+    /// read-only command handler (`&World`) pick the id for a `Spawn` op it returns; the op,
+    /// once applied, advances the counter, so successive creates against the same world get
+    /// distinct ids.
+    #[inline]
+    pub fn next_id(&self) -> Entity {
+        Entity(self.next)
+    }
+
     /// Bring a specific id to life (used by Operation redo to recreate the same id).
     /// The id counter advances past `e` so future `spawn`s never collide.
     pub fn spawn_at(&mut self, e: Entity) {

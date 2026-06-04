@@ -16,6 +16,7 @@ use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::{PointEmu, RectEmu, SizeEmu};
 use hayate_ir::paint::Fill;
+use hayate_ir::shape::Geometry;
 use hayate_ir::text::{HAlign, Paragraph, Run, TextBody};
 use hayate_ir::units::{pt, EMU_PER_PT};
 use hayate_ir::world::{CompKind, CompValue, Entity, World};
@@ -26,7 +27,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 mod script;
-pub use script::{run_script, ScriptError, ScriptOutcome};
+pub use script::{run_script, script_api_metadata, ScriptContext, ScriptError, ScriptOutcome};
 
 /// The type of a single command parameter. MVP stand-in for a JSON Schema property
 /// (DESIGN 6.13); kept small and serializable so the manifest can be produced as-is.
@@ -964,7 +965,155 @@ pub fn builtins() -> CommandRegistry {
         );
     }
 
+    // shape.add_rect — create a rectangle on `parent` (a slide/group) at (x, y) with size (w, h),
+    // all in points. The new shape gets a default accent fill; the command returns the new
+    // entity id to scripts. The id is the parent world's next free id, so chained creates in one
+    // script get distinct ids.
+    reg.register(
+        CommandMeta::new("shape.add_rect", "Add Rectangle", "Create")
+            .describe("Create a rectangle on a slide/group at (x, y) with size (w, h), in points."),
+        vec![
+            ParamSpec::new("parent", ParamType::Entity),
+            ParamSpec::new("x", ParamType::Float),
+            ParamSpec::new("y", ParamType::Float),
+            ParamSpec::new("w", ParamType::Float),
+            ParamSpec::new("h", ParamType::Float),
+        ],
+        |world, args| match arg_entity(args, "parent") {
+            Some(parent) => {
+                let e = world.next_id();
+                let order = append_order(world, parent);
+                let frame = rect_pt(args);
+                edit::create_rect(
+                    e,
+                    parent,
+                    order,
+                    frame,
+                    Fill::Solid(Color::theme(ThemeColorToken::Accent1)),
+                )
+                .ops
+            }
+            None => vec![],
+        },
+    );
+
+    // shape.add_ellipse — like add_rect but an ellipse.
+    reg.register(
+        CommandMeta::new("shape.add_ellipse", "Add Ellipse", "Create")
+            .describe("Create an ellipse on a slide/group at (x, y) with size (w, h), in points."),
+        vec![
+            ParamSpec::new("parent", ParamType::Entity),
+            ParamSpec::new("x", ParamType::Float),
+            ParamSpec::new("y", ParamType::Float),
+            ParamSpec::new("w", ParamType::Float),
+            ParamSpec::new("h", ParamType::Float),
+        ],
+        |world, args| match arg_entity(args, "parent") {
+            Some(parent) => {
+                let e = world.next_id();
+                let order = append_order(world, parent);
+                let frame = rect_pt(args);
+                vec![
+                    Operation::Spawn { entity: e },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Parent(parent),
+                    },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Order(order),
+                    },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Frame(frame),
+                    },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Geometry(Geometry::Ellipse),
+                    },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Fill(Fill::Solid(Color::theme(ThemeColorToken::Accent1))),
+                    },
+                ]
+            }
+            None => vec![],
+        },
+    );
+
+    // shape.add_text — create a text box on `parent` with the given string.
+    reg.register(
+        CommandMeta::new("shape.add_text", "Add Text Box", "Create").describe(
+            "Create a text box on a slide/group at (x, y) with size (w, h) in points and the given text.",
+        ),
+        vec![
+            ParamSpec::new("parent", ParamType::Entity),
+            ParamSpec::new("x", ParamType::Float),
+            ParamSpec::new("y", ParamType::Float),
+            ParamSpec::new("w", ParamType::Float),
+            ParamSpec::new("h", ParamType::Float),
+            ParamSpec::new("text", ParamType::String),
+        ],
+        |world, args| match (arg_entity(args, "parent"), arg_str(args, "text")) {
+            (Some(parent), Some(text)) => {
+                let e = world.next_id();
+                let order = append_order(world, parent);
+                let frame = rect_pt(args);
+                let body = TextBody {
+                    paragraphs: vec![Paragraph::new(vec![default_run(text)])],
+                    autofit: false,
+                };
+                vec![
+                    Operation::Spawn { entity: e },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Parent(parent),
+                    },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Order(order),
+                    },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Frame(frame),
+                    },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Text(body),
+                    },
+                ]
+            }
+            _ => vec![],
+        },
+    );
+
     reg
+}
+
+/// Read x/y/w/h (points) out of a create command's args into an EMU rect.
+fn rect_pt(args: &Value) -> RectEmu {
+    let g = |k: &str| pt_to_emu(arg_f64(args, k).unwrap_or(0.0));
+    RectEmu::new(
+        g("x"),
+        g("y"),
+        g("w").max(EMU_PER_PT),
+        g("h").max(EMU_PER_PT),
+    )
+}
+
+/// A `FracIndex` that appends after the current last child of `parent`.
+fn append_order(world: &World, parent: Entity) -> FracIndex {
+    let last = world
+        .iter()
+        .filter(|&e| {
+            matches!(world.get(e, CompKind::Parent), Some(CompValue::Parent(p)) if p == parent)
+        })
+        .filter_map(|e| match world.get(e, CompKind::Order) {
+            Some(CompValue::Order(o)) => Some(o),
+            _ => None,
+        })
+        .max();
+    FracIndex::after(last.as_ref())
 }
 
 /// A boolean run-formatting attribute that the toggle commands flip uniformly across a text
