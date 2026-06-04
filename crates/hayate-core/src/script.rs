@@ -396,5 +396,28 @@ pub fn script_api_metadata(registry: Rc<CommandRegistry>) -> String {
     engine.gen_fn_metadata_to_json(false).unwrap_or_default()
 }
 
+/// Built-in example scripts (`name`, `source`), embedded from `docs/script-examples`. They are a
+/// runnable corpus (see the tests) and the few-shot context for AI script authoring.
+pub fn examples() -> &'static [(&'static str, &'static str)] {
+    &[
+        (
+            "recolor-selection",
+            include_str!("../../../docs/script-examples/recolor-selection.rhai"),
+        ),
+        (
+            "grid-of-rectangles",
+            include_str!("../../../docs/script-examples/grid-of-rectangles.rhai"),
+        ),
+        (
+            "add-title",
+            include_str!("../../../docs/script-examples/add-title.rhai"),
+        ),
+        (
+            "nudge-all",
+            include_str!("../../../docs/script-examples/nudge-all.rhai"),
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests;

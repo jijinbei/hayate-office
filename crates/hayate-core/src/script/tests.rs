@@ -167,6 +167,27 @@ fn unknown_function_errors() {
 }
 
 #[test]
+fn bundled_examples_run_without_error() {
+    let reg = Rc::new(builtins());
+    // A sample deck: one slide with a shape, and that shape selected.
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Blank");
+    let slide = p.add_slide(layout);
+    let a = p.add_shape(slide);
+    p.world.set(a, CompValue::Frame(RectEmu::new(0, 0, 100, 50)));
+    let ctx = ScriptContext {
+        current_slide: Some(slide),
+        selection: vec![a],
+    };
+    for (name, src) in crate::script_examples() {
+        let out = run_script(Rc::clone(&reg), &p, &ctx, src)
+            .unwrap_or_else(|e| panic!("example `{name}` failed to run: {e}"));
+        assert!(!out.ops.is_empty(), "example `{name}` should issue operations");
+    }
+}
+
+#[test]
 fn metadata_lists_callable_functions() {
     let json = script_api_metadata(Rc::new(builtins()));
     assert!(

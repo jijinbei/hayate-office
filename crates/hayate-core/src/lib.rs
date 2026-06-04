@@ -27,7 +27,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 mod script;
-pub use script::{run_script, script_api_metadata, ScriptContext, ScriptError, ScriptOutcome};
+pub use script::{
+    examples as script_examples, run_script, script_api_metadata, ScriptContext, ScriptError,
+    ScriptOutcome,
+};
 
 /// The type of a single command parameter. MVP stand-in for a JSON Schema property
 /// (DESIGN 6.13); kept small and serializable so the manifest can be produced as-is.
