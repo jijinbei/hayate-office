@@ -711,7 +711,7 @@ fn manifest_includes_arrange_commands() {
 /// Build a world with a single entity carrying a Frame and a TextBody with two runs in one
 /// paragraph (so "all runs" behaviour is observable). Returns (world, entity).
 fn world_with_text_shape() -> (World, Entity) {
-    use hayate_ir::text::{Paragraph, Run};
+    use hayate_ir::text::Paragraph;
     let (mut w, e) = world_with_framed_shape();
     let body = TextBody {
         paragraphs: vec![Paragraph::new(vec![
