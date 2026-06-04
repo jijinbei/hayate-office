@@ -52,6 +52,7 @@ use hayate_render::scene::{PxSize, Scene};
 use hayate_render::{build_slide_scene, Guide};
 
 mod actions;
+mod ai;
 mod home;
 mod icons;
 mod input;
@@ -182,6 +183,8 @@ struct HayateApp {
     palette: Option<PaletteState>,
     /// Open script console (editable buffer), if any. Ctrl+Shift+R toggles it.
     script_panel: Option<ScriptPanel>,
+    /// Open AI prompt (natural-language request), if any. Ctrl+Shift+A toggles it.
+    ai_panel: Option<AiPanel>,
     /// Commands registered by scripts (via `register_command`), shown in the palette.
     script_commands: Vec<hayate_core::RegisteredCommand>,
     /// Numeric field being typed into (rotation/position/size/opacity), if any.
@@ -426,6 +429,7 @@ impl HayateApp {
             doc_path: DOC_PATH.to_string(),
             save_modal: None,
             script_panel: None,
+            ai_panel: None,
             script_commands: Vec::new(),
             notice: None,
             master_layout: None,
@@ -452,6 +456,12 @@ struct SaveModal {
 /// Script console state: an editable Rhai source buffer. Run with Ctrl/Cmd+Enter; the result
 /// (op count / print log / error) is shown in the notice modal.
 struct ScriptPanel {
+    buf: String,
+}
+
+/// AI prompt state: a natural-language request that the Anthropic API turns into a script
+/// (loaded into the console on success). Opened with Ctrl/Cmd+Shift+A.
+struct AiPanel {
     buf: String,
 }
 

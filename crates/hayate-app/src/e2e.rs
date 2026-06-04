@@ -1335,3 +1335,33 @@ fn script_can_register_and_run_a_command(cx: &mut TestAppContext) {
         "running the registered command added a shape"
     );
 }
+
+#[gpui::test]
+fn ai_panel_opens_and_warns_without_api_key(cx: &mut TestAppContext) {
+    std::env::remove_var("ANTHROPIC_API_KEY");
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // Ctrl+Shift+A opens the AI prompt.
+    app.update(cx, |a, cx| a.on_key_down(&keydown("ctrl-shift-a"), cx));
+    assert!(
+        app.read_with(cx, |a, _| a.ai_panel.is_some()),
+        "Ctrl+Shift+A opens the AI prompt"
+    );
+    // Submitting a request with no API key reports it (no network call attempted).
+    app.update(cx, |a, _| {
+        a.ai_panel = Some(super::AiPanel {
+            buf: "make a blue box".to_string(),
+        });
+    });
+    app.update(cx, |a, cx| a.on_key_down(&keydown("enter"), cx));
+    app.read_with(cx, |a, _| {
+        assert!(a.ai_panel.is_none(), "submitting closes the prompt");
+        assert!(
+            a.notice
+                .as_deref()
+                .unwrap_or("")
+                .contains("ANTHROPIC_API_KEY"),
+            "missing key is reported, got {:?}",
+            a.notice
+        );
+    });
+}

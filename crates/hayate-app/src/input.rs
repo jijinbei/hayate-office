@@ -13,7 +13,9 @@ use hayate_model::edit;
 use crate::util::{
     next_char_boundary, prev_char_boundary, range_from_utf16, range_to_utf16, utf16_to_byte,
 };
-use crate::{pt_to_emu, FieldEdit, FieldKind, HayateApp, PaletteState, ScriptPanel, TextEdit};
+use crate::{
+    pt_to_emu, AiPanel, FieldEdit, FieldKind, HayateApp, PaletteState, ScriptPanel, TextEdit,
+};
 
 use hayate_ir::geom::RectEmu;
 use hayate_ir::world::{CompKind, CompValue, Entity};
@@ -403,6 +405,39 @@ impl HayateApp {
         cx.notify();
     }
 
+    /// Key handling for the AI prompt. Enter submits the natural-language request to the AI
+    /// authoring loop (and closes the prompt); Esc cancels. Single-line editing like the dialog.
+    pub(crate) fn ai_panel_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
+        match ev.keystroke.key.as_str() {
+            "escape" => self.ai_panel = None,
+            "enter" => {
+                if let Some(p) = self.ai_panel.take() {
+                    let req = p.buf.trim().to_string();
+                    if !req.is_empty() {
+                        self.ai_author(req, cx);
+                    }
+                }
+            }
+            "backspace" => {
+                if let Some(p) = self.ai_panel.as_mut() {
+                    p.buf.pop();
+                }
+            }
+            "space" => {
+                if let Some(p) = self.ai_panel.as_mut() {
+                    p.buf.push(' ');
+                }
+            }
+            s if s.chars().count() == 1 => {
+                if let Some(p) = self.ai_panel.as_mut() {
+                    p.buf.push_str(s);
+                }
+            }
+            _ => {}
+        }
+        cx.notify();
+    }
+
     pub(crate) fn field_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
         let key = ev.keystroke.key.as_str();
         match key {
@@ -560,6 +595,10 @@ impl HayateApp {
             self.rename_key(ev, cx);
             return;
         }
+        if self.ai_panel.is_some() {
+            self.ai_panel_key(ev, cx);
+            return;
+        }
         if self.script_panel.is_some() {
             self.script_panel_key(ev, cx);
             return;
@@ -618,6 +657,11 @@ impl HayateApp {
             // Ctrl/Cmd+Shift+R opens the script console (R = Run script).
             "r" if cmd && k.modifiers.shift => {
                 self.script_panel = Some(ScriptPanel { buf: String::new() });
+                cx.notify();
+            }
+            // Ctrl/Cmd+Shift+A opens the AI prompt (A = Ask AI).
+            "a" if cmd && k.modifiers.shift => {
+                self.ai_panel = Some(AiPanel { buf: String::new() });
                 cx.notify();
             }
             "e" if cmd && k.modifiers.shift => self.export_pptx(),

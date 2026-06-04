@@ -1103,6 +1103,7 @@ impl Render for HayateApp {
             .children(self.font_overlay(window, cx))
             .children(self.save_overlay(cx))
             .children(self.script_overlay(cx))
+            .children(self.ai_overlay(cx))
             .children(self.notice_overlay(cx))
             .into_any_element()
     }
@@ -1749,6 +1750,57 @@ impl HayateApp {
             .bg(rgba(0x00000088))
             .on_click(cx.listener(|this, _ev: &ClickEvent, _window, cx| {
                 this.script_panel = None;
+                cx.notify();
+            }))
+            .child(dialog);
+        Some(backdrop.into_any_element())
+    }
+
+    /// The AI prompt overlay: a single-line natural-language request turned into a script.
+    fn ai_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let p = self.ai_panel.as_ref()?;
+        let field = div()
+            .w_full()
+            .px_3()
+            .py_2()
+            .rounded_md()
+            .bg(rgb(0x1f1f1f))
+            .border_1()
+            .border_color(rgb(0x3b82f6))
+            .text_color(rgb(0xffffff))
+            .child(format!("{}|", p.buf));
+        let dialog = div()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .w(px(560.))
+            .p_4()
+            .bg(rgb(0x2b2b2b))
+            .border_1()
+            .border_color(rgb(0x555555))
+            .rounded_lg()
+            .shadow_lg()
+            .text_color(rgb(0xffffff))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(rgb(0xaaaaaa))
+                    .child("Ask AI — describe an edit"),
+            )
+            .child(field)
+            .child(div().text_xs().text_color(rgb(0x888888)).child(
+                "Enter to generate · Esc to cancel — e.g. \u{201c}make a 3x3 grid of blue boxes\u{201d}",
+            ));
+        let backdrop = div()
+            .id("ai_backdrop")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(rgba(0x00000088))
+            .on_click(cx.listener(|this, _ev: &ClickEvent, _window, cx| {
+                this.ai_panel = None;
                 cx.notify();
             }))
             .child(dialog);

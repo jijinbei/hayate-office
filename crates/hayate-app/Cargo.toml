@@ -16,6 +16,9 @@ hayate-core = { path = "../hayate-core" }
 serde_json.workspace = true
 # Build recent-file thumbnails across cores on a background thread (home screen).
 rayon = "1"
+# Blocking HTTP client (rustls TLS) for the optional AI script-authoring call to the Anthropic
+# API. Runs on a background thread; the app works fully offline without it.
+ureq = { version = "2", features = ["json", "tls"] }
 gpui.workspace = true
 # Decode the embedded app logo into the RGBA image gpui wants for the X11 window icon.
 # Pinned to the same 0.25 line gpui resolves, so the dependency graph stays unified.
