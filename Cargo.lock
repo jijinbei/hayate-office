@@ -2613,6 +2613,7 @@ dependencies = [
  "hayate-model",
  "hayate-render",
  "image",
+ "rayon",
  "serde_json",
 ]
 
@@ -2667,6 +2668,7 @@ dependencies = [
  "flate2",
  "hayate-ir",
  "image",
+ "rayon",
  "ttf-parser",
 ]
 

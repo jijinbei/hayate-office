@@ -17,3 +17,6 @@ cosmic-text = "0.19"
 ttf-parser = "0.25"
 flate2 = "1"
 image = "0.25"
+# Data-parallel PDF export: compress per-page content streams and embed images across cores.
+# Already in the lockfile (pulled by image), so this adds nothing new.
+rayon = "1"

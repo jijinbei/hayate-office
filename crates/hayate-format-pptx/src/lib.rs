@@ -945,7 +945,7 @@ fn parse_hex_rgb(s: &str) -> Option<hayate_ir::color::Rgba> {
 }
 
 /// The local name of an XML element, dropping any namespace prefix (`p:sp` -> `sp`).
-fn local_name(qname: &[u8]) -> std::borrow::Cow<str> {
+fn local_name(qname: &[u8]) -> std::borrow::Cow<'_, str> {
     let local = match qname.iter().rposition(|&b| b == b':') {
         Some(i) => &qname[i + 1..],
         None => qname,

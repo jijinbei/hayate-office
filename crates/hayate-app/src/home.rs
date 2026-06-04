@@ -1,6 +1,7 @@
 //! Home/start screen: shown at launch instead of a deck. Offers "New presentation" (a fresh
 //! template deck opened in master-edit mode) and a thumbnailed list of recently-opened files.
 
+use gpui::{prelude::*, Context};
 use hayate_ir::color::{Color, ThemeColorToken};
 use hayate_ir::geom::RectEmu;
 use hayate_ir::paint::Fill;
@@ -11,6 +12,7 @@ use hayate_ir::units::inch_f;
 use hayate_model::{edit, History};
 use hayate_render::build_slide_scene;
 use hayate_render::scene::PxSize;
+use rayon::prelude::*;
 
 use crate::{recent, EditScope, HayateApp, LeftTab, RecentThumb};
 
@@ -81,31 +83,55 @@ impl HayateApp {
         self.home_loaded = false;
     }
 
-    /// Build the recent-presentation thumbnails (loads each file and renders its first slide).
-    /// Best-effort: unreadable files are skipped.
-    pub(crate) fn load_home_recents(&mut self) {
-        let mut thumbs = Vec::new();
-        for path in recent::load() {
-            let Ok(p) = hayate_format::load(&path) else {
-                continue;
-            };
-            let Some(slide) = p.slides().first().copied() else {
-                continue;
-            };
-            let scene = build_slide_scene(&p, slide, PxSize { w: 240.0, h: 135.0 });
+    /// Kick off building the recent-presentation thumbnails. Loading every file and rendering its
+    /// first slide is I/O- and CPU-heavy, so it runs off the main thread (and across cores via
+    /// rayon) so the home screen stays responsive; the thumbnails appear when the task completes.
+    /// Idempotent per home visit: `go_home` clears `home_loaded` to force a refresh.
+    pub(crate) fn load_home_recents(&mut self, cx: &mut Context<Self>) {
+        if self.home_loaded {
+            return;
+        }
+        self.home_loaded = true;
+        let paths = recent::load();
+        if paths.is_empty() {
+            self.home_recents = Vec::new();
+            return;
+        }
+        cx.spawn(async move |this, cx| {
+            let thumbs = cx
+                .background_spawn(async move { build_recent_thumbs(paths) })
+                .await;
+            let _ = this.update(cx, |app, cx| {
+                app.home_recents = thumbs;
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+}
+
+/// Load each recent presentation and render its first slide to a thumbnail, in parallel across
+/// cores. Order is preserved (rayon's indexed collect), unreadable files are skipped. Runs on a
+/// background thread, so it must own its inputs and touch no `&self` state.
+fn build_recent_thumbs(paths: Vec<String>) -> Vec<RecentThumb> {
+    let target = PxSize { w: 240.0, h: 135.0 };
+    paths
+        .into_par_iter()
+        .filter_map(|path| {
+            let p = hayate_format::load(&path).ok()?;
+            let slide = p.slides().first().copied()?;
+            let scene = build_slide_scene(&p, slide, target);
             let name = std::path::Path::new(&path)
                 .file_name()
                 .and_then(|s| s.to_str())
                 .unwrap_or(&path)
                 .to_string();
-            thumbs.push(RecentThumb {
+            Some(RecentThumb {
                 path,
                 name,
                 scene,
                 media: p.media,
-            });
-        }
-        self.home_recents = thumbs;
-        self.home_loaded = true;
-    }
+            })
+        })
+        .collect()
 }

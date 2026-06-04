@@ -29,9 +29,7 @@ impl Render for HayateApp {
 
         // Home/start screen: shown at launch and via the Home button. Recents are built lazily.
         if self.home {
-            if !self.home_loaded {
-                self.load_home_recents();
-            }
+            self.load_home_recents(cx);
             return self.render_home(window, cx);
         }
 

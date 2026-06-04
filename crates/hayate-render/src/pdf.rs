@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 use std::io::Write as _;
 
 use cosmic_text::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Style, Weight};
+use rayon::prelude::*;
 
 use hayate_ir::presentation::Presentation;
 use hayate_ir::text::HAlign;
@@ -154,13 +155,19 @@ pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
 
     // Build image XObjects (one per used media key).
     let mut image_res: BTreeMap<String, (String, u32)> = BTreeMap::new();
-    for (ii, key) in used_images.iter().enumerate() {
-        let Some(bytes) = p.media.get(key) else {
-            continue;
-        };
-        let Some((iw, ih, filter, data)) = embed_image(bytes, opts.image_dpi, pt_w, pt_h) else {
-            continue;
-        };
+    // Decode + compress each image across cores; assign object ids sequentially afterwards so the
+    // output (and the "Im{ii}" names, gaps included) stays byte-identical to the serial path.
+    let image_keys: Vec<&String> = used_images.iter().collect();
+    let embedded: Vec<Option<(usize, u32, u32, &'static str, std::borrow::Cow<[u8]>)>> = image_keys
+        .par_iter()
+        .enumerate()
+        .map(|(ii, &key)| {
+            let bytes = p.media.get(key)?;
+            let (iw, ih, filter, data) = embed_image(bytes, opts.image_dpi, pt_w, pt_h)?;
+            Some((ii, iw, ih, filter, data))
+        })
+        .collect();
+    for (ii, iw, ih, filter, data) in embedded.into_iter().flatten() {
         let id = pdf.alloc();
         let mut body = format!(
             "<< /Type /XObject /Subtype /Image /Width {iw} /Height {ih} /ColorSpace /DeviceRGB \
@@ -171,7 +178,7 @@ pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
         body.extend_from_slice(&data);
         body.extend_from_slice(b"\nendstream");
         pdf.put(id, obj_bytes(id, &body));
-        image_res.insert(key.clone(), (format!("Im{ii}"), id));
+        image_res.insert(image_keys[ii].clone(), (format!("Im{ii}"), id));
     }
 
     // Shared resources dictionary (fonts + images), referenced by every page.
@@ -192,18 +199,22 @@ pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
     }
     res.push_str(">>");
 
-    // Pass 2: serialize each page's content stream + page object.
+    // Pass 2: serialize + compress every page's content stream in parallel (the CPU-heavy part,
+    // pure given the shared read-only resources), then allocate object ids sequentially so the
+    // byte output matches the serial path exactly.
+    let compressed: Vec<Vec<u8>> = pages
+        .par_iter()
+        .map(|page| flate(serialize_page(page, pt_w, pt_h, &font_res, &image_res).as_bytes()))
+        .collect();
     let mut page_ids: Vec<u32> = Vec::new();
-    for page in &pages {
-        let content = serialize_page(page, pt_w, pt_h, &font_res, &image_res);
-        let zipped = flate(content.as_bytes());
+    for zipped in &compressed {
         let content_id = pdf.alloc();
         let mut cbody = format!(
             "<< /Length {} /Filter /FlateDecode >>\nstream\n",
             zipped.len()
         )
         .into_bytes();
-        cbody.extend_from_slice(&zipped);
+        cbody.extend_from_slice(zipped);
         cbody.extend_from_slice(b"\nendstream");
         pdf.put(content_id, obj_bytes(content_id, &cbody));
 

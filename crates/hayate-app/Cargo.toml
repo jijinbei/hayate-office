@@ -14,6 +14,8 @@ hayate-format = { path = "../hayate-format" }
 hayate-format-pptx = { path = "../hayate-format-pptx" }
 hayate-core = { path = "../hayate-core" }
 serde_json.workspace = true
+# Build recent-file thumbnails across cores on a background thread (home screen).
+rayon = "1"
 gpui.workspace = true
 # Decode the embedded app logo into the RGBA image gpui wants for the X11 window icon.
 # Pinned to the same 0.25 line gpui resolves, so the dependency graph stays unified.
