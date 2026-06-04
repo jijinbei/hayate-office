@@ -2623,6 +2623,7 @@ version = "0.0.0"
 dependencies = [
  "hayate-ir",
  "hayate-model",
+ "schemars",
  "serde",
  "serde_json",
 ]

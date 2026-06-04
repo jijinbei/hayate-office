@@ -77,6 +77,10 @@ pub struct CommandMeta {
     pub title: String,
     /// Grouping for the palette, e.g. `"Shape"`.
     pub category: String,
+    /// One-line description of what the command does. Feeds the generated scripting-API
+    /// reference and the AI tool schema (DESIGN 6.13). Empty when unset; the docs then fall
+    /// back to the title.
+    pub description: String,
 }
 
 impl CommandMeta {
@@ -89,7 +93,14 @@ impl CommandMeta {
             id: id.into(),
             title: title.into(),
             category: category.into(),
+            description: String::new(),
         }
+    }
+
+    /// Attach a one-line description (chainable). Used by the generated API docs / AI schema.
+    pub fn describe(mut self, description: impl Into<String>) -> Self {
+        self.description = description.into();
+        self
     }
 }
 
@@ -161,7 +172,43 @@ impl CommandRegistry {
                     "id": c.meta.id,
                     "title": c.meta.title,
                     "category": c.meta.category,
+                    "description": c.meta.description,
                     "params": params,
+                })
+            })
+            .collect()
+    }
+
+    /// One JSON-Schema tool definition per command (Anthropic-tool shape: name + description +
+    /// input_schema), the machine-readable surface scripts/AI call. The input schema is JSON
+    /// Schema (draft 2020-12) built from each command's `ParamSpec` list. `schemars::Schema`
+    /// validates/normalizes the object so the output is canonical (DESIGN 6.13).
+    pub fn tool_schemas(&self) -> Vec<Value> {
+        self.commands
+            .iter()
+            .map(|c| {
+                let mut properties = serde_json::Map::new();
+                let mut required: Vec<Value> = Vec::new();
+                for p in &c.params {
+                    properties.insert(p.name.clone(), param_json_schema(p.ty));
+                    required.push(Value::from(p.name.clone()));
+                }
+                let input = json!({
+                    "type": "object",
+                    "properties": Value::Object(properties),
+                    "required": required,
+                    "additionalProperties": false,
+                });
+                let schema = schemars::Schema::try_from(input).expect("well-formed JSON Schema");
+                let description = if c.meta.description.is_empty() {
+                    c.meta.title.clone()
+                } else {
+                    c.meta.description.clone()
+                };
+                json!({
+                    "name": c.meta.id,
+                    "description": description,
+                    "input_schema": schema,
                 })
             })
             .collect()
@@ -311,7 +358,8 @@ pub fn builtins() -> CommandRegistry {
 
     // shape.delete — despawn the target entity (DESIGN 6.10 Despawn op).
     reg.register(
-        CommandMeta::new("shape.delete", "Delete Shape", "Shape"),
+        CommandMeta::new("shape.delete", "Delete Shape", "Shape")
+            .describe("Delete the target shape (despawn the entity)."),
         vec![ParamSpec::new("entity", ParamType::Entity)],
         |_world, args| match arg_entity(args, "entity") {
             Some(entity) => vec![Operation::Despawn { entity }],
@@ -321,7 +369,8 @@ pub fn builtins() -> CommandRegistry {
 
     // shape.set_fill — replace the entity's Fill with a solid color.
     reg.register(
-        CommandMeta::new("shape.set_fill", "Set Fill", "Shape"),
+        CommandMeta::new("shape.set_fill", "Set Fill", "Shape")
+            .describe("Set the shape fill to a solid color."),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("color", ParamType::Color),
@@ -334,7 +383,8 @@ pub fn builtins() -> CommandRegistry {
 
     // shape.fill_gradient — replace the entity's Fill with a two-stop linear gradient.
     reg.register(
-        CommandMeta::new("shape.fill_gradient", "Gradient Fill", "Shape"),
+        CommandMeta::new("shape.fill_gradient", "Gradient Fill", "Shape")
+            .describe("Set the shape fill to a two-stop linear gradient."),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("from", ParamType::Color),
@@ -364,7 +414,8 @@ pub fn builtins() -> CommandRegistry {
 
     // shape.move — translate the entity's frame by (dx, dy); reads the current frame.
     reg.register(
-        CommandMeta::new("shape.move", "Move Shape", "Shape"),
+        CommandMeta::new("shape.move", "Move Shape", "Shape")
+            .describe("Translate the shape's frame by (dx, dy)."),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("dx", ParamType::Int),
@@ -384,7 +435,9 @@ pub fn builtins() -> CommandRegistry {
     // converted to EMU), keeping its current size. Reads the current Frame from the World; an
     // entity with no Frame yields no ops. Built directly as a SetComponent op.
     reg.register(
-        CommandMeta::new("shape.set_position", "Set Position", "Shape"),
+        CommandMeta::new("shape.set_position", "Set Position", "Shape").describe(
+            "Set the shape's frame origin to an absolute point (in points), keeping its size.",
+        ),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("x", ParamType::Float),
@@ -421,7 +474,9 @@ pub fn builtins() -> CommandRegistry {
     // to EMU; each dimension is floored at 1pt), keeping its current origin. Reads the current
     // Frame from the World; an entity with no Frame yields no ops.
     reg.register(
-        CommandMeta::new("shape.set_size", "Set Size", "Shape"),
+        CommandMeta::new("shape.set_size", "Set Size", "Shape").describe(
+            "Set the shape's frame size to an absolute size (in points), keeping its origin.",
+        ),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("w", ParamType::Float),
@@ -459,7 +514,8 @@ pub fn builtins() -> CommandRegistry {
     // shape.bring_to_front — move the entity to the front (largest Order) among its
     // siblings (entities sharing the same parent). Reads current order state from the World.
     reg.register(
-        CommandMeta::new("shape.bring_to_front", "Bring to Front", "Shape"),
+        CommandMeta::new("shape.bring_to_front", "Bring to Front", "Shape")
+            .describe("Move the shape to the front (largest Order) among its siblings."),
         vec![ParamSpec::new("entity", ParamType::Entity)],
         |world, args| match arg_entity(args, "entity") {
             Some(entity) => reorder_to_edge(world, entity, Edge::Front),
@@ -470,7 +526,8 @@ pub fn builtins() -> CommandRegistry {
     // shape.send_to_back — symmetric: move the entity to the back (smallest Order) among
     // its siblings.
     reg.register(
-        CommandMeta::new("shape.send_to_back", "Send to Back", "Shape"),
+        CommandMeta::new("shape.send_to_back", "Send to Back", "Shape")
+            .describe("Move the shape to the back (smallest Order) among its siblings."),
         vec![ParamSpec::new("entity", ParamType::Entity)],
         |world, args| match arg_entity(args, "entity") {
             Some(entity) => reorder_to_edge(world, entity, Edge::Back),
@@ -481,7 +538,8 @@ pub fn builtins() -> CommandRegistry {
     // shape.set_rotation — set the entity's Rotation (degrees clockwise). Built directly as a
     // SetComponent op so this does not depend on the (separately evolving) edit::set_rotation.
     reg.register(
-        CommandMeta::new("shape.set_rotation", "Set Rotation", "Shape"),
+        CommandMeta::new("shape.set_rotation", "Set Rotation", "Shape")
+            .describe("Set the shape's rotation (degrees clockwise)."),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("degrees", ParamType::Float),
@@ -498,7 +556,8 @@ pub fn builtins() -> CommandRegistry {
     // shape.set_opacity — set the entity's Opacity. The value is clamped to 0.0..=1.0 and
     // stored as f32. Built directly as a SetComponent op (no edit-helper dependency).
     reg.register(
-        CommandMeta::new("shape.set_opacity", "Set Opacity", "Style"),
+        CommandMeta::new("shape.set_opacity", "Set Opacity", "Style")
+            .describe("Set the shape's opacity (clamped to 0.0..=1.0)."),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("value", ParamType::Float),
@@ -517,7 +576,8 @@ pub fn builtins() -> CommandRegistry {
 
     // shape.reset_rotation — clear any rotation by setting it back to 0 degrees.
     reg.register(
-        CommandMeta::new("shape.reset_rotation", "Reset Rotation", "Shape"),
+        CommandMeta::new("shape.reset_rotation", "Reset Rotation", "Shape")
+            .describe("Clear any rotation by setting it back to 0 degrees."),
         vec![ParamSpec::new("entity", ParamType::Entity)],
         |_world, args| match arg_entity(args, "entity") {
             Some(entity) => vec![Operation::SetComponent {
@@ -531,7 +591,8 @@ pub fn builtins() -> CommandRegistry {
     // shape.rotate_by — add `degrees` to the entity's current Rotation (default 0.0 when the
     // entity has no Rotation yet). Reads current state from the World.
     reg.register(
-        CommandMeta::new("shape.rotate_by", "Rotate By", "Shape"),
+        CommandMeta::new("shape.rotate_by", "Rotate By", "Shape")
+            .describe("Add the given degrees to the shape's current rotation."),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("degrees", ParamType::Float),
@@ -571,7 +632,8 @@ pub fn builtins() -> CommandRegistry {
                 format!("shape.fill_accent{n}"),
                 format!("Fill: Accent {n}"),
                 "Style",
-            ),
+            )
+            .describe(format!("Set the shape fill to theme accent color {n}.")),
             vec![ParamSpec::new("entity", ParamType::Entity)],
             move |_world, args| match arg_entity(args, "entity") {
                 Some(entity) => vec![Operation::SetComponent {
@@ -588,7 +650,9 @@ pub fn builtins() -> CommandRegistry {
     // and overwrite the first paragraph's first run text (creating a default paragraph/run if
     // either is missing). If there is no TextBody yet, create one with a single default run.
     reg.register(
-        CommandMeta::new("shape.set_text", "Set Text", "Text"),
+        CommandMeta::new("shape.set_text", "Set Text", "Text").describe(
+            "Set the shape's text to a single string, preserving the first run's formatting.",
+        ),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("text", ParamType::String),
@@ -628,7 +692,8 @@ pub fn builtins() -> CommandRegistry {
     // preserving all other formatting. Reads the current TextBody from the World; an entity with
     // no text yields no ops. Built directly as a SetComponent op.
     reg.register(
-        CommandMeta::new("shape.set_font_size", "Set Font Size", "Text"),
+        CommandMeta::new("shape.set_font_size", "Set Font Size", "Text")
+            .describe("Set every run's font size to the given points (minimum 1pt)."),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("pt", ParamType::Float),
@@ -658,7 +723,8 @@ pub fn builtins() -> CommandRegistry {
 
     // shape.set_font — set every run's font family to the given name.
     reg.register(
-        CommandMeta::new("shape.set_font", "Set Font", "Text"),
+        CommandMeta::new("shape.set_font", "Set Font", "Text")
+            .describe("Set every run's font family to the given name."),
         vec![
             ParamSpec::new("entity", ParamType::Entity),
             ParamSpec::new("family", ParamType::String),
@@ -690,17 +756,28 @@ pub fn builtins() -> CommandRegistry {
     // attribute across the whole text box. To keep the box consistent, the new value is the
     // negation of the FIRST run's current value, then applied to every run. Reads the current
     // TextBody from the World; an entity with no text yields no ops.
-    for (id, title, attr) in [
-        ("shape.toggle_bold", "Toggle Bold", RunAttr::Bold),
-        ("shape.toggle_italic", "Toggle Italic", RunAttr::Italic),
+    for (id, title, attr, desc) in [
+        (
+            "shape.toggle_bold",
+            "Toggle Bold",
+            RunAttr::Bold,
+            "Toggle bold across the whole text box.",
+        ),
+        (
+            "shape.toggle_italic",
+            "Toggle Italic",
+            RunAttr::Italic,
+            "Toggle italic across the whole text box.",
+        ),
         (
             "shape.toggle_underline",
             "Toggle Underline",
             RunAttr::Underline,
+            "Toggle underline across the whole text box.",
         ),
     ] {
         reg.register(
-            CommandMeta::new(id, title, "Text"),
+            CommandMeta::new(id, title, "Text").describe(desc),
             vec![ParamSpec::new("entity", ParamType::Entity)],
             move |world, args| match arg_entity(args, "entity") {
                 Some(entity) => match world.texts.get(&entity) {
@@ -734,17 +811,28 @@ pub fn builtins() -> CommandRegistry {
 
     // shape.align_text_left / _center / _right — set EVERY paragraph's horizontal alignment.
     // Reads the current TextBody from the World; an entity with no text yields no ops.
-    for (id, title, halign) in [
-        ("shape.align_text_left", "Align Text Left", HAlign::Left),
+    for (id, title, halign, desc) in [
+        (
+            "shape.align_text_left",
+            "Align Text Left",
+            HAlign::Left,
+            "Set every paragraph's horizontal alignment to left.",
+        ),
         (
             "shape.align_text_center",
             "Align Text Center",
             HAlign::Center,
+            "Set every paragraph's horizontal alignment to center.",
         ),
-        ("shape.align_text_right", "Align Text Right", HAlign::Right),
+        (
+            "shape.align_text_right",
+            "Align Text Right",
+            HAlign::Right,
+            "Set every paragraph's horizontal alignment to right.",
+        ),
     ] {
         reg.register(
-            CommandMeta::new(id, title, "Text"),
+            CommandMeta::new(id, title, "Text").describe(desc),
             vec![ParamSpec::new("entity", ParamType::Entity)],
             move |world, args| match arg_entity(args, "entity") {
                 Some(entity) => match world.texts.get(&entity) {
@@ -768,12 +856,22 @@ pub fn builtins() -> CommandRegistry {
 
     // shape.fill_black / shape.fill_white — set the shape fill to a literal black/white. Unlike
     // the accent fills these use literals (not theme tokens), so they stay fixed across themes.
-    for (id, title, rgba) in [
-        ("shape.fill_black", "Fill: Black", Rgba::BLACK),
-        ("shape.fill_white", "Fill: White", Rgba::WHITE),
+    for (id, title, rgba, desc) in [
+        (
+            "shape.fill_black",
+            "Fill: Black",
+            Rgba::BLACK,
+            "Set the shape fill to literal black.",
+        ),
+        (
+            "shape.fill_white",
+            "Fill: White",
+            Rgba::WHITE,
+            "Set the shape fill to literal white.",
+        ),
     ] {
         reg.register(
-            CommandMeta::new(id, title, "Style"),
+            CommandMeta::new(id, title, "Style").describe(desc),
             vec![ParamSpec::new("entity", ParamType::Entity)],
             move |_world, args| match arg_entity(args, "entity") {
                 Some(entity) => vec![Operation::SetComponent {
@@ -788,24 +886,46 @@ pub fn builtins() -> CommandRegistry {
     // shapes.align_* — align a multi-entity selection to the group bounding box. The selection
     // is passed as `entities` (a JSON array of u64 ids). Each delegates to
     // `hayate_model::align::align`, returning its frame-setting ops (empty for < 2 framed ids).
-    for (id, title, how) in [
-        ("shapes.align_left", "Align Left", Align::Left),
+    for (id, title, how, desc) in [
+        (
+            "shapes.align_left",
+            "Align Left",
+            Align::Left,
+            "Align the selected shapes' left edges to the group bounding box.",
+        ),
         (
             "shapes.align_hcenter",
             "Align Center (Horizontal)",
             Align::HCenter,
+            "Align the selected shapes' horizontal centers to the group bounding box.",
         ),
-        ("shapes.align_right", "Align Right", Align::Right),
-        ("shapes.align_top", "Align Top", Align::Top),
+        (
+            "shapes.align_right",
+            "Align Right",
+            Align::Right,
+            "Align the selected shapes' right edges to the group bounding box.",
+        ),
+        (
+            "shapes.align_top",
+            "Align Top",
+            Align::Top,
+            "Align the selected shapes' top edges to the group bounding box.",
+        ),
         (
             "shapes.align_vcenter",
             "Align Middle (Vertical)",
             Align::VCenter,
+            "Align the selected shapes' vertical centers to the group bounding box.",
         ),
-        ("shapes.align_bottom", "Align Bottom", Align::Bottom),
+        (
+            "shapes.align_bottom",
+            "Align Bottom",
+            Align::Bottom,
+            "Align the selected shapes' bottom edges to the group bounding box.",
+        ),
     ] {
         reg.register(
-            CommandMeta::new(id, title, "Arrange"),
+            CommandMeta::new(id, title, "Arrange").describe(desc),
             vec![ParamSpec::new("entities", ParamType::Entity)],
             move |world, args| {
                 let ids = arg_entities(args);
@@ -817,20 +937,22 @@ pub fn builtins() -> CommandRegistry {
     // shapes.distribute_* — evenly distribute a multi-entity selection along an axis. The
     // selection is passed as `entities` (a JSON array of u64 ids). Each delegates to
     // `hayate_model::align::distribute`, returning its ops (empty for < 3 framed ids).
-    for (id, title, axis) in [
+    for (id, title, axis, desc) in [
         (
             "shapes.distribute_h",
             "Distribute Horizontally",
             Axis::Horizontal,
+            "Evenly distribute the selected shapes along the horizontal axis.",
         ),
         (
             "shapes.distribute_v",
             "Distribute Vertically",
             Axis::Vertical,
+            "Evenly distribute the selected shapes along the vertical axis.",
         ),
     ] {
         reg.register(
-            CommandMeta::new(id, title, "Arrange"),
+            CommandMeta::new(id, title, "Arrange").describe(desc),
             vec![ParamSpec::new("entities", ParamType::Entity)],
             move |world, args| {
                 let ids = arg_entities(args);
@@ -915,6 +1037,81 @@ fn reorder_to_edge(world: &World, e: Entity, edge: Edge) -> Vec<Operation> {
         entity: e,
         value: CompValue::Order(new_order),
     }]
+}
+
+/// Map a command parameter type to a JSON Schema property.
+fn param_json_schema(ty: ParamType) -> Value {
+    match ty {
+        ParamType::Entity => json!({ "type": "integer", "minimum": 0, "description": "entity id" }),
+        ParamType::Int => json!({ "type": "integer" }),
+        ParamType::Float => json!({ "type": "number" }),
+        ParamType::String => json!({ "type": "string" }),
+        ParamType::Color => {
+            json!({ "type": "string", "description": "#RRGGBB hex or a theme token (e.g. accent1)" })
+        }
+        ParamType::Bool => json!({ "type": "boolean" }),
+    }
+}
+
+/// Render the human-readable scripting-API reference (Markdown) from a registry: commands
+/// grouped by category, each with id, params (name: type), and description (falling back to the
+/// title). Generated from the registry so it never drifts (see the golden test).
+pub fn render_scripting_api_markdown(reg: &CommandRegistry) -> String {
+    use std::fmt::Write as _;
+
+    let mut out = String::new();
+    out.push_str("# HayateOffice scripting-API reference\n\n");
+    out.push_str(
+        "GENERATED FILE — do not edit by hand. Regenerate with \
+         `REGEN_DOCS=1 cargo test -p hayate-core scripting_api`.\n",
+    );
+
+    let manifest = reg.manifest();
+
+    // Categories in first-appearance (registration) order.
+    let mut categories: Vec<&str> = Vec::new();
+    for v in &manifest {
+        let cat = v["category"].as_str().unwrap_or_default();
+        if !categories.contains(&cat) {
+            categories.push(cat);
+        }
+    }
+
+    for cat in categories {
+        let _ = write!(out, "\n## {cat}\n\n");
+        out.push_str("| Command | Params | Description |\n");
+        out.push_str("| --- | --- | --- |\n");
+        for v in manifest.iter().filter(|v| v["category"] == cat) {
+            let id = v["id"].as_str().unwrap_or_default();
+            let title = v["title"].as_str().unwrap_or_default();
+            let desc = match v["description"].as_str().unwrap_or_default() {
+                "" => title,
+                d => d,
+            };
+            let params = match v["params"].as_array() {
+                Some(arr) if !arr.is_empty() => arr
+                    .iter()
+                    .map(|p| {
+                        format!(
+                            "`{}`: {}",
+                            p["name"].as_str().unwrap_or_default(),
+                            p["type"].as_str().unwrap_or_default()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                _ => "—".to_string(),
+            };
+            let _ = writeln!(out, "| `{id}` | {params} | {desc} |");
+        }
+    }
+
+    out
+}
+
+/// Render the tool-schema catalogue as pretty JSON (one JSON-Schema tool def per command).
+pub fn render_tool_schemas_json(reg: &CommandRegistry) -> String {
+    serde_json::to_string_pretty(&reg.tool_schemas()).unwrap() + "\n"
 }
 
 #[cfg(test)]

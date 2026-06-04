@@ -924,3 +924,24 @@ fn manifest_includes_text_formatting_commands() {
         assert!(ids.contains(&id), "manifest missing {id}");
     }
 }
+
+#[test]
+fn scripting_api_docs_are_in_sync() {
+    let reg = builtins();
+    let md = render_scripting_api_markdown(&reg);
+    let schema = render_tool_schemas_json(&reg);
+    let md_path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../docs/scripting-api.md");
+    let schema_path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../docs/scripting-api.schema.json"
+    );
+    if std::env::var("REGEN_DOCS").is_ok() {
+        std::fs::write(md_path, &md).unwrap();
+        std::fs::write(schema_path, &schema).unwrap();
+        return;
+    }
+    let want_md = std::fs::read_to_string(md_path).unwrap_or_default();
+    let want_schema = std::fs::read_to_string(schema_path).unwrap_or_default();
+    assert_eq!(md, want_md, "docs/scripting-api.md is stale — regenerate with REGEN_DOCS=1 cargo test -p hayate-core scripting_api");
+    assert_eq!(schema, want_schema, "docs/scripting-api.schema.json is stale — regenerate with REGEN_DOCS=1 cargo test -p hayate-core scripting_api");
+}

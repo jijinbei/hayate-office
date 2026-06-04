@@ -1,0 +1,735 @@
+[
+  {
+    "description": "Delete the target shape (despawn the entity).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.delete"
+  },
+  {
+    "description": "Set the shape fill to a solid color.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "color": {
+          "description": "#RRGGBB hex or a theme token (e.g. accent1)",
+          "type": "string"
+        },
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity",
+        "color"
+      ],
+      "type": "object"
+    },
+    "name": "shape.set_fill"
+  },
+  {
+    "description": "Set the shape fill to a two-stop linear gradient.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "angle": {
+          "type": "number"
+        },
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "from": {
+          "description": "#RRGGBB hex or a theme token (e.g. accent1)",
+          "type": "string"
+        },
+        "to": {
+          "description": "#RRGGBB hex or a theme token (e.g. accent1)",
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity",
+        "from",
+        "to",
+        "angle"
+      ],
+      "type": "object"
+    },
+    "name": "shape.fill_gradient"
+  },
+  {
+    "description": "Translate the shape's frame by (dx, dy).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "dx": {
+          "type": "integer"
+        },
+        "dy": {
+          "type": "integer"
+        },
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity",
+        "dx",
+        "dy"
+      ],
+      "type": "object"
+    },
+    "name": "shape.move"
+  },
+  {
+    "description": "Set the shape's frame origin to an absolute point (in points), keeping its size.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "entity",
+        "x",
+        "y"
+      ],
+      "type": "object"
+    },
+    "name": "shape.set_position"
+  },
+  {
+    "description": "Set the shape's frame size to an absolute size (in points), keeping its origin.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "h": {
+          "type": "number"
+        },
+        "w": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "entity",
+        "w",
+        "h"
+      ],
+      "type": "object"
+    },
+    "name": "shape.set_size"
+  },
+  {
+    "description": "Move the shape to the front (largest Order) among its siblings.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.bring_to_front"
+  },
+  {
+    "description": "Move the shape to the back (smallest Order) among its siblings.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.send_to_back"
+  },
+  {
+    "description": "Set the shape's rotation (degrees clockwise).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "degrees": {
+          "type": "number"
+        },
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity",
+        "degrees"
+      ],
+      "type": "object"
+    },
+    "name": "shape.set_rotation"
+  },
+  {
+    "description": "Set the shape's opacity (clamped to 0.0..=1.0).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "value": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "entity",
+        "value"
+      ],
+      "type": "object"
+    },
+    "name": "shape.set_opacity"
+  },
+  {
+    "description": "Clear any rotation by setting it back to 0 degrees.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.reset_rotation"
+  },
+  {
+    "description": "Add the given degrees to the shape's current rotation.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "degrees": {
+          "type": "number"
+        },
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity",
+        "degrees"
+      ],
+      "type": "object"
+    },
+    "name": "shape.rotate_by"
+  },
+  {
+    "description": "Set the shape fill to theme accent color 1.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.fill_accent1"
+  },
+  {
+    "description": "Set the shape fill to theme accent color 2.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.fill_accent2"
+  },
+  {
+    "description": "Set the shape fill to theme accent color 3.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.fill_accent3"
+  },
+  {
+    "description": "Set the shape fill to theme accent color 4.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.fill_accent4"
+  },
+  {
+    "description": "Set the shape fill to theme accent color 5.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.fill_accent5"
+  },
+  {
+    "description": "Set the shape fill to theme accent color 6.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.fill_accent6"
+  },
+  {
+    "description": "Set the shape's text to a single string, preserving the first run's formatting.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity",
+        "text"
+      ],
+      "type": "object"
+    },
+    "name": "shape.set_text"
+  },
+  {
+    "description": "Set every run's font size to the given points (minimum 1pt).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "pt": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "entity",
+        "pt"
+      ],
+      "type": "object"
+    },
+    "name": "shape.set_font_size"
+  },
+  {
+    "description": "Set every run's font family to the given name.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "family": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "entity",
+        "family"
+      ],
+      "type": "object"
+    },
+    "name": "shape.set_font"
+  },
+  {
+    "description": "Toggle bold across the whole text box.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.toggle_bold"
+  },
+  {
+    "description": "Toggle italic across the whole text box.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.toggle_italic"
+  },
+  {
+    "description": "Toggle underline across the whole text box.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.toggle_underline"
+  },
+  {
+    "description": "Set every paragraph's horizontal alignment to left.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.align_text_left"
+  },
+  {
+    "description": "Set every paragraph's horizontal alignment to center.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.align_text_center"
+  },
+  {
+    "description": "Set every paragraph's horizontal alignment to right.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.align_text_right"
+  },
+  {
+    "description": "Set the shape fill to literal black.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.fill_black"
+  },
+  {
+    "description": "Set the shape fill to literal white.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entity": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entity"
+      ],
+      "type": "object"
+    },
+    "name": "shape.fill_white"
+  },
+  {
+    "description": "Align the selected shapes' left edges to the group bounding box.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entities"
+      ],
+      "type": "object"
+    },
+    "name": "shapes.align_left"
+  },
+  {
+    "description": "Align the selected shapes' horizontal centers to the group bounding box.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entities"
+      ],
+      "type": "object"
+    },
+    "name": "shapes.align_hcenter"
+  },
+  {
+    "description": "Align the selected shapes' right edges to the group bounding box.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entities"
+      ],
+      "type": "object"
+    },
+    "name": "shapes.align_right"
+  },
+  {
+    "description": "Align the selected shapes' top edges to the group bounding box.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entities"
+      ],
+      "type": "object"
+    },
+    "name": "shapes.align_top"
+  },
+  {
+    "description": "Align the selected shapes' vertical centers to the group bounding box.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entities"
+      ],
+      "type": "object"
+    },
+    "name": "shapes.align_vcenter"
+  },
+  {
+    "description": "Align the selected shapes' bottom edges to the group bounding box.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entities"
+      ],
+      "type": "object"
+    },
+    "name": "shapes.align_bottom"
+  },
+  {
+    "description": "Evenly distribute the selected shapes along the horizontal axis.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entities"
+      ],
+      "type": "object"
+    },
+    "name": "shapes.distribute_h"
+  },
+  {
+    "description": "Evenly distribute the selected shapes along the vertical axis.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "entities": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "entities"
+      ],
+      "type": "object"
+    },
+    "name": "shapes.distribute_v"
+  }
+]
