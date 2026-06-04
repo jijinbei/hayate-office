@@ -304,7 +304,7 @@ impl HayateApp {
             "escape" => self.layout_rename = None,
             "enter" => {
                 if let Some((layout, buf)) = self.layout_rename.take() {
-                    self.rename_layout(layout, buf);
+                    self.rename_layout(layout, &buf);
                 }
             }
             "backspace" => {

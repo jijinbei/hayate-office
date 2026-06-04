@@ -32,6 +32,7 @@ pub struct Theme {
 
 impl Theme {
     /// The concrete color a theme token maps to (before any transform).
+    #[inline]
     pub fn color_for(&self, token: ThemeColorToken) -> Rgba {
         use ThemeColorToken::*;
         match token {
@@ -51,6 +52,7 @@ impl Theme {
     }
 
     /// Resolve a `Color` to a concrete `Rgba` (applying the transform for theme refs).
+    #[inline]
     pub fn resolve_color(&self, color: &Color) -> Rgba {
         match color {
             Color::Literal(rgba) => *rgba,

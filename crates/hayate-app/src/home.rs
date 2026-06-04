@@ -53,8 +53,8 @@ impl HayateApp {
     }
 
     /// Open a presentation from the recents list (or any path). Returns to slide editing.
-    pub(crate) fn open_recent(&mut self, path: String) {
-        match hayate_format::load(&path) {
+    pub(crate) fn open_recent(&mut self, path: &str) {
+        match hayate_format::load(path) {
             Ok(p) => {
                 self.pres = p;
                 self.slide = self.pres.slides().first().copied().unwrap_or(self.slide);
@@ -65,8 +65,8 @@ impl HayateApp {
                 self.left_tab = LeftTab::Slides;
                 self.scope = EditScope::Slide(self.slide);
                 self.rebuild();
-                recent::add(&path);
-                self.doc_path = path;
+                recent::add(path);
+                self.doc_path = path.to_string();
             }
             Err(e) => {
                 eprintln!("open error: {e}");

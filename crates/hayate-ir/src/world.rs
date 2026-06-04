@@ -179,6 +179,7 @@ impl World {
         }
     }
 
+    #[inline]
     pub fn is_alive(&self, e: Entity) -> bool {
         self.alive.contains(&e)
     }

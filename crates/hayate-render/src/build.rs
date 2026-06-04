@@ -273,8 +273,8 @@ pub fn build_slide_scene_at(p: &Presentation, slide: Entity, target: PxSize, t_m
 
     // Lay the steps out on an absolute timeline and accumulate, per target entity, the
     // progress of the entrance animation that governs its visibility.
-    let mut entrance_progress: std::collections::BTreeMap<Entity, f32> =
-        std::collections::BTreeMap::new();
+    let mut entrance_progress: std::collections::HashMap<Entity, f32> =
+        std::collections::HashMap::new();
 
     let mut prev_start: u32 = 0;
     let mut prev_end: u32 = 0;

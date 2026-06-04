@@ -299,8 +299,8 @@ pub fn import_pptx(
         let slide_rels = read_entry(&mut zip, &rels_part)
             .map(|x| parse_rels(&x))
             .unwrap_or_default();
-        let mut media_by_rid: std::collections::BTreeMap<String, Vec<u8>> =
-            std::collections::BTreeMap::new();
+        let mut media_by_rid: std::collections::HashMap<String, Vec<u8>> =
+            std::collections::HashMap::new();
         for (rel_id, rel_target) in &slide_rels {
             // Image targets are relative to the slide part's directory (e.g. ../media/x.png).
             let media_part = resolve_relative(&part, rel_target);
@@ -444,7 +444,7 @@ fn parse_slide_into(
     xml: &str,
     pres: &mut Presentation,
     slide: Entity,
-    media_by_rid: &std::collections::BTreeMap<String, Vec<u8>>,
+    media_by_rid: &std::collections::HashMap<String, Vec<u8>>,
 ) {
     use quick_xml::events::Event;
     use quick_xml::reader::Reader;
@@ -787,7 +787,7 @@ fn commit_picture(
     ext: Option<(Emu, Emu)>,
     rotation: Option<f32>,
     embed: Option<&str>,
-    media_by_rid: &std::collections::BTreeMap<String, Vec<u8>>,
+    media_by_rid: &std::collections::HashMap<String, Vec<u8>>,
 ) {
     use hayate_ir::geom::SizeEmu;
     use hayate_ir::image::PictureRef;

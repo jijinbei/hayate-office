@@ -211,7 +211,7 @@ impl HayateApp {
     }
 
     /// Rename a layout (undoable; updates its `LayoutInfo.name`).
-    pub(crate) fn rename_layout(&mut self, layout: Entity, name: String) {
+    pub(crate) fn rename_layout(&mut self, layout: Entity, name: &str) {
         let Some(li) = self.pres.world.layout_info.get(&layout) else {
             return;
         };
@@ -446,16 +446,16 @@ impl HayateApp {
         }
     }
 
-    pub(crate) fn set_theme_font(&mut self, major: bool, family: String) {
+    pub(crate) fn set_theme_font(&mut self, major: bool, family: &str) {
         self.edit_theme(|t| {
             let slot = if major {
                 &mut t.fonts.major
             } else {
                 &mut t.fonts.minor
             };
-            slot.latin = family.clone();
-            slot.ea = family.clone();
-            slot.cs = family;
+            slot.latin = family.to_string();
+            slot.ea = family.to_string();
+            slot.cs = family.to_string();
         });
     }
 

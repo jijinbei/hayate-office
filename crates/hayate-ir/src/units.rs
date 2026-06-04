@@ -9,16 +9,19 @@ pub const EMU_PER_PT: Emu = 12_700;
 pub const EMU_PER_CM: Emu = 360_000;
 
 /// Points (integer) to EMU.
+#[inline]
 pub const fn pt(v: i64) -> Emu {
     v * EMU_PER_PT
 }
 
 /// Points (fractional) to EMU (rounded).
+#[inline]
 pub fn pt_f(v: f64) -> Emu {
     (v * EMU_PER_PT as f64).round() as Emu
 }
 
 /// Inches (fractional) to EMU (rounded).
+#[inline]
 pub fn inch_f(v: f64) -> Emu {
     (v * EMU_PER_INCH as f64).round() as Emu
 }

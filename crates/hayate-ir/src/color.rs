@@ -15,9 +15,11 @@ pub struct Rgba {
 }
 
 impl Rgba {
+    #[inline]
     pub const fn rgb(r: u8, g: u8, b: u8) -> Self {
         Self { r, g, b, a: 255 }
     }
+    #[inline]
     pub const fn rgba(r: u8, g: u8, b: u8, a: u8) -> Self {
         Self { r, g, b, a }
     }
@@ -57,6 +59,7 @@ pub struct ColorXf {
 
 impl ColorXf {
     /// Apply the transform to an `Rgba`.
+    #[inline]
     pub fn apply(&self, c: Rgba) -> Rgba {
         let mut r = c.r as f32;
         let mut g = c.g as f32;
@@ -102,9 +105,11 @@ pub enum Color {
 }
 
 impl Color {
+    #[inline]
     pub const fn literal(c: Rgba) -> Self {
         Color::Literal(c)
     }
+    #[inline]
     pub const fn theme(token: ThemeColorToken) -> Self {
         Color::Theme {
             token,

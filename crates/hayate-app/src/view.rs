@@ -1170,7 +1170,7 @@ impl HayateApp {
                             .cursor_pointer()
                             .child(tcanvas)
                             .on_click(cx.listener(move |this, _ev: &ClickEvent, _w, cx| {
-                                this.open_recent(path.clone());
+                                this.open_recent(&path);
                                 cx.notify();
                             })),
                     )
@@ -1252,10 +1252,8 @@ impl HayateApp {
                                 "shape.set_font",
                                 serde_json::json!({ "family": fam.clone() }),
                             ),
-                            crate::FontTarget::ThemeMajor => this.set_theme_font(true, fam.clone()),
-                            crate::FontTarget::ThemeMinor => {
-                                this.set_theme_font(false, fam.clone())
-                            }
+                            crate::FontTarget::ThemeMajor => this.set_theme_font(true, &fam),
+                            crate::FontTarget::ThemeMinor => this.set_theme_font(false, &fam),
                         }
                         this.font_target = crate::FontTarget::Selection;
                         this.font_picker = false;
