@@ -25,6 +25,9 @@ use hayate_model::{Operation, Transaction};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
+mod script;
+pub use script::{run_script, ScriptError, ScriptOutcome};
+
 /// The type of a single command parameter. MVP stand-in for a JSON Schema property
 /// (DESIGN 6.13); kept small and serializable so the manifest can be produced as-is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1063,7 +1066,14 @@ pub fn render_scripting_api_markdown(reg: &CommandRegistry) -> String {
     out.push_str("# HayateOffice scripting-API reference\n\n");
     out.push_str(
         "GENERATED FILE — do not edit by hand. Regenerate with \
-         `REGEN_DOCS=1 cargo test -p hayate-core scripting_api`.\n",
+         `REGEN_DOCS=1 cargo test -p hayate-core scripting_api`.\n\n",
+    );
+    out.push_str(
+        "Each command is exposed to Rhai scripts as the listed function (positional arguments \
+         in the shown order). Argument types: `entity` = integer id, `color` = string \
+         (`\"#RRGGBB\"` or a theme token like `\"accent1\"`), `int`/`float` = number, `bool`, \
+         `string`. The read-only helper `entities()` returns the ids of all shapes. A whole \
+         script is applied as one undoable change.\n",
     );
 
     let manifest = reg.manifest();
@@ -1079,7 +1089,7 @@ pub fn render_scripting_api_markdown(reg: &CommandRegistry) -> String {
 
     for cat in categories {
         let _ = write!(out, "\n## {cat}\n\n");
-        out.push_str("| Command | Params | Description |\n");
+        out.push_str("| Script call | Command id | Description |\n");
         out.push_str("| --- | --- | --- |\n");
         for v in manifest.iter().filter(|v| v["category"] == cat) {
             let id = v["id"].as_str().unwrap_or_default();
@@ -1088,21 +1098,26 @@ pub fn render_scripting_api_markdown(reg: &CommandRegistry) -> String {
                 "" => title,
                 d => d,
             };
-            let params = match v["params"].as_array() {
-                Some(arr) if !arr.is_empty() => arr
-                    .iter()
-                    .map(|p| {
-                        format!(
-                            "`{}`: {}",
-                            p["name"].as_str().unwrap_or_default(),
-                            p["type"].as_str().unwrap_or_default()
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                _ => "—".to_string(),
-            };
-            let _ = writeln!(out, "| `{id}` | {params} | {desc} |");
+            // The Rhai function name is the id with non-identifier chars turned into `_`.
+            let func: String = id
+                .chars()
+                .map(|c| {
+                    if c.is_ascii_alphanumeric() || c == '_' {
+                        c
+                    } else {
+                        '_'
+                    }
+                })
+                .collect();
+            let arg_names: Vec<&str> = v["params"]
+                .as_array()
+                .map(|arr| arr.iter().filter_map(|p| p["name"].as_str()).collect())
+                .unwrap_or_default();
+            let _ = writeln!(
+                out,
+                "| `{func}({})` | `{id}` | {desc} |",
+                arg_names.join(", ")
+            );
         }
     }
 

@@ -31,7 +31,7 @@ pub struct Entity(pub u64);
 macro_rules! define_world {
     ($($(#[$m:meta])* $field:ident : $variant:ident : $ty:ty),* $(,)?) => {
         /// Entities plus sparse component columns.
-        #[derive(Default, Serialize, Deserialize)]
+        #[derive(Clone, Default, Serialize, Deserialize)]
         pub struct World {
             next: u64,
             alive: BTreeSet<Entity>,
