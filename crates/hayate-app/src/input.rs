@@ -756,6 +756,18 @@ impl HayateApp {
                     None
                 }
             })
+            .chain(self.script_commands.iter().filter_map(|c| {
+                // Script-registered commands carry a `script:` prefix so dispatch can tell them
+                // apart from builtin command ids.
+                if q.is_empty()
+                    || c.id.to_lowercase().contains(&q)
+                    || c.title.to_lowercase().contains(&q)
+                {
+                    Some((format!("script:{}", c.id), format!("\u{25b6} {}", c.title)))
+                } else {
+                    None
+                }
+            }))
             .collect()
     }
 
@@ -778,15 +790,19 @@ impl HayateApp {
             "escape" => self.palette = None,
             "enter" => {
                 let sel = self.palette.as_ref().map(|p| p.sel).unwrap_or(0);
-                let query = self
-                    .palette
-                    .as_ref()
-                    .map(|p| p.query.as_str())
-                    .unwrap_or("");
-                let chosen = self.registry.nth_matching_id(query, sel);
+                // Index the unified list (builtins + script-registered commands).
+                let chosen = self
+                    .palette_commands()
+                    .into_iter()
+                    .nth(sel)
+                    .map(|(id, _)| id);
                 self.palette = None;
                 if let Some(id) = chosen {
-                    self.run_command(&id);
+                    if let Some(script_id) = id.strip_prefix("script:") {
+                        self.run_script_command(script_id);
+                    } else {
+                        self.run_command(&id);
+                    }
                     self.rebuild();
                 }
             }
@@ -802,12 +818,7 @@ impl HayateApp {
                 }
             }
             "down" => {
-                let query = self
-                    .palette
-                    .as_ref()
-                    .map(|p| p.query.as_str())
-                    .unwrap_or("");
-                let n = self.registry.filter_count(query);
+                let n = self.palette_commands().len();
                 if let Some(p) = self.palette.as_mut() {
                     if p.sel + 1 < n {
                         p.sel += 1;

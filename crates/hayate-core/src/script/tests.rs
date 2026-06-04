@@ -175,7 +175,8 @@ fn bundled_examples_run_without_error() {
     let layout = p.add_layout(master, "Blank");
     let slide = p.add_slide(layout);
     let a = p.add_shape(slide);
-    p.world.set(a, CompValue::Frame(RectEmu::new(0, 0, 100, 50)));
+    p.world
+        .set(a, CompValue::Frame(RectEmu::new(0, 0, 100, 50)));
     let ctx = ScriptContext {
         current_slide: Some(slide),
         selection: vec![a],
@@ -183,7 +184,10 @@ fn bundled_examples_run_without_error() {
     for (name, src) in crate::script_examples() {
         let out = run_script(Rc::clone(&reg), &p, &ctx, src)
             .unwrap_or_else(|e| panic!("example `{name}` failed to run: {e}"));
-        assert!(!out.ops.is_empty(), "example `{name}` should issue operations");
+        assert!(
+            !out.ops.is_empty(),
+            "example `{name}` should issue operations"
+        );
     }
 }
 

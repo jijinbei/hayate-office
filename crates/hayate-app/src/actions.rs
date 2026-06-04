@@ -44,7 +44,16 @@ impl HayateApp {
                     self.also.clear();
                     self.rebuild();
                 }
+                // Merge any commands the script registered for the palette (newest wins per id).
+                let registered = out.registered.len();
+                for rc in out.registered {
+                    self.script_commands.retain(|c| c.id != rc.id);
+                    self.script_commands.push(rc);
+                }
                 let mut msg = format!("スクリプト実行: {n} 操作を適用しました");
+                if registered > 0 {
+                    msg.push_str(&format!("\nコマンドを {registered} 件登録しました"));
+                }
                 if !out.log.is_empty() {
                     msg.push('\n');
                     msg.push_str(&out.log.join("\n"));
@@ -52,6 +61,18 @@ impl HayateApp {
                 self.notice = Some(msg);
             }
             Err(e) => self.notice = Some(format!("スクリプトエラー\n{e}")),
+        }
+    }
+
+    /// Run a script-registered command by id (re-runs its stored Rhai body).
+    pub(crate) fn run_script_command(&mut self, id: &str) {
+        if let Some(body) = self
+            .script_commands
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| c.body.clone())
+        {
+            self.run_script_src(&body);
         }
     }
 

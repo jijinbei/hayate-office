@@ -28,8 +28,8 @@ use serde_json::{json, Value};
 
 mod script;
 pub use script::{
-    examples as script_examples, run_script, script_api_metadata, ScriptContext, ScriptError,
-    ScriptOutcome,
+    examples as script_examples, run_script, script_api_metadata, RegisteredCommand, ScriptContext,
+    ScriptError, ScriptOutcome,
 };
 
 /// The type of a single command parameter. MVP stand-in for a JSON Schema property

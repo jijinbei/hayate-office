@@ -1303,3 +1303,35 @@ fn script_console_runs_and_commits(cx: &mut TestAppContext) {
         "one undo reverts the entire script"
     );
 }
+
+#[gpui::test]
+fn script_can_register_and_run_a_command(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // A script registers a palette command whose body adds a rectangle.
+    app.update(cx, |a, _| {
+        a.run_script_src(
+            "register_command(\"ext.add_box\", \"Add Box\", \"let s = current_slide(); shape_add_rect(s, 10, 10, 80, 60);\");",
+        );
+    });
+    assert_eq!(
+        app.read_with(cx, |a, _| a.script_commands.len()),
+        1,
+        "the script registered one command"
+    );
+    // The registered command shows up in the palette list (with the script: prefix).
+    let listed = app.read_with(cx, |a, _| {
+        a.palette_commands()
+            .iter()
+            .any(|(id, _)| id == "script:ext.add_box")
+    });
+    assert!(listed, "registered command appears in the palette");
+
+    // Running it applies its body as one undoable change.
+    let before = app.read_with(cx, |a, _| a.pres.children(a.slide).len());
+    app.update(cx, |a, _| a.run_script_command("ext.add_box"));
+    assert_eq!(
+        app.read_with(cx, |a, _| a.pres.children(a.slide).len()),
+        before + 1,
+        "running the registered command added a shape"
+    );
+}

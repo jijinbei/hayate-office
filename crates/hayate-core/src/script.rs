@@ -55,6 +55,16 @@ pub struct ScriptContext {
     pub selection: Vec<Entity>,
 }
 
+/// A command a script asked the host to add to the UI (palette), via `register_command`. The
+/// `body` is Rhai source re-run when the command is invoked. This is the extension UI-injection
+/// point (DESIGN 6.x): a loaded script registers commands the user can then run.
+#[derive(Debug, Clone)]
+pub struct RegisteredCommand {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+}
+
 /// What a script run produced.
 #[derive(Debug, Default)]
 pub struct ScriptOutcome {
@@ -63,6 +73,8 @@ pub struct ScriptOutcome {
     pub ops: Vec<Operation>,
     /// Anything the script printed via `print`/`debug`.
     pub log: Vec<String>,
+    /// Commands the script registered for the UI (palette) via `register_command`.
+    pub registered: Vec<RegisteredCommand>,
 }
 
 /// A script that failed to compile or run.
@@ -86,6 +98,8 @@ struct ScriptState {
     ops: Vec<Operation>,
     /// `print`/`debug` output.
     log: Vec<String>,
+    /// Commands the script registered for the UI.
+    registered: Vec<RegisteredCommand>,
 }
 
 /// The Rhai-callable name for a command id: dots (and any non-identifier char) become `_`.
@@ -287,6 +301,21 @@ fn register_all(
         });
     }
 
+    // --- UI injection: a script registers a command the palette will show ---
+    {
+        let st = Rc::clone(state);
+        engine.register_fn(
+            "register_command",
+            move |id: &str, title: &str, body: &str| {
+                st.borrow_mut().registered.push(RegisteredCommand {
+                    id: id.to_string(),
+                    title: title.to_string(),
+                    body: body.to_string(),
+                });
+            },
+        );
+    }
+
     // --- One generated typed function per command ---
     for sig in command_sigs(registry) {
         let arg_types: Vec<TypeId> = vec![TypeId::of::<Dynamic>(); sig.params.len()];
@@ -350,6 +379,7 @@ pub fn run_script(
         pres: scratch_of(pres),
         ops: Vec::new(),
         log: Vec::new(),
+        registered: Vec::new(),
     }));
 
     let mut engine = sandboxed_engine();
@@ -375,11 +405,13 @@ pub fn run_script(
                 pres: scratch_of(&s.pres),
                 ops: s.ops.clone(),
                 log: s.log.clone(),
+                registered: s.registered.clone(),
             }
         });
     Ok(ScriptOutcome {
         ops: state.ops,
         log: state.log,
+        registered: state.registered,
     })
 }
 
@@ -390,6 +422,7 @@ pub fn script_api_metadata(registry: Rc<CommandRegistry>) -> String {
         pres: Presentation::new(),
         ops: Vec::new(),
         log: Vec::new(),
+        registered: Vec::new(),
     }));
     let mut engine = sandboxed_engine();
     register_all(&mut engine, &registry, &state, &ScriptContext::default());

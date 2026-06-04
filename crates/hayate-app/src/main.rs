@@ -182,6 +182,8 @@ struct HayateApp {
     palette: Option<PaletteState>,
     /// Open script console (editable buffer), if any. Ctrl+Shift+R toggles it.
     script_panel: Option<ScriptPanel>,
+    /// Commands registered by scripts (via `register_command`), shown in the palette.
+    script_commands: Vec<hayate_core::RegisteredCommand>,
     /// Numeric field being typed into (rotation/position/size/opacity), if any.
     field_edit: Option<FieldEdit>,
     /// Alignment guides shown while dragging (scene/px coords relative to the slide origin).
@@ -424,6 +426,7 @@ impl HayateApp {
             doc_path: DOC_PATH.to_string(),
             save_modal: None,
             script_panel: None,
+            script_commands: Vec::new(),
             notice: None,
             master_layout: None,
             scope: EditScope::Slide(slide),
