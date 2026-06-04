@@ -32,6 +32,9 @@ pub use script::{
     ScriptError, ScriptOutcome,
 };
 
+mod ai;
+pub use ai::{author_script, system_prompt, Attempt, ScriptGenerator};
+
 /// The type of a single command parameter. MVP stand-in for a JSON Schema property
 /// (DESIGN 6.13); kept small and serializable so the manifest can be produced as-is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
