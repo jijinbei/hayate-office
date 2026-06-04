@@ -134,17 +134,15 @@ fn push_u32(buf: &mut Vec<u8>, v: u32) {
 
 /// Encode one non-empty glyph in TrueType simple-glyph format. Returns the encoded bytes.
 fn encode_simple_glyph(contours: &[Vec<Point>]) -> Vec<u8> {
-    let mut all: Vec<Point> = Vec::new();
-    let mut end_pts: Vec<u16> = Vec::new();
+    let mut end_pts = Vec::with_capacity(contours.len());
+    let mut running = 0usize;
     for c in contours {
-        for p in c {
-            all.push(*p);
-        }
-        end_pts.push((all.len() - 1) as u16);
+        running += c.len();
+        end_pts.push((running - 1) as u16);
     }
 
     let (mut x_min, mut y_min, mut x_max, mut y_max) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
-    for p in &all {
+    for p in contours.iter().flatten() {
         x_min = x_min.min(p.x);
         y_min = y_min.min(p.y);
         x_max = x_max.max(p.x);
@@ -164,20 +162,20 @@ fn encode_simple_glyph(contours: &[Vec<Point>]) -> Vec<u8> {
     push_u16(&mut buf, 0);
 
     // flags: one byte per point, only ON_CURVE_POINT (0x01) set (all points are on-curve).
-    for p in &all {
+    for p in contours.iter().flatten() {
         buf.push(if p.on_curve { 0x01 } else { 0x00 });
     }
 
     // xCoordinates: signed 16-bit deltas from previous point (first from 0).
     let mut prev = 0i32;
-    for p in &all {
+    for p in contours.iter().flatten() {
         let d = (p.x - prev) as i16;
         push_i16(&mut buf, d);
         prev = p.x;
     }
     // yCoordinates
     let mut prev = 0i32;
-    for p in &all {
+    for p in contours.iter().flatten() {
         let d = (p.y - prev) as i16;
         push_i16(&mut buf, d);
         prev = p.y;
@@ -204,11 +202,8 @@ pub fn subset_to_glyf(font_data: &[u8], used_gids: &BTreeSet<u16>) -> Option<Vec
         return None;
     }
 
-    // Always include glyph 0 (.notdef).
-    let mut include: BTreeSet<u16> = used_gids.clone();
-    include.insert(0);
-
     // Build per-glyph encoded data (empty for glyphs not included or with no outline).
+    // Glyph 0 (.notdef) is always included.
     let mut glyf = Vec::new();
     let mut loca: Vec<u32> = Vec::with_capacity(num_glyphs as usize + 1);
     loca.push(0);
@@ -216,6 +211,7 @@ pub fn subset_to_glyf(font_data: &[u8], used_gids: &BTreeSet<u16>) -> Option<Vec
     let mut max_points: u16 = 0;
     let mut max_contours: u16 = 0;
     let mut max_advance: u16 = 0;
+    let mut advances: Vec<u16> = Vec::with_capacity(num_glyphs as usize);
     let (mut f_x_min, mut f_y_min, mut f_x_max, mut f_y_max) =
         (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
     let mut any_outline = false;
@@ -224,8 +220,9 @@ pub fn subset_to_glyf(font_data: &[u8], used_gids: &BTreeSet<u16>) -> Option<Vec
         // Track max advance across ALL glyphs (numberOfHMetrics == numGlyphs).
         let adv = face.glyph_hor_advance(GlyphId(gid)).unwrap_or(0);
         max_advance = max_advance.max(adv);
+        advances.push(adv);
 
-        let encoded = if include.contains(&gid) {
+        let encoded = if gid == 0 || used_gids.contains(&gid) {
             let mut cb = ContourBuilder::new();
             let bbox = face.outline_glyph(GlyphId(gid), &mut cb);
             cb.flush();
@@ -348,9 +345,8 @@ pub fn subset_to_glyf(font_data: &[u8], used_gids: &BTreeSet<u16>) -> Option<Vec
 
     // ---- hmtx ----
     let mut hmtx = Vec::with_capacity(num_glyphs as usize * 4);
-    for gid in 0..num_glyphs {
-        let adv = face.glyph_hor_advance(GlyphId(gid)).unwrap_or(0);
-        push_u16(&mut hmtx, adv); // advanceWidth
+    for adv in &advances {
+        push_u16(&mut hmtx, *adv); // advanceWidth
         push_i16(&mut hmtx, 0); // lsb
     }
 

@@ -158,7 +158,7 @@ fn add_media_roundtrips_bytes() {
     let bytes = vec![1u8, 2, 3, 4, 5];
     let key = p.add_media(bytes.clone());
     assert!(!key.is_empty());
-    assert_eq!(p.get_media(&key), Some(&bytes));
+    assert_eq!(p.get_media(&key), Some(bytes.as_slice()));
 }
 
 #[test]

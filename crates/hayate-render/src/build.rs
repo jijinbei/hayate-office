@@ -103,11 +103,18 @@ fn geometry_prim(
 /// Build the scene for `slide` rendered to fit `target` pixels.
 pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Scene {
     let vp = Viewport::fit(p.slide_size, target);
-    let theme = p.theme_of(slide).cloned().unwrap_or_default();
+    let default;
+    let theme = match p.theme_of(slide) {
+        Some(t) => t,
+        None => {
+            default = Theme::default();
+            &default
+        }
+    };
 
     let background = p
         .background_of(slide)
-        .map(|f| paint_to_rgba(&f, &theme))
+        .map(|f| paint_to_rgba(&f, theme))
         .unwrap_or(Rgba::WHITE);
 
     let mut nodes = Vec::new();
@@ -116,10 +123,10 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
     // behind everything and are display-only on the slide, so editing the master or layout
     // updates every slide that uses it.
     if let Some(master) = p.owning_master(slide) {
-        push_raw_children(p, master, &theme, &vp, true, false, 1.0, &mut nodes);
+        push_raw_children(p, master, theme, &vp, true, false, 1.0, &mut nodes);
     }
     if let Some(layout) = p.layout_of(slide) {
-        push_raw_children(p, layout, &theme, &vp, true, false, 1.0, &mut nodes);
+        push_raw_children(p, layout, theme, &vp, true, false, 1.0, &mut nodes);
     }
 
     // Inherited placeholders are drawn first (behind the slide's own content). Each
@@ -131,15 +138,15 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
             continue;
         };
         let bounds = vp.rect(frame);
-        let fill = p.ph_fill(slide, ph).map(|f| fill_to_paint(&f, &theme));
+        let fill = p.ph_fill(slide, ph).map(|f| fill_to_paint(&f, theme));
         let prim = if let Some(tb) = p.ph_text(slide, ph) {
-            Primitive::Text(resolve_text(tb, &theme, &vp, bounds))
+            Primitive::Text(resolve_text(tb, theme, &vp, bounds))
         } else if let Some(geom) = p.ph_geometry(slide, ph) {
             geometry_prim(&geom, bounds, fill, None, &vp)
         } else {
             // An empty placeholder shows a dim prompt ("Click to add title", etc.).
             let body = prompt_body(ph.ph_type);
-            Primitive::Text(resolve_text(&body, &theme, &vp, bounds))
+            Primitive::Text(resolve_text(&body, theme, &vp, bounds))
         };
         let source = p.find_placeholder(slide, ph);
         let rotation_deg = source
@@ -154,7 +161,7 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
     }
 
     // The slide's own non-placeholder shapes (placeholders were handled above).
-    push_raw_children(p, slide, &theme, &vp, true, true, 1.0, &mut nodes);
+    push_raw_children(p, slide, theme, &vp, true, true, 1.0, &mut nodes);
 
     Scene {
         size: vp.size(p.slide_size),

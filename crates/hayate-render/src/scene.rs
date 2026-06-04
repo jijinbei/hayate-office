@@ -195,13 +195,10 @@ impl Scene {
     /// Union of every node's primitive bounds, or `None` if the scene has no nodes.
     /// Useful for fit-to-content and select-all bounds.
     pub fn content_bounds(&self) -> Option<PxRect> {
-        let mut iter = self.nodes.iter();
-        let first = iter.next()?;
-        let mut acc = prim_bounds(&first.prim);
-        for node in iter {
-            acc = rect_union(acc, prim_bounds(&node.prim));
-        }
-        Some(acc)
+        self.nodes
+            .iter()
+            .map(|n| prim_bounds(&n.prim))
+            .reduce(rect_union)
     }
 }
 

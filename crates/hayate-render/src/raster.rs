@@ -487,6 +487,8 @@ fn draw_text_block(
         let mut guard = cell.borrow_mut();
         let (fs, cache) = &mut *guard;
         let mut line_top = by;
+        // Reused across paragraphs: drained each iteration, keeping its capacity.
+        let mut spans: Vec<(&str, Attrs)> = Vec::new();
         for para in &block.paragraphs {
             let size = para
                 .runs
@@ -507,7 +509,6 @@ fn draw_text_block(
                 2 => "\u{25E6} ",
                 _ => "\u{25AA} ",
             };
-            let mut spans: Vec<(&str, Attrs)> = Vec::new();
             if !bullet.is_empty() {
                 let c = para
                     .runs
@@ -549,7 +550,7 @@ fn draw_text_block(
             };
             let mut tb = Buffer::new_empty(metrics);
             tb.set_size(Some((bw - indent).max(1.0)), None);
-            tb.set_rich_text(spans, &Attrs::new(), Shaping::Advanced, align);
+            tb.set_rich_text(spans.drain(..), &Attrs::new(), Shaping::Advanced, align);
 
             let (ox, oy) = (bx + indent, line_top);
             tb.draw(fs, cache, CtColor::rgb(0, 0, 0), |gx, gy, gw, gh, color| {

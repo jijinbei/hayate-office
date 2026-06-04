@@ -48,7 +48,6 @@ pub fn export_pptx(
     // (`ppt/media/imageN.<ext>`). The same media key is shared across slides (one part).
     let mut media_plan: std::collections::BTreeMap<String, MediaPart> =
         std::collections::BTreeMap::new();
-    let mut media_order: Vec<String> = Vec::new();
     for slide in &slides {
         for child in pres.children(*slide) {
             let pic = match pres.world.pictures.get(&child) {
@@ -71,7 +70,6 @@ pub fn export_pptx(
                     ext,
                 },
             );
-            media_order.push(pic.media_key.clone());
         }
     }
     // The distinct image extensions needing a `<Default>` content type entry.
@@ -104,8 +102,8 @@ pub fn export_pptx(
     write_part(&mut zip, opts, "[Content_Types].xml", &ct)?;
 
     // --- ppt/media/imageN.<ext> (embedded image bytes) ---
-    for key in &media_order {
-        if let (Some(part), Some(bytes)) = (media_plan.get(key), pres.get_media(key)) {
+    for (key, part) in &media_plan {
+        if let Some(bytes) = pres.get_media(key) {
             write_binary_part(&mut zip, opts, &part.part, bytes)?;
         }
     }
@@ -333,8 +331,9 @@ fn parse_presentation(xml: &str) -> (Option<hayate_ir::geom::SizeEmu>, Vec<Strin
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) | Ok(Event::Empty(e)) => {
-                let name = local_name(e.name().as_ref());
-                match name.as_str() {
+                let qname = e.name();
+                let name = local_name(qname.as_ref());
+                match name.as_ref() {
                     "sldSz" => {
                         let cx = attr_i64(&e, b"cx");
                         let cy = attr_i64(&e, b"cy");
@@ -655,8 +654,9 @@ fn parse_slide_into(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = local_name(e.name().as_ref());
-                match name.as_str() {
+                let qname = e.name();
+                let name = local_name(qname.as_ref());
+                match name.as_ref() {
                     "sp" => state = Some(ShapeState::new()),
                     "pic" => pic = Some(PicState::default()),
                     "solidFill" => solidfill_depth += 1,
@@ -682,7 +682,8 @@ fn parse_slide_into(
             }
             Ok(Event::Empty(e)) => {
                 // Self-closing variants, e.g. <a:off .../>, <a:srgbClr .../>, <a:rPr .../>.
-                let name = local_name(e.name().as_ref());
+                let qname = e.name();
+                let name = local_name(qname.as_ref());
                 apply_attrs(&mut state, solidfill_depth, in_rpr, in_gradfill, &name, &e);
                 apply_pic_attrs(&mut pic, &name, &e);
             }
@@ -701,8 +702,9 @@ fn parse_slide_into(
                 }
             }
             Ok(Event::End(e)) => {
-                let name = local_name(e.name().as_ref());
-                match name.as_str() {
+                let qname = e.name();
+                let name = local_name(qname.as_ref());
+                match name.as_ref() {
                     "t" => in_text = false,
                     "rPr" => in_rpr = false,
                     "solidFill" => solidfill_depth = solidfill_depth.saturating_sub(1),
@@ -943,12 +945,12 @@ fn parse_hex_rgb(s: &str) -> Option<hayate_ir::color::Rgba> {
 }
 
 /// The local name of an XML element, dropping any namespace prefix (`p:sp` -> `sp`).
-fn local_name(qname: &[u8]) -> String {
-    let s = String::from_utf8_lossy(qname);
-    match s.rsplit_once(':') {
-        Some((_, local)) => local.to_string(),
-        None => s.into_owned(),
-    }
+fn local_name(qname: &[u8]) -> std::borrow::Cow<str> {
+    let local = match qname.iter().rposition(|&b| b == b':') {
+        Some(i) => &qname[i + 1..],
+        None => qname,
+    };
+    String::from_utf8_lossy(local)
 }
 
 /// Read an attribute value (matched by its full, possibly prefixed, key) as a string.
@@ -1058,17 +1060,19 @@ fn slide_xml(
                     .map(|t| format!("../{t}"))
                     .unwrap_or_else(|| mp.part.clone());
                 image_rels.push((rid.clone(), target));
-                let name = pres
-                    .world
-                    .names
-                    .get(&child)
-                    .cloned()
-                    .unwrap_or_else(|| format!("Picture {shape_id}"));
+                let owned;
+                let name: &str = match pres.world.names.get(&child) {
+                    Some(n) => n,
+                    None => {
+                        owned = format!("Picture {shape_id}");
+                        &owned
+                    }
+                };
                 s.push_str("<p:pic>");
                 s.push_str("<p:nvPicPr>");
                 s.push_str(&format!(
                     r#"<p:cNvPr id="{shape_id}" name="{}"/>"#,
-                    escape_xml(&name)
+                    escape_xml(name)
                 ));
                 s.push_str(r#"<p:cNvPicPr/>"#);
                 s.push_str("<p:nvPr/>");
@@ -1095,19 +1099,21 @@ fn slide_xml(
         }
 
         let fill = pres.world.fills.get(&child);
-        let name = pres
-            .world
-            .names
-            .get(&child)
-            .cloned()
-            .unwrap_or_else(|| format!("Shape {shape_id}"));
+        let owned;
+        let name: &str = match pres.world.names.get(&child) {
+            Some(n) => n,
+            None => {
+                owned = format!("Shape {shape_id}");
+                &owned
+            }
+        };
 
         s.push_str("<p:sp>");
         // Non-visual shape properties.
         s.push_str("<p:nvSpPr>");
         s.push_str(&format!(
             r#"<p:cNvPr id="{shape_id}" name="{}"/>"#,
-            escape_xml(&name)
+            escape_xml(name)
         ));
         if text.is_some() {
             s.push_str(r#"<p:cNvSpPr txBox="1"/>"#);

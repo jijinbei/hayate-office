@@ -38,9 +38,9 @@ pub fn encode_png(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
 fn filtered_scanlines(rgba: &[u8], w: u32, h: u32) -> Vec<u8> {
     let stride = (w as usize) * 4;
     let mut raw = Vec::with_capacity((stride + 1) * h as usize);
-    for y in 0..h as usize {
+    for row in rgba.chunks_exact(stride) {
         raw.push(0); // filter type: None
-        raw.extend_from_slice(&rgba[y * stride..(y + 1) * stride]);
+        raw.extend_from_slice(row);
     }
     raw
 }

@@ -212,9 +212,10 @@ impl HayateApp {
 
     /// Rename a layout (undoable; updates its `LayoutInfo.name`).
     pub(crate) fn rename_layout(&mut self, layout: Entity, name: String) {
-        let Some(li) = self.pres.world.layout_info.get(&layout).cloned() else {
+        let Some(li) = self.pres.world.layout_info.get(&layout) else {
             return;
         };
+        let master = li.master;
         let name = name.trim();
         if name.is_empty() {
             return;
@@ -224,7 +225,7 @@ impl HayateApp {
             vec![Operation::SetComponent {
                 entity: layout,
                 value: CompValue::Layout(hayate_ir::doc::LayoutInfo {
-                    master: li.master,
+                    master,
                     name: name.to_string(),
                 }),
             }],
@@ -422,11 +423,8 @@ impl HayateApp {
         if i >= 6 {
             return;
         }
-        let candidates: Vec<hayate_ir::color::Rgba> = hayate_ir::theme::theme_color_presets()
-            .into_iter()
-            .map(|(_, c)| c.accent[i])
-            .collect();
-        if candidates.is_empty() {
+        let presets = hayate_ir::theme::theme_color_presets();
+        if presets.is_empty() {
             return;
         }
         let current = self
@@ -434,10 +432,10 @@ impl HayateApp {
             .and_then(|m| self.pres.container_theme(m))
             .map(|t| t.colors.accent[i]);
         let next = current
-            .and_then(|cur| candidates.iter().position(|c| *c == cur))
-            .map(|p| (p + 1) % candidates.len())
+            .and_then(|cur| presets.iter().position(|(_, c)| c.accent[i] == cur))
+            .map(|p| (p + 1) % presets.len())
             .unwrap_or(0);
-        self.set_theme_accent(i, candidates[next]);
+        self.set_theme_accent(i, presets[next].1.accent[i]);
     }
 
     pub(crate) fn apply_color_preset(&mut self, idx: usize) {

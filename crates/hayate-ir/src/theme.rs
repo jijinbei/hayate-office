@@ -73,6 +73,17 @@ impl Theme {
     }
 }
 
+/// Names of the built-in color presets, in the same order as [`theme_color_presets`]. This is the
+/// single source of truth for the order, shared by both accessors (the index selects a preset).
+const PRESET_NAMES: [&str; 4] = ["Office", "Warm", "Cool", "Mono"];
+
+/// The built-in color preset names, in the same order as [`theme_color_presets`] (the index is
+/// used to select a preset). A lightweight, allocation-free alternative when only the names are
+/// needed.
+pub fn theme_color_preset_names() -> &'static [&'static str] {
+    &PRESET_NAMES
+}
+
 /// A few built-in color schemes (name + colors) the UI can apply to a master's theme.
 pub fn theme_color_presets() -> Vec<(&'static str, ThemeColors)> {
     let base = |accent: [Rgba; 6], dk2: Rgba| ThemeColors {
@@ -85,9 +96,9 @@ pub fn theme_color_presets() -> Vec<(&'static str, ThemeColors)> {
         fol_hlink: Rgba::rgb(0x80, 0x00, 0x80),
     };
     vec![
-        ("Office", Theme::default().colors),
+        (PRESET_NAMES[0], Theme::default().colors),
         (
-            "Warm",
+            PRESET_NAMES[1],
             base(
                 [
                     Rgba::rgb(0xC0, 0x39, 0x2B),
@@ -101,7 +112,7 @@ pub fn theme_color_presets() -> Vec<(&'static str, ThemeColors)> {
             ),
         ),
         (
-            "Cool",
+            PRESET_NAMES[2],
             base(
                 [
                     Rgba::rgb(0x2E, 0x86, 0xC1),
@@ -115,7 +126,7 @@ pub fn theme_color_presets() -> Vec<(&'static str, ThemeColors)> {
             ),
         ),
         (
-            "Mono",
+            PRESET_NAMES[3],
             base(
                 [
                     Rgba::rgb(0x33, 0x33, 0x33),

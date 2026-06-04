@@ -150,7 +150,7 @@ struct Drag {
 /// Dragging one endpoint of a line/arrow. The other endpoint stays fixed, so the line can be
 /// aimed in any direction (the frame's size may go negative). `drag_end` is true when the END
 /// point (`to`) follows the cursor, false for the START (`from`).
-#[derive(Clone)]
+#[derive(Clone, Copy)]
 struct LineDrag {
     entity: Entity,
     drag_end: bool,

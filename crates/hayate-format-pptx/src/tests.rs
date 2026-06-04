@@ -409,7 +409,11 @@ fn embedded_image_roundtrips() {
     let got = imported
         .get_media(&pref.media_key)
         .expect("imported media bytes should exist");
-    assert_eq!(got, &png_bytes, "embedded image bytes should round-trip");
+    assert_eq!(
+        got,
+        png_bytes.as_slice(),
+        "embedded image bytes should round-trip"
+    );
 
     let _ = std::fs::remove_file(&path);
 }

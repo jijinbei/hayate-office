@@ -86,7 +86,7 @@ impl HayateApp {
                             .map_or(false, |p| p.get(level) == Some(&key))
                     })
                     .collect();
-                out.push(self.group_header_row(gno, level, members.clone(), *index, cx));
+                out.push(self.group_header_row(gno, level, &members, *index, cx));
                 *index += 1;
                 self.build_rows(&members, level + 1, labels, group_no, index, out, cx);
             }
@@ -98,13 +98,18 @@ impl HayateApp {
         &self,
         group_no: u32,
         level: usize,
-        members: Vec<Entity>,
+        members: &[Entity],
         index: usize,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let active = members
             .iter()
             .any(|m| self.selection == Some(*m) || self.also.contains(m));
+        // Precompute owned 'static data for the (Fn) click listener.
+        let first = members.first().copied();
+        let also: Vec<Entity> = first
+            .map(|f| members.iter().copied().filter(|&m| m != f).collect())
+            .unwrap_or_default();
         let mut row = div()
             .id(("layer", index))
             .py_1()
@@ -119,9 +124,9 @@ impl HayateApp {
         }
         row.on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
             window.focus(&this.focus, cx);
-            if let Some(&first) = members.first() {
-                this.selection = Some(first);
-                this.also = members.iter().copied().filter(|&m| m != first).collect();
+            if let Some(f) = first {
+                this.selection = Some(f);
+                this.also = also.clone();
             }
             cx.notify();
         }))

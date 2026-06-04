@@ -22,7 +22,7 @@ impl HayateApp {
         let target = if let Some(e) = hit_test(&self.scene, x, y) {
             // Keep an existing multi-selection if right-clicking within it (so Group works);
             // otherwise select the shape (expanding to its group).
-            if !self.selected_all().contains(&e) {
+            if self.selection != Some(e) && !self.also.contains(&e) {
                 self.selection = Some(e);
                 let members = hayate_model::edit::group_members(&self.pres.world, e);
                 self.also = members.into_iter().filter(|&m| m != e).collect();

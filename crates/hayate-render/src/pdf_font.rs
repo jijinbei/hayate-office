@@ -3,6 +3,7 @@
 //! via a ToUnicode CMap. See [`build_type0_font`].
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::Write as _;
 
 use flate2::write::ZlibEncoder;
@@ -199,7 +200,7 @@ fn extract_sfnt(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
     out.extend_from_slice(&entry_selector.to_be_bytes());
     out.extend_from_slice(&range_shift.to_be_bytes());
     let mut offset = 12 + n * 16;
-    let mut bodies: Vec<(usize, &[u8])> = Vec::with_capacity(n);
+    let mut bodies: Vec<&[u8]> = Vec::with_capacity(n);
     for (tag, checksum, src_off, len) in &records {
         if src_off + len > data.len() {
             return std::borrow::Cow::Borrowed(data);
@@ -208,13 +209,13 @@ fn extract_sfnt(data: &[u8]) -> std::borrow::Cow<'_, [u8]> {
         out.extend_from_slice(&checksum.to_be_bytes());
         out.extend_from_slice(&(offset as u32).to_be_bytes());
         out.extend_from_slice(&(*len as u32).to_be_bytes());
-        bodies.push((offset, &data[*src_off..src_off + len]));
+        bodies.push(&data[*src_off..src_off + len]);
         offset += len + ((4 - (len % 4)) % 4); // 4-byte aligned
     }
-    for (_off, body) in bodies {
+    for body in bodies {
         out.extend_from_slice(body);
         let pad = (4 - (body.len() % 4)) % 4;
-        out.extend(std::iter::repeat(0u8).take(pad));
+        out.resize(out.len() + pad, 0);
     }
     std::borrow::Cow::Owned(out)
 }
@@ -248,7 +249,7 @@ fn build_w_array(face: &Face, used_glyphs: &BTreeMap<u16, String>, scale: f64) -
     for &gid in used_glyphs.keys() {
         if let Some(adv) = face.glyph_hor_advance(GlyphId(gid)) {
             let w = (adv as f64 * scale).round() as i64;
-            out.push_str(&format!("{gid} [{w}] "));
+            write!(out, "{gid} [{w}] ").unwrap();
         }
     }
     out.push(']');
@@ -270,7 +271,7 @@ fn build_tounicode_cmap(used_glyphs: &BTreeMap<u16, String>) -> String {
         .map(|(&gid, text)| {
             let mut dst = String::new();
             for cu in text.encode_utf16() {
-                dst.push_str(&format!("{cu:04X}"));
+                write!(dst, "{cu:04X}").unwrap();
             }
             // Guard against empty text -> map to U+0000 so the entry stays valid.
             if dst.is_empty() {
@@ -281,9 +282,9 @@ fn build_tounicode_cmap(used_glyphs: &BTreeMap<u16, String>) -> String {
         .collect();
 
     for chunk in entries.chunks(100) {
-        out.push_str(&format!("{} beginbfchar\n", chunk.len()));
+        write!(out, "{} beginbfchar\n", chunk.len()).unwrap();
         for (gid, dst) in chunk {
-            out.push_str(&format!("<{gid:04X}> <{dst}>\n"));
+            writeln!(out, "<{gid:04X}> <{dst}>").unwrap();
         }
         out.push_str("endbfchar\n");
     }

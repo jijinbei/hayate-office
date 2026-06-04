@@ -593,7 +593,7 @@ fn order_of(world: &World, e: Entity) -> Option<FracIndex> {
 /// Build a transaction that sets `e`'s `Order` to `order`.
 fn set_order_tx(label: &str, e: Entity, order: FracIndex) -> Transaction {
     Transaction::new(
-        label.to_string(),
+        label,
         vec![Operation::SetComponent {
             entity: e,
             value: CompValue::Order(order),

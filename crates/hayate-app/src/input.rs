@@ -67,7 +67,7 @@ impl HayateApp {
     }
 
     pub(crate) fn text_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
-        let key = ev.keystroke.key.clone();
+        let key = ev.keystroke.key.as_str();
         // Character input (including the space key and IME composition) is delivered through the
         // platform text-input handler (replace_text_in_range); handling it here too would double
         // it. text_key only covers control keys (commit/cancel/erase/caret motion).
@@ -82,7 +82,7 @@ impl HayateApp {
             return;
         }
         let mut live = false;
-        match key.as_str() {
+        match key {
             "escape" => {
                 if let Some(te) = self.text_edit.take() {
                     let (e, buf, lv) = (te.entity, te.original, te.orig_levels);
@@ -258,8 +258,8 @@ impl HayateApp {
     /// auto label), Escape cancels. Character input is taken directly (no IME) since there is no
     /// platform input handler over the Layers panel.
     pub(crate) fn rename_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
-        let key = ev.keystroke.key.clone();
-        match key.as_str() {
+        let key = ev.keystroke.key.as_str();
+        match key {
             "escape" => self.renaming = None,
             "enter" => {
                 if let Some((e, buf)) = self.renaming.take() {
@@ -329,8 +329,8 @@ impl HayateApp {
 
     /// Key handling for the "Save As" dialog: edit the filename, Enter saves, Esc cancels.
     pub(crate) fn save_modal_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
-        let key = ev.keystroke.key.clone();
-        match key.as_str() {
+        let key = ev.keystroke.key.as_str();
+        match key {
             "escape" => self.save_modal = None,
             "enter" => {
                 if let Some(m) = self.save_modal.take() {
@@ -362,8 +362,8 @@ impl HayateApp {
     }
 
     pub(crate) fn field_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
-        let key = ev.keystroke.key.clone();
-        match key.as_str() {
+        let key = ev.keystroke.key.as_str();
+        match key {
             "escape" => self.field_edit = None,
             "enter" => {
                 if let Some(fe) = self.field_edit.take() {
@@ -469,7 +469,7 @@ impl HayateApp {
                 "{}|",
                 self.field_edit
                     .as_ref()
-                    .map(|f| f.buf.clone())
+                    .map(|f| f.buf.as_str())
                     .unwrap_or_default()
             )
         } else {
@@ -722,12 +722,17 @@ impl HayateApp {
     }
 
     pub(crate) fn palette_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
-        let key = ev.keystroke.key.clone();
-        match key.as_str() {
+        let key = ev.keystroke.key.as_str();
+        match key {
             "escape" => self.palette = None,
             "enter" => {
                 let sel = self.palette.as_ref().map(|p| p.sel).unwrap_or(0);
-                let chosen = self.palette_commands().get(sel).map(|(id, _)| id.clone());
+                let query = self
+                    .palette
+                    .as_ref()
+                    .map(|p| p.query.as_str())
+                    .unwrap_or("");
+                let chosen = self.registry.nth_matching_id(query, sel);
                 self.palette = None;
                 if let Some(id) = chosen {
                     self.run_command(&id);
@@ -746,7 +751,12 @@ impl HayateApp {
                 }
             }
             "down" => {
-                let n = self.palette_commands().len();
+                let query = self
+                    .palette
+                    .as_ref()
+                    .map(|p| p.query.as_str())
+                    .unwrap_or("");
+                let n = self.registry.filter_count(query);
                 if let Some(p) = self.palette.as_mut() {
                     if p.sel + 1 < n {
                         p.sel += 1;

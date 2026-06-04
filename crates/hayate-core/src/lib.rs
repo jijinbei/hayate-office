@@ -171,17 +171,46 @@ impl CommandRegistry {
     /// (case-insensitive). An empty query matches every command. Used to drive the command
     /// palette's incremental search. Results are in registration order.
     pub fn filter(&self, query: &str) -> Vec<(String, String)> {
-        let q = query.to_lowercase();
+        let q = query.to_ascii_lowercase();
         self.commands
             .iter()
-            .filter(|c| {
-                q.is_empty()
-                    || c.meta.id.to_lowercase().contains(&q)
-                    || c.meta.title.to_lowercase().contains(&q)
-            })
+            .filter(|c| contains_ci(&c.meta.id, &q) || contains_ci(&c.meta.title, &q))
             .map(|c| (c.meta.id.clone(), c.meta.title.clone()))
             .collect()
     }
+
+    /// Count commands matching `query` (same predicate as `filter`), without building any
+    /// intermediate Vec or the manifest JSON.
+    pub fn filter_count(&self, query: &str) -> usize {
+        let q = query.to_ascii_lowercase();
+        self.commands
+            .iter()
+            .filter(|c| contains_ci(&c.meta.id, &q) || contains_ci(&c.meta.title, &q))
+            .count()
+    }
+
+    /// Return the id of the `n`th command matching `query` (same predicate as `filter`),
+    /// without building any intermediate Vec or the manifest JSON.
+    pub fn nth_matching_id(&self, query: &str, n: usize) -> Option<String> {
+        let q = query.to_ascii_lowercase();
+        self.commands
+            .iter()
+            .filter(|c| contains_ci(&c.meta.id, &q) || contains_ci(&c.meta.title, &q))
+            .nth(n)
+            .map(|c| c.meta.id.clone())
+    }
+}
+
+/// Allocation-free ASCII case-insensitive substring test. `needle_lower` is assumed to be
+/// already ASCII-lowercased; an empty needle matches everything.
+fn contains_ci(haystack: &str, needle_lower: &str) -> bool {
+    if needle_lower.is_empty() {
+        return true;
+    }
+    haystack
+        .as_bytes()
+        .windows(needle_lower.len())
+        .any(|w| w.eq_ignore_ascii_case(needle_lower.as_bytes()))
 }
 
 // --- Arg parsing helpers (lenient) ---

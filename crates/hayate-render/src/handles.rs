@@ -41,11 +41,7 @@ pub fn resize_handles(r: PxRect, rotation_deg: f32) -> [(f32, f32); 8] {
         (left, mid_y),   // L
     ];
 
-    let mut out = [(0.0f32, 0.0f32); 8];
-    for (i, &(x, y)) in unrotated.iter().enumerate() {
-        out[i] = rotate(x, y, cx, cy, rad);
-    }
-    out
+    unrotated.map(|(x, y)| rotate(x, y, cx, cy, rad))
 }
 
 #[cfg(test)]

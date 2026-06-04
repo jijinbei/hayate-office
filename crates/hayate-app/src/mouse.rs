@@ -189,7 +189,7 @@ impl HayateApp {
     pub(crate) fn on_mouse_move(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
         // Dragging a line endpoint: keep the fixed end, move the other to the cursor. The frame
         // size may go negative, so the line can point in any of the 360 degrees.
-        if let Some(ld) = self.line_drag.clone() {
+        if let Some(ld) = self.line_drag {
             let scale = self.scale();
             if scale <= 0.0 {
                 return;
@@ -248,15 +248,20 @@ impl HayateApp {
             cx.notify();
             return;
         }
-        let Some(d) = self.drag.clone() else { return };
+        // Bail before taking the drag so an early return here doesn't drop an active drag.
         let scale = self.scale();
         if scale <= 0.0 {
             return;
         }
+        // Take the drag out so the snap/guide code below can borrow `&mut self`; restore it on
+        // every path that doesn't legitimately end the drag.
+        let Some(d) = self.drag.take() else { return };
         let dx = (f32::from(ev.position.x - d.start_cursor.x) as f64 / scale) as i64;
         let dy = (f32::from(ev.position.y - d.start_cursor.y) as f64 / scale) as i64;
         // Snap the primary shape to guides, then apply the same (snapped) delta to every member.
         let Some(&(_, prim_start)) = d.entities.iter().find(|(e, _)| *e == d.primary) else {
+            // Primary should always be in `entities`; restore the drag and bail without dropping it.
+            self.drag = Some(d);
             return;
         };
         let prim_nf = RectEmu {
@@ -278,6 +283,8 @@ impl HayateApp {
         self.rebuild();
         self.update_guides(d.primary);
         cx.notify();
+        // Restore the transiently-taken drag so the move stays active.
+        self.drag = Some(d);
     }
 
     /// Snap `nf` so the moving shape's edges/center align to nearby guide lines: the slide

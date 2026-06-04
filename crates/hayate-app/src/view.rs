@@ -201,7 +201,7 @@ impl Render for HayateApp {
                                             window
                                                 .text_system()
                                                 .shape_line(
-                                                    SharedString::from(s.to_string()),
+                                                    SharedString::from(s),
                                                     font_size,
                                                     &[trun],
                                                     None,
@@ -219,10 +219,14 @@ impl Render for HayateApp {
                                     } else {
                                         0.0
                                     };
-                                    let line_text: String =
-                                        para.runs.iter().map(|r| r.text.as_str()).collect();
-                                    let upto = local.min(line_text.len());
-                                    let text_x = shape_w(&line_text[..upto], window);
+                                    let text_x = if para.runs.len() == 1 {
+                                        let s = &para.runs[0].text;
+                                        shape_w(&s[..local.min(s.len())], window)
+                                    } else {
+                                        let line_text: String =
+                                            para.runs.iter().map(|r| r.text.as_str()).collect();
+                                        shape_w(&line_text[..local.min(line_text.len())], window)
+                                    };
                                     (
                                         pi,
                                         f32::from(indent) + bullet_w + text_x,
@@ -376,11 +380,10 @@ impl Render for HayateApp {
                 }
 
                 // Combined bounding box for a group / multi-selection, so it reads as one object.
-                let sel_ents: Vec<_> = selection.into_iter().chain(also.iter().copied()).collect();
-                if sel_ents.len() > 1 {
+                if also.len() + usize::from(selection.is_some()) > 1 {
                     let mut union: Option<(f32, f32, f32, f32)> = None;
-                    for e in &sel_ents {
-                        if let Some(n) = scene.nodes.iter().find(|n| n.source == Some(*e)) {
+                    for e in selection.into_iter().chain(also.iter().copied()) {
+                        if let Some(n) = scene.nodes.iter().find(|n| n.source == Some(e)) {
                             let r = prim_bounds(&n.prim);
                             let (x0, y0, x1, y1) = (r.x, r.y, r.x + r.w, r.y + r.h);
                             union = Some(match union {
@@ -1525,8 +1528,9 @@ impl HayateApp {
                 .child("Theme"),
         );
         let mut presets_row = div().flex().flex_row().flex_wrap().gap_1();
-        for (i, (pname, _)) in hayate_ir::theme::theme_color_presets()
-            .into_iter()
+        for (i, pname) in hayate_ir::theme::theme_color_preset_names()
+            .iter()
+            .copied()
             .enumerate()
         {
             presets_row = presets_row.child(

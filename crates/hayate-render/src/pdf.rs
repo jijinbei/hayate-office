@@ -5,7 +5,7 @@
 //! so the document prints at its true physical size and stays crisp at any zoom.
 
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::io::Write as _;
 
@@ -110,15 +110,13 @@ pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
     // used. Shaping happens once here.
     let mut pages: Vec<Page> = Vec::new();
     let mut font_glyphs: BTreeMap<cosmic_text::fontdb::ID, BTreeMap<u16, String>> = BTreeMap::new();
-    let mut used_images: Vec<String> = Vec::new();
+    let mut used_images: BTreeSet<String> = BTreeSet::new();
     for &slide in &slides {
         let scene = build_slide_scene(p, slide, PxSize { w: pt_w, h: pt_h });
         let page = build_page(&scene, opts, &mut font_glyphs);
         for op in &page.ops {
             if let Op::Image { key, .. } = op {
-                if !used_images.contains(key) {
-                    used_images.push(key.clone());
-                }
+                used_images.insert(key.clone());
             }
         }
         pages.push(page);
@@ -408,12 +406,11 @@ fn shape_block(
                         let [r, gg, b, _] = c.as_rgba();
                         (r, gg, b)
                     });
-                    let text: String = run.text.get(g.start..g.end).unwrap_or("").to_string();
                     font_glyphs
                         .entry(g.font_id)
                         .or_default()
                         .entry(g.glyph_id)
-                        .or_insert(text);
+                        .or_insert_with(|| run.text.get(g.start..g.end).unwrap_or("").to_string());
                     out.push(Glyph {
                         font_id: g.font_id,
                         glyph_id: g.glyph_id,
@@ -750,12 +747,12 @@ fn arrowhead(
 /// Decode an embedded image to an image XObject payload: `(width, height, filter, data)`.
 /// JPEG is passed through as `DCTDecode`; other formats are decoded to RGB and `FlateDecode`d.
 /// Images larger than `image_dpi` over the page are downscaled to bound size.
-fn embed_image(
-    bytes: &[u8],
+fn embed_image<'a>(
+    bytes: &'a [u8],
     image_dpi: f32,
     _pt_w: f32,
     _pt_h: f32,
-) -> Option<(u32, u32, &'static str, Vec<u8>)> {
+) -> Option<(u32, u32, &'static str, std::borrow::Cow<'a, [u8]>)> {
     let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
     let img = image::load_from_memory(bytes).ok()?;
     let (mut w, mut h) = (img.width(), img.height());
@@ -766,7 +763,7 @@ fn embed_image(
     let max_dim = (image_dpi * 14.0).max(64.0) as u32;
     if is_jpeg {
         // Pass the original JPEG bytes through (no re-encode); DCTDecode handles it.
-        return Some((w, h, "DCTDecode", bytes.to_vec()));
+        return Some((w, h, "DCTDecode", std::borrow::Cow::Borrowed(bytes)));
     }
     let mut rgb = img.to_rgb8();
     if w > max_dim || h > max_dim {
@@ -777,7 +774,12 @@ fn embed_image(
         w = nw;
         h = nh;
     }
-    Some((w, h, "FlateDecode", flate(rgb.as_raw())))
+    Some((
+        w,
+        h,
+        "FlateDecode",
+        std::borrow::Cow::Owned(flate(rgb.as_raw())),
+    ))
 }
 
 fn solid(fill: &Option<Paint>) -> Option<(u8, u8, u8)> {

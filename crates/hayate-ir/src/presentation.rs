@@ -45,8 +45,8 @@ impl Presentation {
     }
 
     /// Look up media bytes by content key.
-    pub fn get_media(&self, key: &str) -> Option<&Vec<u8>> {
-        self.media.get(key)
+    pub fn get_media(&self, key: &str) -> Option<&[u8]> {
+        self.media.get(key).map(Vec::as_slice)
     }
 
     /// Order key to append after the current maximum among `siblings`.
@@ -208,28 +208,22 @@ impl Presentation {
 
     /// Matching placeholder entities along the inheritance chain, MOST-DERIVED FIRST:
     /// `[slide_match?, layout_match?, master_match?]`, skipping levels with no match.
-    pub fn placeholder_chain(&self, slide: Entity, ph: PlaceholderRef) -> Vec<Entity> {
-        let mut out = Vec::new();
-        if let Some(e) = self.find_placeholder(slide, ph) {
-            out.push(e);
-        }
-        if let Some(layout) = self.layout_of(slide) {
-            if let Some(e) = self.find_placeholder(layout, ph) {
-                out.push(e);
-            }
-        }
-        if let Some(master) = self.master_of(slide) {
-            if let Some(e) = self.find_placeholder(master, ph) {
-                out.push(e);
-            }
-        }
-        out
+    pub fn placeholder_chain(&self, slide: Entity, ph: PlaceholderRef) -> [Option<Entity>; 3] {
+        let slide_match = self.find_placeholder(slide, ph);
+        let layout_match = self
+            .layout_of(slide)
+            .and_then(|layout| self.find_placeholder(layout, ph));
+        let master_match = self
+            .master_of(slide)
+            .and_then(|master| self.find_placeholder(master, ph));
+        [slide_match, layout_match, master_match]
     }
 
     /// Resolve a placeholder's frame, walking the chain and returning the first present.
     pub fn ph_frame(&self, slide: Entity, ph: PlaceholderRef) -> Option<RectEmu> {
         self.placeholder_chain(slide, ph)
             .into_iter()
+            .flatten()
             .find_map(|e| self.world.frames.get(&e).copied())
     }
 
@@ -237,6 +231,7 @@ impl Presentation {
     pub fn ph_text(&self, slide: Entity, ph: PlaceholderRef) -> Option<&TextBody> {
         self.placeholder_chain(slide, ph)
             .into_iter()
+            .flatten()
             .find_map(|e| self.world.texts.get(&e))
     }
 
@@ -244,6 +239,7 @@ impl Presentation {
     pub fn ph_fill(&self, slide: Entity, ph: PlaceholderRef) -> Option<Fill> {
         self.placeholder_chain(slide, ph)
             .into_iter()
+            .flatten()
             .find_map(|e| self.world.fills.get(&e).copied())
     }
 
@@ -251,6 +247,7 @@ impl Presentation {
     pub fn ph_geometry(&self, slide: Entity, ph: PlaceholderRef) -> Option<Geometry> {
         self.placeholder_chain(slide, ph)
             .into_iter()
+            .flatten()
             .find_map(|e| self.world.geometries.get(&e).cloned())
     }
 

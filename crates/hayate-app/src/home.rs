@@ -61,12 +61,12 @@ impl HayateApp {
                 self.history = History::new();
                 self.selection = None;
                 self.also.clear();
-                self.doc_path = path.clone();
                 self.home = false;
                 self.left_tab = LeftTab::Slides;
                 self.scope = EditScope::Slide(self.slide);
                 self.rebuild();
                 recent::add(&path);
+                self.doc_path = path;
             }
             Err(e) => {
                 eprintln!("open error: {e}");
@@ -102,7 +102,7 @@ impl HayateApp {
                 path,
                 name,
                 scene,
-                media: p.media.clone(),
+                media: p.media,
             });
         }
         self.home_recents = thumbs;
