@@ -93,6 +93,13 @@ impl Render for HayateApp {
         let input_entity = cx.entity();
         let input_focus = self.focus.clone();
         let (sw, sh) = (scene.size.w, scene.size.h);
+        // The interactive canvas area extends to cover shapes that overflow the slide's right/
+        // bottom edges, so those shapes stay clickable (hit-testing happens within this region).
+        // It is never smaller than the slide.
+        let (area_w, area_h) = match scene.content_bounds() {
+            Some(c) => ((c.x + c.w).max(sw), (c.y + c.h).max(sh)),
+            None => (sw, sh),
+        };
 
         let palette_panel = self.palette.as_ref().map(|p| {
             let list = self.palette_commands();
@@ -1148,8 +1155,8 @@ impl Render for HayateApp {
                             .child(
                                 div()
                                     .id("slide_canvas_area")
-                                    .w(px(sw))
-                                    .h(px(sh))
+                                    .w(px(area_w))
+                                    .h(px(area_h))
                                     .border_1()
                                     .border_color(rgb(0x555555))
                                     // Drop image files onto the slide to insert them.
