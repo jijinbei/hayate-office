@@ -494,10 +494,106 @@ impl Render for HayateApp {
         let current = self.slide;
         let left_tab = self.left_tab;
         let mut slide_list = div().flex().flex_col().gap_2();
-        slide_list = slide_list.child(tool_button("add_slide", "+ Slide", cx, |this, _w, cx| {
-            this.add_slide();
-            cx.notify();
-        }));
+        slide_list = slide_list.child(tool_button(
+            "add_slide",
+            "+ Add Slide \u{25be}",
+            cx,
+            |this, _w, cx| {
+                this.add_slide_menu = !this.add_slide_menu;
+                cx.notify();
+            },
+        ));
+        // Layout picker: pick which layout the new slide uses (ONLYOFFICE-style).
+        if self.add_slide_menu {
+            let mut menu = div()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .p_1()
+                .rounded_md()
+                .bg(rgb(0x252525))
+                .border_1()
+                .border_color(rgb(0x444444));
+            for layout in self.master_layouts() {
+                let name = self
+                    .pres
+                    .world
+                    .layout_info
+                    .get(&layout)
+                    .map(|li| li.name.clone())
+                    .unwrap_or_else(|| "Layout".to_string());
+                let ttheme = self
+                    .pres
+                    .container_theme(layout)
+                    .cloned()
+                    .unwrap_or_default();
+                let tbg = self.pres.container_background(layout);
+                let tctx: Vec<hayate_ir::world::Entity> =
+                    self.pres.owning_master(layout).into_iter().collect();
+                let tscene = hayate_render::build_container_scene(
+                    &self.pres,
+                    layout,
+                    &ttheme,
+                    tbg,
+                    &tctx,
+                    PxSize { w: 88.0, h: 50.0 },
+                );
+                let tmedia = self.pres.media.clone();
+                let tindent = self.list_indent_em;
+                let thumb = div()
+                    .flex_none()
+                    .w(px(88.))
+                    .h(px(50.))
+                    .border_1()
+                    .border_color(rgb(0x444444))
+                    .bg(rgb(0xffffff))
+                    .child(
+                        canvas(
+                            |_, _, _| {},
+                            move |b, _, window, cx| {
+                                paint_scene(&tscene, b.origin, &tmedia, tindent, window, cx)
+                            },
+                        )
+                        .size_full(),
+                    );
+                menu = menu.child(
+                    div()
+                        .id(("addslide", layout.0 as usize))
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .p_1()
+                        .rounded_md()
+                        .hover(|s| s.bg(rgb(0x094771)))
+                        .child(thumb)
+                        .child(div().text_sm().truncate().child(name))
+                        .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                            window.focus(&this.focus, cx);
+                            this.add_slide_with_layout(layout);
+                            cx.notify();
+                        })),
+                );
+            }
+            menu = menu.child(
+                div()
+                    .id("addslide_dup")
+                    .px_2()
+                    .py_1()
+                    .rounded_md()
+                    .text_sm()
+                    .bg(rgb(0x3a3a3a))
+                    .hover(|s| s.bg(rgb(0x4a4a4a)))
+                    .child("Duplicate slide")
+                    .on_click(cx.listener(|this, _ev: &ClickEvent, window, cx| {
+                        window.focus(&this.focus, cx);
+                        this.duplicate_slide();
+                        this.add_slide_menu = false;
+                        cx.notify();
+                    })),
+            );
+            slide_list = slide_list.child(menu);
+        }
         for (i, &s) in slides.iter().enumerate() {
             let tscene = build_slide_scene(&self.pres, s, PxSize { w: 176.0, h: 99.0 });
             let tmedia = self.pres.media.clone();
@@ -1351,12 +1447,78 @@ impl HayateApp {
                     }))
             };
 
-        let mut col = div()
+        let mut col = div().flex().flex_col().gap_2().text_color(rgb(0xdddddd));
+
+        // Master node (parent): clicking it edits the master itself. Its layouts nest beneath it.
+        let master = self.pres.master_of(self.slide);
+        let master_active = matches!(self.scope, crate::EditScope::Master(_));
+        let mut master_node = div()
+            .id("master_node")
+            .flex()
+            .flex_row()
+            .items_center()
+            .gap_2()
+            .w_full()
+            .px_1()
+            .py_1()
+            .rounded_md()
+            .bg(if master_active {
+                rgb(0x1f3a5f)
+            } else {
+                rgb(0x2f2f2f)
+            })
+            .hover(|s| s.bg(rgb(0x094771)));
+        if let Some(m) = master {
+            let mtheme = self.pres.container_theme(m).cloned().unwrap_or_default();
+            let mbg = self.pres.container_background(m);
+            let mscene = hayate_render::build_container_scene(
+                &self.pres,
+                m,
+                &mtheme,
+                mbg,
+                &[],
+                PxSize { w: 48.0, h: 27.0 },
+            );
+            let mmedia = self.pres.media.clone();
+            let mindent = self.list_indent_em;
+            master_node = master_node.child(
+                div()
+                    .flex_none()
+                    .w(px(48.))
+                    .h(px(27.))
+                    .border_1()
+                    .border_color(rgb(0x444444))
+                    .bg(rgb(0xffffff))
+                    .child(
+                        canvas(
+                            |_, _, _| {},
+                            move |b, _, window, cx| {
+                                paint_scene(&mscene, b.origin, &mmedia, mindent, window, cx)
+                            },
+                        )
+                        .size_full(),
+                    ),
+            );
+        }
+        master_node = master_node
+            .child(div().text_sm().child("\u{25be} Slide Master"))
+            .on_click(cx.listener(|this, _ev: &ClickEvent, window, cx| {
+                window.focus(&this.focus, cx);
+                if let Some(m) = this.pres.master_of(this.slide) {
+                    this.enter_master_scope(m);
+                }
+                cx.notify();
+            }));
+        col = col.child(master_node);
+
+        // Layouts nested under the master (indented with a tree rail).
+        let mut layouts_col = div()
             .flex()
             .flex_col()
             .gap_2()
-            .text_color(rgb(0xdddddd))
-            .child(div().text_sm().text_color(rgb(0x888888)).child("Layouts"));
+            .pl_3()
+            .border_l_2()
+            .border_color(rgb(0x3a3a3a));
 
         // Layout list: click to apply to the current slide and edit.
         for layout in self.master_layouts() {
@@ -1449,7 +1611,7 @@ impl HayateApp {
                     )
                     .size_full(),
                 );
-            col = col.child(
+            layouts_col = layouts_col.child(
                 div()
                     .id(("layout_row", layout.0 as usize))
                     .flex()
@@ -1492,6 +1654,8 @@ impl HayateApp {
                     ),
             );
         }
+        col = col.child(layouts_col);
+
         // New-layout presets + Edit Master.
         col = col.child(
             div()

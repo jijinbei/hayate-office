@@ -1365,3 +1365,25 @@ fn ai_panel_opens_and_warns_without_api_key(cx: &mut TestAppContext) {
         );
     });
 }
+
+#[gpui::test]
+fn add_slide_with_layout_uses_the_chosen_layout(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let (layout, before) = app.read_with(cx, |a, _| {
+        (a.master_layouts().first().copied(), a.pres.slides().len())
+    });
+    let layout = layout.expect("the deck has at least one layout");
+    app.update(cx, |a, _| {
+        a.add_slide_menu = true;
+        a.add_slide_with_layout(layout);
+    });
+    app.read_with(cx, |a, _| {
+        assert_eq!(a.pres.slides().len(), before + 1, "a slide was added");
+        assert_eq!(
+            a.pres.world.slide_info.get(&a.slide).map(|s| s.layout),
+            Some(layout),
+            "the new slide uses the chosen layout"
+        );
+        assert!(!a.add_slide_menu, "the picker closes after adding");
+    });
+}

@@ -35,11 +35,21 @@ impl HayateApp {
             .get(&self.slide)
             .map(|s| s.layout)
         {
-            let s = self.pres.add_slide(layout);
-            self.slide = s;
-            self.selection = None;
-            self.rebuild();
+            self.add_slide_with_layout(layout);
         }
+    }
+
+    /// Add a new slide using the given layout (chosen from the Add Slide menu) and switch to it.
+    pub(crate) fn add_slide_with_layout(&mut self, layout: Entity) {
+        if !self.scope.is_slide() {
+            return;
+        }
+        let s = self.pres.add_slide(layout);
+        self.slide = s;
+        self.selection = None;
+        self.also.clear();
+        self.add_slide_menu = false;
+        self.rebuild();
     }
 
     /// Duplicate the current slide (copying its shapes) and switch to the copy.

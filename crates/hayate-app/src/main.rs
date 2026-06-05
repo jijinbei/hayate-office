@@ -187,6 +187,8 @@ struct HayateApp {
     ai_panel: Option<AiPanel>,
     /// Commands registered by scripts (via `register_command`), shown in the palette.
     script_commands: Vec<hayate_core::RegisteredCommand>,
+    /// Whether the "Add Slide" layout picker (in the slide list) is open.
+    add_slide_menu: bool,
     /// Numeric field being typed into (rotation/position/size/opacity), if any.
     field_edit: Option<FieldEdit>,
     /// Alignment guides shown while dragging (scene/px coords relative to the slide origin).
@@ -431,6 +433,7 @@ impl HayateApp {
             script_panel: None,
             ai_panel: None,
             script_commands: Vec::new(),
+            add_slide_menu: false,
             notice: None,
             master_layout: None,
             scope: EditScope::Slide(slide),
