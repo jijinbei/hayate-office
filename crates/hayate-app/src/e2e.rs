@@ -3,7 +3,7 @@
 //! asserting on the editor's real state. They run under `cargo test -p hayate-app` (the
 //! `test-support` feature pulls the windowing libs, so use `just e2e` to run in the Nix shell).
 
-use super::{EditScope, HayateApp, LeftTab, MenuTarget};
+use super::{EditScope, HayateApp, MenuTarget};
 use gpui::{
     point, px, AppContext, KeyDownEvent, Keystroke, MouseButton, MouseDownEvent, MouseMoveEvent,
     MouseUpEvent, TestAppContext,
@@ -903,7 +903,7 @@ fn promote_and_reset_inherited_placeholder(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn clicking_empty_inherited_placeholder_promotes(cx: &mut TestAppContext) {
+fn double_click_inherited_placeholder_promotes_single_click_does_not(cx: &mut TestAppContext) {
     use hayate_ir::doc::{PlaceholderRef, PlaceholderType};
     let app = cx.new(|cx| HayateApp::new(cx));
     // Start from an empty slide so a click lands on the placeholder, not sample content.
@@ -929,13 +929,135 @@ fn clicking_empty_inherited_placeholder_promotes(cx: &mut TestAppContext) {
             ((fr.origin.y + fr.size.h / 2) as f64 * sc) as f32,
         )
     });
+    // A single click leaves the inherited (locked) placeholder untouched: no slide-level override
+    // is created, so the slide stays empty.
     app.update(cx, |s, cx| {
         s.on_mouse_down(&mouse(MouseButton::Left, px_x, px_y), cx)
     });
     assert!(
+        app.read_with(cx, |s, _| !s.selection_is_slide_placeholder()
+            && s.text_edit.is_none()
+            && s.pres.children(s.slide).is_empty()),
+        "a single click must not promote/duplicate the locked inherited placeholder"
+    );
+    // A double-click promotes it to an editable slide-level override and starts editing.
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse_n(MouseButton::Left, px_x, px_y, 2), cx)
+    });
+    assert!(
         app.read_with(cx, |s, _| s.selection_is_slide_placeholder()
             && s.text_edit.is_some()),
-        "clicking the inherited placeholder promotes it and starts editing"
+        "double-clicking the inherited placeholder promotes it and starts editing"
+    );
+}
+
+#[gpui::test]
+fn promoted_placeholder_is_locked_in_place(cx: &mut TestAppContext) {
+    use hayate_ir::doc::{PlaceholderRef, PlaceholderType};
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| {
+        let kids = s.pres.children(s.slide);
+        for e in kids {
+            s.pres.world.despawn(e);
+        }
+        s.add_layout_placeholder(PlaceholderType::Title);
+        s.rebuild();
+    });
+    let slide = app.read_with(cx, |s, _| s.slide);
+    let title = PlaceholderRef {
+        ph_type: PlaceholderType::Title,
+        idx: 0,
+    };
+    let (px_x, px_y) = app.read_with(cx, |s, _| {
+        let fr = s.pres.ph_frame(slide, title).unwrap();
+        let sc = s.scale();
+        (
+            ((fr.origin.x + fr.size.w / 2) as f64 * sc) as f32,
+            ((fr.origin.y + fr.size.h / 2) as f64 * sc) as f32,
+        )
+    });
+    // Promote (double-click) and commit the edit with a click elsewhere.
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse_n(MouseButton::Left, px_x, px_y, 2), cx)
+    });
+    let e = app.read_with(cx, |s, _| s.selection.unwrap());
+    // A promoted placeholder is text-only: it has NO frame of its own (geometry is inherited).
+    assert!(
+        app.read_with(cx, |s, _| s.pres.world.frames.get(&e).is_none()),
+        "a promoted placeholder must not copy a frame (geometry stays inherited)"
+    );
+    let before = app.read_with(cx, |s, _| s.resolved_frame(e).unwrap());
+    // Now select and try to drag the locked placeholder by +120,+90: it must not move, and no
+    // move-drag is armed.
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, px_x, px_y), cx)
+    });
+    let armed = app.read_with(cx, |s, _| s.drag.is_some());
+    app.update(cx, |s, cx| {
+        s.on_mouse_move(&mouse_move(px_x + 120.0, px_y + 90.0), cx)
+    });
+    app.update(cx, |s, cx| {
+        s.on_mouse_up(&mouse_up(px_x + 120.0, px_y + 90.0), cx)
+    });
+    let after = app.read_with(cx, |s, _| s.resolved_frame(e).unwrap());
+    assert!(!armed, "dragging a locked placeholder must not arm a move");
+    assert_eq!(
+        (before.origin.x, before.origin.y),
+        (after.origin.x, after.origin.y),
+        "a locked placeholder must not move when dragged"
+    );
+    assert!(
+        app.read_with(cx, |s, _| s.pres.world.frames.get(&e).is_none()),
+        "dragging a locked placeholder must not give it an own frame"
+    );
+}
+
+#[gpui::test]
+fn customize_placeholder_pins_geometry_and_unlocks(cx: &mut TestAppContext) {
+    use hayate_ir::doc::{PlaceholderRef, PlaceholderType};
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| {
+        let kids = s.pres.children(s.slide);
+        for e in kids {
+            s.pres.world.despawn(e);
+        }
+        s.add_layout_placeholder(PlaceholderType::Title);
+        s.rebuild();
+    });
+    let slide = app.read_with(cx, |s, _| s.slide);
+    let title = PlaceholderRef {
+        ph_type: PlaceholderType::Title,
+        idx: 0,
+    };
+    let (px_x, px_y) = app.read_with(cx, |s, _| {
+        let fr = s.pres.ph_frame(slide, title).unwrap();
+        let sc = s.scale();
+        (
+            ((fr.origin.x + fr.size.w / 2) as f64 * sc) as f32,
+            ((fr.origin.y + fr.size.h / 2) as f64 * sc) as f32,
+        )
+    });
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse_n(MouseButton::Left, px_x, px_y, 2), cx)
+    });
+    let e = app.read_with(cx, |s, _| s.selection.unwrap());
+    // Locked while geometry is inherited.
+    assert!(app.read_with(cx, |s, _| s.is_locked_placeholder(e)));
+    let inherited = app.read_with(cx, |s, _| s.resolved_frame(e).unwrap());
+    // Pin geometry to this slide: it gains its own frame (= the inherited one) and unlocks.
+    app.update(cx, |s, _| s.customize_placeholder_geometry());
+    assert!(
+        app.read_with(cx, |s, _| !s.is_locked_placeholder(e)
+            && s.pres.world.frames.get(&e) == Some(&inherited)),
+        "customize pins the inherited frame onto the slide and unlocks the placeholder"
+    );
+    // Now it can be dragged.
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, px_x, px_y), cx)
+    });
+    assert!(
+        app.read_with(cx, |s, _| s.drag.is_some()),
+        "a customized placeholder can be moved"
     );
 }
 
@@ -1234,7 +1356,10 @@ fn new_presentation_opens_template_in_master_scope(cx: &mut TestAppContext) {
             matches!(a.scope, EditScope::Layout(_)),
             "New opens in layout (master-edit) scope so the template can be tailored"
         );
-        assert!(a.left_tab == LeftTab::Master, "the Master tab is shown");
+        assert!(
+            !a.scope.is_slide(),
+            "the sidebar's マスター mode is active (driven by the edit scope)"
+        );
         // The slide inherits the layout's Title + Body placeholders from the template.
         let phs = a.pres.effective_placeholders(a.slide);
         assert!(

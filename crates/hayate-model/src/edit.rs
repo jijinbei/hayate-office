@@ -351,6 +351,15 @@ pub fn set_slide_layout(slide: Entity, layout: Entity) -> Transaction {
 /// [`Presentation::ph_text`]). This new shape overrides the inherited placeholder because it
 /// lives most-derived (on the slide) in the resolution chain. Returns `None` when there is no
 /// inherited frame to copy. `reserved` should come from [`World::reserve_id`].
+/// Promote an inherited placeholder to a slide-level override so the slide can carry its own text.
+/// The override is **text-only**: it stores no `Frame`, so its geometry (position/size) and other
+/// unset fields keep resolving from the layout/master via the inheritance chain ([`ph_frame`] etc).
+/// This is what makes a later edit to the layout's placeholder position propagate to every slide
+/// that hasn't explicitly customized it. To pin a per-slide geometry, add a `Frame` afterwards (see
+/// the app's "customize on this slide" command). Returns `None` if the placeholder resolves nowhere
+/// up the chain (nothing to promote).
+///
+/// [`ph_frame`]: hayate_ir::presentation::Presentation::ph_frame
 pub fn promote_placeholder(
     p: &Presentation,
     slide: Entity,
@@ -358,9 +367,33 @@ pub fn promote_placeholder(
     reserved: Entity,
     order: FracIndex,
 ) -> Option<Transaction> {
-    let frame = p.ph_frame(slide, ph)?;
+    // Guard: the placeholder must resolve somewhere up the chain (it has an inherited frame).
+    p.ph_frame(slide, ph)?;
+    // Copy the resolved text so the content becomes slide-specific; deliberately omit the frame so
+    // geometry stays inherited.
     let text = p.ph_text(slide, ph).cloned();
-    Some(create_placeholder(reserved, slide, order, ph, frame, text))
+    let mut ops = vec![
+        Operation::Spawn { entity: reserved },
+        Operation::SetComponent {
+            entity: reserved,
+            value: CompValue::Parent(slide),
+        },
+        Operation::SetComponent {
+            entity: reserved,
+            value: CompValue::Order(order),
+        },
+        Operation::SetComponent {
+            entity: reserved,
+            value: CompValue::Placeholder(ph),
+        },
+    ];
+    if let Some(body) = text {
+        ops.push(Operation::SetComponent {
+            entity: reserved,
+            value: CompValue::Text(body),
+        });
+    }
+    Some(Transaction::new("promote placeholder", ops))
 }
 
 /// EMU per inch (914400) times 0.2, the offset applied to a duplicate's frame so it does

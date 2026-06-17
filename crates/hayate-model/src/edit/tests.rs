@@ -538,14 +538,21 @@ fn promote_placeholder_materializes_slide_override() {
     let mut h = History::new();
     h.commit(&mut p.world, tx);
 
-    // A new slide child now carries the matching ref and the inherited frame.
+    // A new slide child now carries the matching ref but NO frame of its own: geometry stays
+    // inherited so layout edits keep propagating. The resolved frame still comes from the layout.
     let child = p
         .find_placeholder(slide, ph)
         .expect("slide override exists");
     assert_eq!(child, reserved);
     assert_eq!(
         p.world.get(child, CompKind::Frame),
-        Some(CompValue::Frame(layout_frame))
+        None,
+        "a promoted placeholder is text-only; its geometry is inherited, not copied"
+    );
+    assert_eq!(
+        p.ph_frame(slide, ph),
+        Some(layout_frame),
+        "the slide placeholder still resolves its geometry from the layout"
     );
     assert_eq!(p.world.parent.get(&child).copied(), Some(slide));
 

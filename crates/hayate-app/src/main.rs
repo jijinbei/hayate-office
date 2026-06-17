@@ -31,8 +31,8 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use gpui::{
-    div, point, prelude::*, px, rgb, size, App, Bounds, Pixels, Point, Window, WindowBounds,
-    WindowOptions,
+    div, point, prelude::*, px, rgb, size, App, Bounds, Pixels, Point, TitlebarOptions, Window,
+    WindowBounds, WindowOptions,
 };
 use gpui_platform::application;
 
@@ -68,6 +68,13 @@ mod view;
 mod widgets;
 
 const SELECTION: u32 = 0x3B82F6;
+
+/// Per-mode accent colors for the sidebar mode switcher and the canvas frame, so the current
+/// editing mode is unmistakable at a glance: slate while editing slides, purple while editing the
+/// master/layouts. (Selection blue stays reserved for the selected thumbnail/shape.)
+const SCOPE_SLIDE: u32 = 0x6b7280; // neutral slate (normal slide editing)
+const SCOPE_MASTER: u32 = 0x9b6bd0; // purple (master / layout editing)
+
 const DOC_PATH: &str = "hayate-sample.hayate";
 
 /// Build a small sample deck: a title, three accent rectangles, and an ellipse.
@@ -268,12 +275,12 @@ enum FontTarget {
     ThemeMinor,
 }
 
-/// Which list the left panel shows.
+/// Which list the left panel shows in *slide* mode. Master/layout editing is a separate top-level
+/// mode (the sidebar's "スライド | マスター" switcher), driven by [`EditScope`], not by this tab.
 #[derive(Clone, Copy, PartialEq)]
 enum LeftTab {
     Slides,
     Layers,
-    Master,
 }
 
 /// What the canvas is currently editing. Slides are the normal case; a layout or master is
@@ -294,6 +301,14 @@ impl EditScope {
     }
     fn is_slide(self) -> bool {
         matches!(self, EditScope::Slide(_))
+    }
+    /// The accent color for the canvas frame: slate for a slide, purple for master/layout editing,
+    /// matching the sidebar mode switcher.
+    fn color(self) -> u32 {
+        match self {
+            EditScope::Slide(_) => SCOPE_SLIDE,
+            EditScope::Layout(_) | EditScope::Master(_) => SCOPE_MASTER,
+        }
     }
 }
 
@@ -484,6 +499,12 @@ fn run() {
         cx.open_window(
             WindowOptions {
                 window_bounds: Some(WindowBounds::Windowed(bounds)),
+                // Show "HayateOffice" in the native titlebar (macOS draws it next to the traffic
+                // lights; on Linux/Windows the custom title strip provides the equivalent).
+                titlebar: Some(TitlebarOptions {
+                    title: Some("HayateOffice".into()),
+                    ..Default::default()
+                }),
                 // App identity for the taskbar: `icon` is honored on X11; on Wayland the
                 // compositor matches `app_id` to a desktop entry to find the icon.
                 icon: app_icon(),

@@ -50,7 +50,8 @@ impl HayateApp {
         self.fill_layout_preset(layout, edit::LayoutPreset::TitleAndContent);
 
         self.home = false;
-        self.left_tab = LeftTab::Master;
+        // Open straight into master mode (the sidebar's "マスター" switcher is driven by the edit
+        // scope) so a new deck starts on its template, ready to tailor.
         self.enter_layout_scope(layout);
     }
 

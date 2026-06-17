@@ -57,6 +57,9 @@ const ARROW: &str = lucide!(r#"<path d="M7 7h10v10"/><path d="M7 17 17 7"/>"#);
 const IMAGE: &str = lucide!(
     r#"<rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.8 0L6 21"/>"#
 );
+const FOLDER: &str = lucide!(
+    r#"<path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/>"#
+);
 
 /// Map an icon name (the `icons/<name>.svg` path) to its embedded SVG source.
 fn svg_for(name: &str) -> Option<&'static str> {
@@ -79,6 +82,7 @@ fn svg_for(name: &str) -> Option<&'static str> {
         "line" => LINE,
         "arrow" => ARROW,
         "image" => IMAGE,
+        "folder" => FOLDER,
         _ => return None,
     })
 }

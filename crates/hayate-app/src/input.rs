@@ -505,9 +505,8 @@ impl HayateApp {
     }
 
     pub(crate) fn field_current(&self, kind: FieldKind) -> String {
-        let frame = self
-            .selection
-            .and_then(|e| self.pres.world.frames.get(&e).copied());
+        // Use the resolved frame so a locked placeholder shows its inherited position/size.
+        let frame = self.selection.and_then(|e| self.resolved_frame(e));
         let to_pt = |v: i64| (v as f32 / 12_700.0).round() as i32;
         match kind {
             FieldKind::Rotation => format!("{}", self.sel_rotation().round() as i32),

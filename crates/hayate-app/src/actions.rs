@@ -423,6 +423,91 @@ impl HayateApp {
         }
     }
 
+    /// The slide entity backing placeholder `ph`, creating a text-only override (geometry stays
+    /// inherited) if the slide doesn't have one yet. Returns `None` if the placeholder resolves
+    /// nowhere up the chain.
+    fn ensure_placeholder_entity(&mut self, ph: hayate_ir::doc::PlaceholderRef) -> Option<Entity> {
+        if let Some(e) = self.pres.find_placeholder(self.slide, ph) {
+            return Some(e);
+        }
+        let reserved = self.pres.world.reserve_id();
+        let order = self.append_order();
+        let tx = edit::promote_placeholder(&self.pres, self.slide, ph, reserved, order)?;
+        self.commit_tx(tx);
+        Some(reserved)
+    }
+
+    /// Select a placeholder from the Layers panel (materializing a text-only override if needed).
+    pub(crate) fn select_placeholder(&mut self, ph: hayate_ir::doc::PlaceholderRef) {
+        if let Some(e) = self.ensure_placeholder_entity(ph) {
+            self.selection = Some(e);
+            self.also.clear();
+        }
+    }
+
+    /// Edit a placeholder's text from the Layers panel (materialize if needed, select, edit).
+    pub(crate) fn edit_placeholder(&mut self, ph: hayate_ir::doc::PlaceholderRef) {
+        if let Some(e) = self.ensure_placeholder_entity(ph) {
+            self.selection = Some(e);
+            self.also.clear();
+            self.begin_text_edit(e);
+        }
+    }
+
+    /// Whether `e` is a slide placeholder whose geometry is still inherited from the layout — it has
+    /// no `Frame` of its own. Such a placeholder is shown locked: its text is editable
+    /// (double-click), but its position/size are owned by the layout and must not be
+    /// dragged/resized, so the template propagates. Adding a per-slide `Frame` (see
+    /// [`customize_placeholder_geometry`]) unlocks it. Only meaningful in slide scope; in master
+    /// scope placeholders are edited directly.
+    ///
+    /// [`customize_placeholder_geometry`]: Self::customize_placeholder_geometry
+    pub(crate) fn is_locked_placeholder(&self, e: Entity) -> bool {
+        self.scope.is_slide()
+            && self.pres.world.placeholders.contains_key(&e)
+            && self.pres.world.parent.get(&e) == Some(&self.slide)
+            && self.pres.world.frames.get(&e).is_none()
+    }
+
+    /// Pin the selected (inherited-geometry) placeholder's position/size to this slide: copy the
+    /// resolved frame onto the slide override as its own `Frame`, which unlocks dragging/resizing.
+    /// The slide then stops following later layout moves for this placeholder ("customize on this
+    /// slide"). No-op unless the selection is a locked placeholder.
+    pub(crate) fn customize_placeholder_geometry(&mut self) {
+        let Some(e) = self.selection else { return };
+        if !self.is_locked_placeholder(e) {
+            return;
+        }
+        let Some(ph) = self.pres.world.placeholders.get(&e).copied() else {
+            return;
+        };
+        let Some(frame) = self.pres.ph_frame(self.slide, ph) else {
+            return;
+        };
+        self.commit_tx(Transaction::new(
+            "customize placeholder",
+            vec![Operation::SetComponent {
+                entity: e,
+                value: CompValue::Frame(frame),
+            }],
+        ));
+    }
+
+    /// The entity's effective frame for display: its own `Frame` if present, else — for a slide
+    /// placeholder with inherited geometry — the frame resolved from the layout/master. Lets the
+    /// Format pane show a locked placeholder's real position/size instead of zeros.
+    pub(crate) fn resolved_frame(&self, e: Entity) -> Option<hayate_ir::geom::RectEmu> {
+        if let Some(f) = self.pres.world.frames.get(&e).copied() {
+            return Some(f);
+        }
+        let ph = self.pres.world.placeholders.get(&e).copied()?;
+        if self.pres.world.parent.get(&e) == Some(&self.slide) {
+            self.pres.ph_frame(self.slide, ph)
+        } else {
+            None
+        }
+    }
+
     /// Whether the selected entity is a slide-level placeholder override (eligible for reset).
     pub(crate) fn selection_is_slide_placeholder(&self) -> bool {
         self.selection.is_some_and(|e| {
@@ -626,6 +711,30 @@ impl HayateApp {
                 hayate_render::build_container_scene(&self.pres, c, &theme, bg, &[], target)
             }
         };
+    }
+
+    /// Enter master-editing mode from the primary "マスター" switcher. Opens the layout used by the
+    /// current slide (the one the user is most likely tailoring); falls back to the master itself
+    /// when the slide has no layout. The sidebar then shows the master/layout tree.
+    pub(crate) fn enter_master_mode(&mut self) {
+        if let Some(layout) = self.active_layout() {
+            self.enter_layout_scope(layout);
+        } else if let Some(master) = self.pres.master_of(self.slide) {
+            self.enter_master_scope(master);
+        }
+    }
+
+    /// Jump from a slide to edit an inherited (locked) element where it actually lives: enter the
+    /// owning layout or master in master mode and select that element. Invoked by clicking a locked
+    /// row in the slide's Layers panel.
+    pub(crate) fn edit_inherited(&mut self, container: Entity, e: Entity) {
+        if self.pres.master_of(self.slide) == Some(container) {
+            self.enter_master_scope(container);
+        } else {
+            self.enter_layout_scope(container);
+        }
+        self.selection = Some(e);
+        self.also.clear();
     }
 
     /// Enter master edit mode for a layout (its master renders as dimmed context).

@@ -143,6 +143,22 @@ impl HayateApp {
                         },
                     ))
                     .child(menu_divider());
+                // A locked placeholder (geometry inherited from the layout) can be pinned to this
+                // slide so it can be moved/resized independently.
+                if self
+                    .selection
+                    .is_some_and(|e| self.is_locked_placeholder(e))
+                {
+                    menu = menu.child(menu_item(
+                        "m_customize_ph",
+                        "Customize on This Slide",
+                        cx,
+                        |t, _w, cx| {
+                            t.customize_placeholder_geometry();
+                            cx.notify();
+                        },
+                    ));
+                }
                 if self.selection_is_slide_placeholder() {
                     menu = menu.child(menu_item(
                         "m_reset_ph",

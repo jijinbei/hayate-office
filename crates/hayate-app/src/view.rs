@@ -79,6 +79,9 @@ impl Render for HayateApp {
         let scene = self.scene.clone();
         let media = self.pres.media.clone();
         let selection = self.selection;
+        // A locked placeholder shows a selection outline but no resize handles (its geometry is
+        // fixed by the layout).
+        let sel_locked = selection.is_some_and(|e| self.is_locked_placeholder(e));
         let also = self.also.clone();
         let guides = self.guides.clone();
         let show_grid = self.show_grid;
@@ -416,8 +419,8 @@ impl Render for HayateApp {
                 }
 
                 // Resize handles on the selection: two endpoint handles for a line, the usual
-                // eight bounding-box handles otherwise.
-                if let Some(sel) = selection {
+                // eight bounding-box handles otherwise. Locked placeholders show none.
+                if let Some(sel) = selection.filter(|_| !sel_locked) {
                     if let Some(node) = scene.nodes.iter().find(|n| n.source == Some(sel)) {
                         let handle = |hx: f32, hy: f32, window: &mut Window| {
                             window.paint_quad(quad(
@@ -670,12 +673,81 @@ impl Render for HayateApp {
             );
         }
 
-        // Tab row: Slides | Layers.
-        let tab = |id: &'static str,
-                   lbl: &'static str,
-                   this_tab: LeftTab,
-                   active: bool,
-                   cx: &mut Context<Self>| {
+        let master_mode = !self.scope.is_slide();
+
+        // PRIMARY mode switcher — the first-class control for "what am I editing": the whole deck's
+        // slides, or its master/layouts. Each half is a big segment; the active one is filled with
+        // its scope color (slide = slate, master = purple). Switching flips the entire sidebar +
+        // canvas, so there is exactly one place that decides the mode.
+        let mode_seg = |id: &'static str,
+                        icon: &'static str,
+                        lbl: &'static str,
+                        active: bool,
+                        accent: u32,
+                        cx: &mut Context<Self>,
+                        on: Box<dyn Fn(&mut HayateApp)>| {
+            let mut d = div()
+                .id(id)
+                .flex_1()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_center()
+                .gap_1()
+                .py_2()
+                .rounded_md()
+                .text_sm();
+            if active {
+                d = d
+                    .bg(rgb(accent))
+                    .text_color(rgb(0xffffff))
+                    .font_weight(gpui::FontWeight::SEMIBOLD);
+            } else {
+                d = d
+                    .bg(rgb(0x2a2a2a))
+                    .text_color(rgb(0x9a9a9a))
+                    .hover(|s| s.bg(rgb(0x383838)).text_color(rgb(0xffffff)));
+            }
+            d.child(format!("{icon}  {lbl}")).on_click(cx.listener(
+                move |t, _ev: &ClickEvent, window, cx| {
+                    window.focus(&t.focus, cx);
+                    on(t);
+                    cx.notify();
+                },
+            ))
+        };
+        let mode_switcher = div()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .p_1()
+            .rounded_lg()
+            .bg(rgb(0x1c1c1c))
+            .child(mode_seg(
+                "mode_slide",
+                "📄",
+                "スライド",
+                !master_mode,
+                crate::SCOPE_SLIDE,
+                cx,
+                Box::new(|t| t.exit_scope()),
+            ))
+            .child(mode_seg(
+                "mode_master",
+                "◆",
+                "マスター",
+                master_mode,
+                crate::SCOPE_MASTER,
+                cx,
+                Box::new(|t| t.enter_master_mode()),
+            ));
+
+        // Secondary Slides | Layers sub-tabs (slide mode only).
+        let subtab = |id: &'static str,
+                      lbl: &'static str,
+                      this_tab: LeftTab,
+                      active: bool,
+                      cx: &mut Context<Self>| {
             div()
                 .id(id)
                 .flex_1()
@@ -692,37 +764,8 @@ impl Render for HayateApp {
                     cx.notify();
                 }))
         };
-        let tab_row = div()
-            .flex()
-            .flex_row()
-            .gap_1()
-            .child(tab(
-                "tab_slides",
-                "Slides",
-                LeftTab::Slides,
-                left_tab == LeftTab::Slides,
-                cx,
-            ))
-            .child(tab(
-                "tab_layers",
-                "Layers",
-                LeftTab::Layers,
-                left_tab == LeftTab::Layers,
-                cx,
-            ))
-            .child(tab(
-                "tab_master",
-                "Master",
-                LeftTab::Master,
-                left_tab == LeftTab::Master,
-                cx,
-            ));
-        let content: gpui::AnyElement = match left_tab {
-            LeftTab::Slides => slide_list.into_any_element(),
-            LeftTab::Layers => self.layers_panel(cx),
-            LeftTab::Master => self.master_panel(cx),
-        };
-        let sidebar = div()
+
+        let mut sidebar = div()
             .flex()
             .flex_col()
             .flex_none()
@@ -731,15 +774,44 @@ impl Render for HayateApp {
             .h_full()
             .p_2()
             .bg(rgb(0x252525))
-            .child(tab_row)
-            .child(
+            .child(mode_switcher);
+
+        let content: gpui::AnyElement = if master_mode {
+            self.master_panel(cx)
+        } else {
+            sidebar = sidebar.child(
                 div()
-                    .id("left_scroll")
-                    .flex_1()
-                    .min_h(px(0.))
-                    .overflow_y_scroll()
-                    .child(content),
+                    .flex()
+                    .flex_row()
+                    .gap_1()
+                    .child(subtab(
+                        "tab_slides",
+                        "Slides",
+                        LeftTab::Slides,
+                        left_tab == LeftTab::Slides,
+                        cx,
+                    ))
+                    .child(subtab(
+                        "tab_layers",
+                        "Layers",
+                        LeftTab::Layers,
+                        left_tab == LeftTab::Layers,
+                        cx,
+                    )),
             );
+            match left_tab {
+                LeftTab::Slides => slide_list.into_any_element(),
+                LeftTab::Layers => self.layers_panel(cx),
+            }
+        };
+        let sidebar = sidebar.child(
+            div()
+                .id("left_scroll")
+                .flex_1()
+                .min_h(px(0.))
+                .overflow_y_scroll()
+                .child(content),
+        );
 
         // Format (properties) pane for the selected shape — PowerPoint-style.
         let accents = [
@@ -1033,7 +1105,7 @@ impl Render for HayateApp {
             .bg(rgb(0x1e1e1e))
             .text_color(rgb(0xffffff))
             // Window title bar (controls live here, ONLYOFFICE-style).
-            .child(self.title_bar(cx))
+            .children(self.title_bar(cx))
             // Toolbar: Home + shape-creation tools on the left, zoom on the right.
             .child(
                 div()
@@ -1111,7 +1183,6 @@ impl Render for HayateApp {
                     ),
             )
             .children(palette_panel)
-            .children(self.scope_banner(cx))
             .child(
                 div()
                     .flex()
@@ -1157,8 +1228,11 @@ impl Render for HayateApp {
                                     .id("slide_canvas_area")
                                     .w(px(area_w))
                                     .h(px(area_h))
-                                    .border_1()
-                                    .border_color(rgb(0x555555))
+                                    // Frame tinted by the current edit scope (matches the
+                                    // breadcrumb): slate for a slide, blue for a layout, purple for
+                                    // the master — so the canvas itself signals what is being edited.
+                                    .border_2()
+                                    .border_color(rgb(self.scope.color()))
                                     // Drop image files onto the slide to insert them.
                                     .on_drop::<gpui::ExternalPaths>({
                                         let view = cx.entity();
@@ -1214,59 +1288,70 @@ impl Render for HayateApp {
 
 impl HayateApp {
     /// Custom window title bar (the window is client-side decorated, so we draw our own controls).
-    /// The left region drags the window; the right cluster minimizes / maximizes / closes it.
-    /// Shown at the very top of both the home screen and the editor.
-    fn title_bar(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
-        div()
-            .flex()
-            .flex_row()
-            .items_center()
-            .justify_between()
-            .h(px(34.))
-            .w_full()
-            .flex_none()
-            .bg(rgb(0x171717))
-            .border_b_1()
-            .border_color(rgb(0x2a2a2a))
-            // Draggable region: the title/logo area moves the window (controls are excluded).
-            .child(
-                div()
-                    .flex()
-                    .flex_1()
-                    .h_full()
-                    .items_center()
-                    .gap_2()
-                    .px_3()
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|_t, _ev: &MouseDownEvent, window, _cx| {
-                            window.start_window_move();
-                        }),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(rgb(0xdddddd))
-                            .child("HayateOffice"),
-                    ),
-            )
-            // Window controls.
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .items_center()
-                    .child(icon_button("win_min", "minus", cx, |_t, window, _cx| {
-                        window.minimize_window();
-                    }))
-                    .child(icon_button("win_max", "square", cx, |_t, window, _cx| {
-                        window.zoom_window();
-                    }))
-                    .child(icon_button("win_close", "x", cx, |_t, window, _cx| {
-                        window.remove_window();
-                    })),
-            )
-            .into_any_element()
+    /// A custom title bar for platforms that draw their own window decoration: a draggable strip
+    /// with the app name on the left and minimize / maximize / close controls on the right.
+    ///
+    /// Returns `None` on macOS, which provides a native titlebar (the window title is set on the
+    /// native bar, and the traffic-light buttons handle the window controls), so no custom strip is
+    /// drawn at all.
+    fn title_bar(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        #[cfg(target_os = "macos")]
+        {
+            let _ = cx;
+            None
+        }
+        #[cfg(not(target_os = "macos"))]
+        Some(
+            div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .justify_between()
+                .h(px(34.))
+                .w_full()
+                .flex_none()
+                .bg(rgb(0x171717))
+                .border_b_1()
+                .border_color(rgb(0x2a2a2a))
+                // Draggable region: the title/logo area moves the window (controls are excluded).
+                .child(
+                    div()
+                        .flex()
+                        .flex_1()
+                        .h_full()
+                        .items_center()
+                        .gap_2()
+                        .px_3()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_t, _ev: &MouseDownEvent, window, _cx| {
+                                window.start_window_move();
+                            }),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(rgb(0xdddddd))
+                                .child("HayateOffice"),
+                        ),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .child(icon_button("win_min", "minus", cx, |_t, window, _cx| {
+                            window.minimize_window();
+                        }))
+                        .child(icon_button("win_max", "square", cx, |_t, window, _cx| {
+                            window.zoom_window();
+                        }))
+                        .child(icon_button("win_close", "x", cx, |_t, window, _cx| {
+                            window.remove_window();
+                        })),
+                )
+                .into_any_element(),
+        )
     }
 
     /// The home/start screen: a "New presentation" card plus a thumbnailed grid of recently
@@ -1358,7 +1443,7 @@ impl HayateApp {
             .flex()
             .flex_col()
             // Window title bar with controls, then the padded home content.
-            .child(self.title_bar(cx))
+            .children(self.title_bar(cx))
             .child(
                 div()
                     .flex()
@@ -1735,53 +1820,6 @@ impl HayateApp {
                 })),
         );
         col.into_any_element()
-    }
-
-    /// A mode banner shown while editing a layout/master in place, with a Close button to return
-    /// to the current slide. Returns None in normal slide editing.
-    fn scope_banner(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
-        let label = match self.scope {
-            crate::EditScope::Slide(_) => return None,
-            crate::EditScope::Layout(l) => format!(
-                "Editing Layout: {}",
-                self.pres
-                    .world
-                    .layout_info
-                    .get(&l)
-                    .map(|li| li.name.clone())
-                    .unwrap_or_else(|| "Layout".to_string())
-            ),
-            crate::EditScope::Master(_) => "Editing Master".to_string(),
-        };
-        Some(
-            div()
-                .flex()
-                .flex_row()
-                .items_center()
-                .justify_between()
-                .px_3()
-                .py_1()
-                .bg(rgb(0x1f3a5f))
-                .text_color(rgb(0xffffff))
-                .text_sm()
-                .child(label)
-                .child(
-                    div()
-                        .id("close_master")
-                        .px_2()
-                        .py_1()
-                        .rounded_md()
-                        .bg(rgb(0x3a3a3a))
-                        .hover(|s| s.bg(rgb(0x4a4a4a)))
-                        .child("Close ✕")
-                        .on_click(cx.listener(|this, _ev: &ClickEvent, window, cx| {
-                            window.focus(&this.focus, cx);
-                            this.exit_scope();
-                            cx.notify();
-                        })),
-                )
-                .into_any_element(),
-        )
     }
 
     /// A transient notice modal (e.g. "PDF exported …") over a dimmed backdrop. Dismissed by the

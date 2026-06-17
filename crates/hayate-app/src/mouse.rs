@@ -53,12 +53,14 @@ impl HayateApp {
                 return;
             }
         }
-        // Click an inherited placeholder/prompt on a slide: promote it to an editable slide-level
-        // override and start typing. Inherited placeholders are display-only (no scene `source`),
-        // so they are not found by `hit_test`; test their resolved bounds directly.
-        // Only when no real shape is under the cursor, so on-slide content wins over a template
-        // placeholder beneath it.
-        if self.scope.is_slide() && hit_test(&self.scene, x, y).is_none() {
+        // Double-click an inherited placeholder/prompt on a slide: promote it to an editable
+        // slide-level override and start typing. Inherited placeholders are display-only (no scene
+        // `source`), so they are not found by `hit_test`; test their resolved bounds directly.
+        // Gated on a double-click (and no real shape under the cursor) so a single click leaves the
+        // locked, layout-owned placeholder untouched — matching how the panel shows it as locked and
+        // how every other text shape begins editing on double-click. A bare click no longer creates
+        // a phantom slide-level copy.
+        if ev.click_count >= 2 && self.scope.is_slide() && hit_test(&self.scene, x, y).is_none() {
             let scale = self.scale();
             if scale > 0.0 {
                 let ex = (x as f64 / scale) as i64;
@@ -117,8 +119,9 @@ impl HayateApp {
                 }
             }
         }
-        // Grab a resize handle on the current (axis-aligned) selection?
-        if let Some(sel) = self.selection {
+        // Grab a resize handle on the current (axis-aligned) selection? Locked placeholders keep
+        // their layout-defined geometry, so they expose no resize handles.
+        if let Some(sel) = self.selection.filter(|&s| !self.is_locked_placeholder(s)) {
             if let Some(node) = self.scene.nodes.iter().find(|n| n.source == Some(sel)) {
                 if node.rotation_deg.abs() < 1e-3 {
                     let r = prim_bounds(&node.prim);
@@ -172,17 +175,22 @@ impl HayateApp {
                 }
             }
         }
-        // Drag moves every selected shape (group / multi-select) together.
+        // Drag moves every selected shape (group / multi-select) together — except a locked
+        // placeholder, whose position is fixed by the layout (it can still be selected and have its
+        // text edited, just not moved).
         let entities: Vec<(Entity, RectEmu)> = self
             .selected_all()
             .into_iter()
             .filter_map(|e| self.pres.world.frames.get(&e).map(|f| (e, *f)))
             .collect();
-        self.drag = hit.filter(|_| !entities.is_empty()).map(|h| Drag {
-            entities,
-            primary: h,
-            start_cursor: ev.position,
-        });
+        let hit_locked = hit.is_some_and(|h| self.is_locked_placeholder(h));
+        self.drag = hit
+            .filter(|_| !entities.is_empty() && !hit_locked)
+            .map(|h| Drag {
+                entities,
+                primary: h,
+                start_cursor: ev.position,
+            });
         cx.notify();
     }
 
