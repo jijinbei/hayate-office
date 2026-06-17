@@ -79,7 +79,7 @@ fn japanese_run_uses_ea_font() {
     match &scene.nodes[1].prim {
         Primitive::Text(tb) => {
             let run = &tb.paragraphs[0].runs[0];
-            assert_eq!(run.family, "Noto Sans CJK JP");
+            assert_eq!(run.family, hayate_ir::theme::default_sans_family());
             assert!(run.size_px > 0.0);
         }
         other => panic!("expected text, got {other:?}"),

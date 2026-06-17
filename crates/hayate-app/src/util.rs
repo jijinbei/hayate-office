@@ -109,6 +109,12 @@ pub(crate) fn run_font(r: &ResolvedRun) -> Font {
     if r.italic {
         f.style = FontStyle::Italic;
     }
+    // Cascade to the platform's CJK-capable family for any glyph the run's font lacks, so
+    // non-Latin text still renders when a run names a Latin-only font (e.g. an imported deck's
+    // "Arial"). gpui applies these fallbacks only once the primary family itself resolves.
+    f.fallbacks = Some(gpui::FontFallbacks::from_fonts(vec![
+        hayate_ir::theme::default_sans_family().to_string(),
+    ]));
     f
 }
 

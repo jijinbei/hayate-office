@@ -58,6 +58,7 @@ fn default_uses_one_family_for_all_scripts() {
     // size regardless of whether a line contains CJK.
     let t = Theme::default();
     let body = FontRef::Theme(ThemeFontSlot::Minor);
-    assert_eq!(t.font_family(&body, Script::Latin), "Noto Sans CJK JP");
-    assert_eq!(t.font_family(&body, Script::Ea), "Noto Sans CJK JP");
+    let fam = super::default_sans_family();
+    assert_eq!(t.font_family(&body, Script::Latin), fam);
+    assert_eq!(t.font_family(&body, Script::Ea), fam);
 }

@@ -75,6 +75,28 @@ impl Theme {
     }
 }
 
+/// The default sans-serif family for new presentations, picked per-platform so it names a font
+/// that is actually installed on the machine creating the deck. Font selection is by exact family
+/// name (gpui/font-kit's `select_family_by_name`, cosmic-text's `Family::Name`); when the named
+/// family is missing, gpui falls back to a Latin-only UI font, which leaves CJK runs blank. Each
+/// value below is a system font that ships with the platform and covers both Latin and CJK with
+/// real weights: macOS "Hiragino Sans", Windows "Yu Gothic UI", and on Linux (incl. the Nix dev
+/// shell) "Noto Sans CJK JP".
+pub fn default_sans_family() -> &'static str {
+    #[cfg(target_os = "macos")]
+    {
+        "Hiragino Sans"
+    }
+    #[cfg(target_os = "windows")]
+    {
+        "Yu Gothic UI"
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        "Noto Sans CJK JP"
+    }
+}
+
 /// Names of the built-in color presets, in the same order as [`theme_color_presets`]. This is the
 /// single source of truth for the order, shared by both accessors (the index selects a preset).
 const PRESET_NAMES: [&str; 4] = ["Office", "Warm", "Cool", "Mono"];
@@ -169,14 +191,15 @@ impl Default for Theme {
                 hlink: Rgba::rgb(0x00, 0x00, 0xEE),
                 fol_hlink: Rgba::rgb(0x80, 0x00, 0x80),
             },
-            // One family for every script. Noto Sans CJK JP covers Latin + CJK and ships a real
-            // Bold face, so bold resolves on screen (gpui/font-kit does not synthesize bold) and
-            // matches the PDF. Using a single family also keeps list bullets a consistent size:
-            // the bullet glyph no longer depends on whether a line happens to contain CJK (which
-            // used to switch the resolved family, and thus the bullet's font/size, per line).
+            // One family for every script (see [`default_sans_family`] for the per-platform pick).
+            // The chosen family covers Latin + CJK and ships a real Bold face, so bold resolves on
+            // screen (gpui/font-kit does not synthesize bold) and matches the PDF. Using a single
+            // family also keeps list bullets a consistent size: the bullet glyph no longer depends
+            // on whether a line happens to contain CJK (which used to switch the resolved family,
+            // and thus the bullet's font/size, per line).
             fonts: FontScheme {
-                major: mk("Noto Sans CJK JP", "Noto Sans CJK JP"),
-                minor: mk("Noto Sans CJK JP", "Noto Sans CJK JP"),
+                major: mk(default_sans_family(), default_sans_family()),
+                minor: mk(default_sans_family(), default_sans_family()),
             },
         }
     }

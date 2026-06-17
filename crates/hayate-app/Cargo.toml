@@ -23,8 +23,10 @@ gpui.workspace = true
 # Decode the embedded app logo into the RGBA image gpui wants for the X11 window icon.
 # Pinned to the same 0.25 line gpui resolves, so the dependency graph stays unified.
 image = "0.25"
-# Linux windowing backends for gpui_platform.
-gpui_platform = { workspace = true, features = ["wayland", "x11"] }
+# Windowing backends for gpui_platform. `wayland`/`x11` are the Linux backends; `font-kit` enables
+# the native CoreText text system on macOS (gpui_macos installs a no-op text system that renders no
+# glyphs unless this feature is on — without it, all text is invisible on macOS).
+gpui_platform = { workspace = true, features = ["wayland", "x11", "font-kit"] }
 
 [dev-dependencies]
 # Headless interaction tests drive the real UI handlers through a gpui test context.
