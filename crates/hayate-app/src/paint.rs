@@ -436,9 +436,14 @@ pub(crate) fn paint_scene(
                 ..
             } => {
                 if *px_w > 0 && *px_h > 0 {
+                    // Draw at the raster's natural aspect, top-aligned in the box: the raster is
+                    // the typeset CONTENT height (often shorter than the box), so stretching it to
+                    // the box height would smear it vertically. Width fills the box; height keeps
+                    // the raster's aspect ratio.
+                    let draw_h = r.w * (*px_h as f32) / (*px_w as f32);
                     let b = Bounds {
                         origin: point(o.x + px(r.x), o.y + px(r.y)),
-                        size: size(px(r.w), px(r.h)),
+                        size: size(px(r.w), px(draw_h)),
                     };
                     let render = typst_render_image(rgba, *px_w, *px_h);
                     let _ = window.paint_image(b, Corners::default(), render, 0, false);

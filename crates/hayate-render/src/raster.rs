@@ -155,8 +155,10 @@ fn draw_typst_raster(
     }
     let dx0 = bounds.x * sx;
     let dy0 = bounds.y * sy;
+    // Width fills the box; height keeps the raster's natural aspect (it is the typeset content
+    // height, usually shorter than the box) so it is not stretched/smeared vertically.
     let dw = (bounds.w * sx).max(1.0);
-    let dh = (bounds.h * sy).max(1.0);
+    let dh = (dw * px_h as f32 / px_w as f32).max(1.0);
     for py in 0..dh as i32 {
         let dy = dy0 as i32 + py;
         if dy < 0 || dy as usize >= h {
