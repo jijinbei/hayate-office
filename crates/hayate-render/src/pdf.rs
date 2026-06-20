@@ -64,6 +64,20 @@ struct Glyph {
     color: (u8, u8, u8),
 }
 
+/// A positioned glyph from a Typst box (its font is keyed by `font_key`, embedded separately from
+/// the cosmic-text fonts). Scene/point coordinates, baseline origin.
+struct TGlyphOp {
+    font_key: u64,
+    glyph_id: u16,
+    x: f32,
+    baseline_y: f32,
+    size: f32,
+    color: (u8, u8, u8),
+}
+
+/// Per-Typst-font embedding input: the raw sfnt bytes and the glyph ids used (→ ToUnicode text).
+type TypstFonts = BTreeMap<u64, (std::sync::Arc<Vec<u8>>, BTreeMap<u16, String>)>;
+
 /// A drawing operation on a page, in scene/point coordinates (top-left origin, y down).
 enum Op {
     Rect {
@@ -93,6 +107,8 @@ enum Op {
         rot: f32,
     },
     Glyphs(Vec<Glyph>),
+    /// Glyphs from Typst boxes (real selectable text from the typeset frame).
+    TGlyphs(Vec<TGlyphOp>),
 }
 
 /// A page ready to serialize: its background and ordered draw ops.
@@ -111,10 +127,11 @@ pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
     // used. Shaping happens once here.
     let mut pages: Vec<Page> = Vec::new();
     let mut font_glyphs: BTreeMap<cosmic_text::fontdb::ID, BTreeMap<u16, String>> = BTreeMap::new();
+    let mut typst_fonts: TypstFonts = BTreeMap::new();
     let mut used_images: BTreeSet<String> = BTreeSet::new();
     for &slide in &slides {
         let scene = build_slide_scene(p, slide, PxSize { w: pt_w, h: pt_h });
-        let page = build_page(&scene, opts, &mut font_glyphs);
+        let page = build_page(&scene, opts, &mut font_glyphs, &mut typst_fonts);
         for op in &page.ops {
             if let Op::Image { key, .. } = op {
                 used_images.insert(key.clone());
@@ -153,6 +170,25 @@ pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
         }
     });
 
+    // Embed the Typst boxes' fonts (one CID font per used typst font), named T{ti}.
+    let mut typst_font_res: BTreeMap<u64, (String, u32)> = BTreeMap::new();
+    for (ti, (font_key, (data, glyphs))) in typst_fonts.iter().enumerate() {
+        if glyphs.is_empty() {
+            continue;
+        }
+        let base = pdf.peek();
+        let subtag = format!("T{ti}");
+        let built = build_type0_font(data, glyphs, base, &subtag);
+        if built.obj_count == 0 {
+            continue;
+        }
+        pdf.reserve(built.obj_count);
+        for (id, body) in built.objects {
+            pdf.put(id, body);
+        }
+        typst_font_res.insert(*font_key, (format!("T{ti}"), built.font_obj_id));
+    }
+
     // Build image XObjects (one per used media key).
     let mut image_res: BTreeMap<String, (String, u32)> = BTreeMap::new();
     // Decode + compress each image across cores; assign object ids sequentially afterwards so the
@@ -183,9 +219,12 @@ pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
 
     // Shared resources dictionary (fonts + images), referenced by every page.
     let mut res = String::from("<< ");
-    if !font_res.is_empty() {
+    if !font_res.is_empty() || !typst_font_res.is_empty() {
         res.push_str("/Font << ");
         for (name, id) in font_res.values() {
+            let _ = write!(res, "/{name} {id} 0 R ");
+        }
+        for (name, id) in typst_font_res.values() {
             let _ = write!(res, "/{name} {id} 0 R ");
         }
         res.push_str(">> ");
@@ -204,7 +243,11 @@ pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
     // byte output matches the serial path exactly.
     let compressed: Vec<Vec<u8>> = pages
         .par_iter()
-        .map(|page| flate(serialize_page(page, pt_w, pt_h, &font_res, &image_res).as_bytes()))
+        .map(|page| {
+            flate(
+                serialize_page(page, pt_w, pt_h, &font_res, &typst_font_res, &image_res).as_bytes(),
+            )
+        })
         .collect();
     let mut page_ids: Vec<u32> = Vec::new();
     for zipped in &compressed {
@@ -270,6 +313,7 @@ fn build_page(
     scene: &Scene,
     opts: &PdfOptions,
     font_glyphs: &mut BTreeMap<cosmic_text::fontdb::ID, BTreeMap<u16, String>>,
+    typst_fonts: &mut TypstFonts,
 ) -> Page {
     let mut ops = Vec::new();
     for node in &scene.nodes {
@@ -326,9 +370,78 @@ fn build_page(
                     ops.push(Op::Glyphs(glyphs));
                 }
             }
-            // Phase 2 will re-layout the Typst source into real PDF text + vectors; until then a
-            // Typst box is omitted from the PDF (on-screen/raster previews show it).
-            Primitive::Typst { .. } => {}
+            Primitive::Typst {
+                bounds,
+                source,
+                default_pt,
+                color,
+                align,
+                ..
+            } => {
+                // Re-lay the Typst source out and emit real selectable text + vector shapes
+                // (no raster), offset to the box origin. Box width in points == bounds.w (the PDF
+                // scene is built at 1px = 1pt).
+                let r = crate::typst_render::layout_typst(
+                    source,
+                    bounds.w,
+                    *default_pt,
+                    *color,
+                    *align,
+                );
+                if let Ok(layout) = r.as_ref() {
+                    let mut gops = Vec::new();
+                    for run in &layout.glyph_runs {
+                        let entry = typst_fonts
+                            .entry(run.font_key)
+                            .or_insert_with(|| (run.font_data.clone(), BTreeMap::new()));
+                        for g in &run.glyphs {
+                            entry.1.insert(g.id, g.unicode.clone());
+                            gops.push(TGlyphOp {
+                                font_key: run.font_key,
+                                glyph_id: g.id,
+                                x: bounds.x + g.x,
+                                baseline_y: bounds.y + g.y,
+                                size: run.size_pt,
+                                color: (run.color.r, run.color.g, run.color.b),
+                            });
+                        }
+                    }
+                    if !gops.is_empty() {
+                        ops.push(Op::TGlyphs(gops));
+                    }
+                    for sh in &layout.shapes {
+                        match sh {
+                            crate::typst_render::TShape::Line {
+                                from,
+                                to,
+                                color,
+                                width,
+                            } => ops.push(Op::Line {
+                                from: (bounds.x + from.0, bounds.y + from.1),
+                                to: (bounds.x + to.0, bounds.y + to.1),
+                                color: (color.r, color.g, color.b),
+                                width: *width,
+                                start_arrow: false,
+                                end_arrow: false,
+                            }),
+                            crate::typst_render::TShape::Rect { x, y, w, h, color } => {
+                                ops.push(Op::Rect {
+                                    b: PxRect {
+                                        x: bounds.x + x,
+                                        y: bounds.y + y,
+                                        w: *w,
+                                        h: *h,
+                                    },
+                                    radius: 0.0,
+                                    fill: Some((color.r, color.g, color.b)),
+                                    stroke: None,
+                                    rot: 0.0,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
         }
     }
     Page {
@@ -449,6 +562,7 @@ fn serialize_page(
     page_w: f32,
     page_h: f32,
     font_res: &BTreeMap<cosmic_text::fontdb::ID, (String, u32)>,
+    typst_font_res: &BTreeMap<u64, (String, u32)>,
     image_res: &BTreeMap<String, (String, u32)>,
 ) -> String {
     let mut s = String::new();
@@ -539,6 +653,26 @@ fn serialize_page(
             Op::Glyphs(glyphs) => {
                 for g in glyphs {
                     let Some((name, _)) = font_res.get(&g.font_id) else {
+                        continue;
+                    };
+                    let (r, gg, b) = g.color;
+                    let _ = writeln!(
+                        s,
+                        "BT\n{} {} {} rg\n/{name} {} Tf\n1 0 0 1 {} {} Tm\n<{:04X}> Tj\nET",
+                        c(r),
+                        c(gg),
+                        c(b),
+                        fmt(g.size),
+                        fmt(g.x),
+                        fmt(page_h - g.baseline_y),
+                        g.glyph_id,
+                        name = name
+                    );
+                }
+            }
+            Op::TGlyphs(glyphs) => {
+                for g in glyphs {
+                    let Some((name, _)) = typst_font_res.get(&g.font_key) else {
                         continue;
                     };
                     let (r, gg, b) = g.color;
@@ -944,6 +1078,47 @@ mod tests {
                 .insert(e, Fill::Solid(Color::theme(ThemeColorToken::Accent1)));
         }
         p
+    }
+
+    #[test]
+    fn typst_box_exports_as_text_not_image() {
+        use hayate_ir::font::{FontRef, ThemeFontSlot};
+        use hayate_ir::text::{Paragraph, Run, TextBody};
+        use hayate_ir::units::pt;
+        let mut p = Presentation::new();
+        let m = p.add_master(Theme::default());
+        let l = p.add_layout(m, "Blank");
+        let slide = p.add_slide(l);
+        let e = p.add_shape(slide);
+        p.world.frames.insert(
+            e,
+            RectEmu::new(inch_f(0.5), inch_f(0.5), inch_f(8.0), inch_f(3.0)),
+        );
+        let src = "= Title\n- a\n- b\n$ 1/2 + x^2 $";
+        p.world.texts.insert(
+            e,
+            TextBody {
+                paragraphs: vec![Paragraph::new(vec![Run {
+                    text: src.into(),
+                    font: FontRef::Theme(ThemeFontSlot::Minor),
+                    size: pt(24),
+                    color: Color::theme(ThemeColorToken::Dk1),
+                    bold: false,
+                    italic: false,
+                    underline: false,
+                }])],
+                autofit: false,
+                typst_source: Some(src.into()),
+            },
+        );
+        let pdf = export_pdf(&p, &PdfOptions::default());
+        assert!(pdf.starts_with(b"%PDF-") && count(&pdf, b"%%EOF") >= 1);
+        // The Typst box becomes real text (a CID font + show ops), NOT a raster image.
+        assert_eq!(count(&pdf, b"/Subtype /Image"), 0, "no raster images");
+        assert!(
+            count(&pdf, b"/Type0") >= 1,
+            "embeds a Type0 CID font for the box"
+        );
     }
 
     #[test]

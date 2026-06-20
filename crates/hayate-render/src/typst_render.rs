@@ -124,6 +124,8 @@ thread_local! {
     static ENGINE: Engine = build_engine();
     static RASTER_CACHE: RefCell<HashMap<String, Rc<Result<RasterImage, String>>>> =
         RefCell::new(HashMap::new());
+    static LAYOUT_CACHE: RefCell<HashMap<String, Rc<Result<TypstLayout, String>>>> =
+        RefCell::new(HashMap::new());
 }
 
 /// Max cached raster results per thread (bounds memory across zoom levels).
@@ -221,6 +223,197 @@ pub fn render_typst_raster(
     })
 }
 
+// ---------------------------------------------------------------------------
+// Phase 2: lay the Typst box out and extract positioned glyphs + vector shapes
+// (box-local points, y-down — matching the scene) for the PDF exporter, so the
+// PDF carries real selectable text + vectors instead of a raster.
+// ---------------------------------------------------------------------------
+
+/// One positioned glyph in box-local points (`x`/`y` is the glyph's baseline origin).
+#[derive(Debug, Clone)]
+pub struct TGlyph {
+    pub id: u16,
+    pub x: f32,
+    pub y: f32,
+    /// The cluster's source text, for the PDF ToUnicode map (selection/copy).
+    pub unicode: String,
+}
+
+/// A run of glyphs sharing a font + size + color.
+#[derive(Debug, Clone)]
+pub struct TGlyphRun {
+    /// Stable per-font key (dedup across runs within one PDF).
+    pub font_key: u64,
+    pub font_data: Arc<Vec<u8>>,
+    pub size_pt: f32,
+    pub color: Rgba,
+    pub glyphs: Vec<TGlyph>,
+}
+
+/// A vector shape from the Typst layout (fraction bars, rules, etc.), box-local points.
+#[derive(Debug, Clone)]
+pub enum TShape {
+    Line {
+        from: (f32, f32),
+        to: (f32, f32),
+        color: Rgba,
+        width: f32,
+    },
+    Rect {
+        x: f32,
+        y: f32,
+        w: f32,
+        h: f32,
+        color: Rgba,
+    },
+}
+
+/// The laid-out Typst box: positioned glyph runs + vector shapes, in box-local points.
+#[derive(Debug, Default, Clone)]
+pub struct TypstLayout {
+    pub glyph_runs: Vec<TGlyphRun>,
+    pub shapes: Vec<TShape>,
+}
+
+fn paint_rgba(paint: &typst::visualize::Paint) -> Rgba {
+    match paint {
+        typst::visualize::Paint::Solid(c) => {
+            let [r, g, b, a] = c.to_vec4_u8();
+            Rgba::rgba(r, g, b, a)
+        }
+        _ => Rgba::rgb(0, 0, 0),
+    }
+}
+
+/// Recursively walk a frame, accumulating translation `(ox, oy)` in points (scale/skew of nested
+/// groups is ignored — typst lays math/lists out with translation + per-run font size, which this
+/// covers). Appends positioned glyph runs and vector shapes to `out`.
+fn walk_frame(frame: &typst::layout::Frame, ox: f32, oy: f32, out: &mut TypstLayout) {
+    use typst::layout::FrameItem;
+    use typst::visualize::Geometry;
+    for (point, item) in frame.items() {
+        let px = ox + point.x.to_pt() as f32;
+        let py = oy + point.y.to_pt() as f32;
+        match item {
+            FrameItem::Group(g) => {
+                walk_frame(
+                    &g.frame,
+                    px + g.transform.tx.to_pt() as f32,
+                    py + g.transform.ty.to_pt() as f32,
+                    out,
+                );
+            }
+            FrameItem::Text(t) => {
+                let size = t.size;
+                let size_pt = size.to_pt() as f32;
+                let color = paint_rgba(&t.fill);
+                let data = Arc::new(t.font.data().as_slice().to_vec());
+                let font_key =
+                    (t.font.data().as_slice().as_ptr() as u64) ^ ((t.font.index() as u64) << 1);
+                let mut glyphs = Vec::with_capacity(t.glyphs.len());
+                let mut xacc = 0.0f32;
+                for g in &t.glyphs {
+                    let gx = px + xacc + g.x_offset.at(size).to_pt() as f32;
+                    let gy = py + g.y_offset.at(size).to_pt() as f32;
+                    let unicode = t.text.get(g.range()).unwrap_or("").to_string();
+                    glyphs.push(TGlyph {
+                        id: g.id,
+                        x: gx,
+                        y: gy,
+                        unicode,
+                    });
+                    xacc += g.x_advance.at(size).to_pt() as f32;
+                }
+                out.glyph_runs.push(TGlyphRun {
+                    font_key,
+                    font_data: data,
+                    size_pt,
+                    color,
+                    glyphs,
+                });
+            }
+            FrameItem::Shape(shape, _) => {
+                let color = shape
+                    .fill
+                    .as_ref()
+                    .map(paint_rgba)
+                    .or_else(|| shape.stroke.as_ref().map(|s| paint_rgba(&s.paint)))
+                    .unwrap_or(Rgba::rgb(0, 0, 0));
+                match &shape.geometry {
+                    Geometry::Line(to) => out.shapes.push(TShape::Line {
+                        from: (px, py),
+                        to: (px + to.x.to_pt() as f32, py + to.y.to_pt() as f32),
+                        color,
+                        width: shape
+                            .stroke
+                            .as_ref()
+                            .map(|s| s.thickness.to_pt() as f32)
+                            .unwrap_or(1.0),
+                    }),
+                    Geometry::Rect(size) => out.shapes.push(TShape::Rect {
+                        x: px,
+                        y: py,
+                        w: size.x.to_pt() as f32,
+                        h: size.y.to_pt() as f32,
+                        color,
+                    }),
+                    // Curves (e.g. root signs) are uncommon; omit for now.
+                    Geometry::Curve(_) => {}
+                }
+            }
+            FrameItem::Image(..) | FrameItem::Link(..) | FrameItem::Tag(..) => {}
+        }
+    }
+}
+
+/// Lay a Typst box out and return its positioned glyphs + vector shapes (box-local points), for
+/// the PDF exporter. Memoized like [`render_typst_raster`]. `box_w_pt` is the page width in points.
+pub fn layout_typst(
+    source: &str,
+    box_w_pt: f32,
+    default_pt: f32,
+    color: Rgba,
+    align: HAlign,
+) -> Rc<Result<TypstLayout, String>> {
+    let full = wrap_source(source, box_w_pt, default_pt, color, align);
+    LAYOUT_CACHE.with(|cache| {
+        if let Some(hit) = cache.borrow().get(&full) {
+            return Rc::clone(hit);
+        }
+        let result = Rc::new(ENGINE.with(|engine| {
+            let main = FileId::new_fake(VirtualPath::new("main.typ"));
+            let world = TypstWorld {
+                library: Arc::clone(&engine.library),
+                book: Arc::clone(&engine.book),
+                fonts: Arc::clone(&engine.fonts),
+                main,
+                source: Source::new(main, full.clone()),
+            };
+            let doc = typst::compile::<PagedDocument>(&world)
+                .output
+                .map_err(|diags| {
+                    diags
+                        .first()
+                        .map(|d| d.message.to_string())
+                        .unwrap_or_else(|| "typst compile error".to_string())
+                })?;
+            let page = doc
+                .pages
+                .first()
+                .ok_or_else(|| "empty document".to_string())?;
+            let mut layout = TypstLayout::default();
+            walk_frame(&page.frame, 0.0, 0.0, &mut layout);
+            Ok(layout)
+        }));
+        let mut c = cache.borrow_mut();
+        if c.len() >= CACHE_CAP {
+            c.clear();
+        }
+        c.insert(full, Rc::clone(&result));
+        result
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,5 +456,29 @@ mod tests {
         let a = render_typst_raster("hello", 300.0, 1.0, 18.0, black(), HAlign::Left);
         let b = render_typst_raster("hello", 300.0, 1.0, 18.0, black(), HAlign::Left);
         assert!(Rc::ptr_eq(&a, &b), "second call returns the cached Rc");
+    }
+
+    #[test]
+    fn layout_extracts_positioned_glyphs() {
+        let r = layout_typst("hello", 400.0, 18.0, black(), HAlign::Left);
+        let layout = r.as_ref().as_ref().expect("compiles");
+        let total: usize = layout.glyph_runs.iter().map(|g| g.glyphs.len()).sum();
+        assert!(total >= 5, "at least one glyph per letter, got {total}");
+        // Glyphs advance left-to-right.
+        let run = &layout.glyph_runs[0];
+        assert!(run.glyphs[1].x > run.glyphs[0].x, "glyphs advance in x");
+        assert!(!run.glyphs[0].unicode.is_empty(), "ToUnicode text present");
+    }
+
+    #[test]
+    fn layout_math_has_a_fraction_bar() {
+        // A fraction renders a horizontal rule (Shape) between numerator and denominator.
+        let r = layout_typst("$ 1/2 $", 400.0, 24.0, black(), HAlign::Left);
+        let layout = r.as_ref().as_ref().expect("math compiles");
+        assert!(!layout.glyph_runs.is_empty(), "digits are glyphs");
+        assert!(
+            !layout.shapes.is_empty(),
+            "the fraction bar is a vector shape"
+        );
     }
 }
