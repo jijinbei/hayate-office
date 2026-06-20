@@ -479,6 +479,7 @@ pub fn set_run_text(world: &World, e: Entity, text: String) -> Transaction {
     let new_body = TextBody {
         paragraphs: vec![para],
         autofit: existing.map(|b| b.autofit).unwrap_or(false),
+        typst_source: None,
     };
     Transaction::new(
         "set run text",
@@ -525,9 +526,57 @@ pub fn set_paragraphs(world: &World, e: Entity, lines: &[(String, u8)]) -> Trans
     let body = TextBody {
         paragraphs,
         autofit: existing.map(|b| b.autofit).unwrap_or(false),
+        typst_source: None,
     };
     Transaction::new(
         "set paragraphs",
+        vec![Operation::SetComponent {
+            entity: e,
+            value: CompValue::Text(body),
+        }],
+    )
+}
+
+/// Set the box's canonical Typst source in one undoable transaction. The first existing run's
+/// character formatting (font, size, color) and the first paragraph's alignment are preserved as
+/// the rendering defaults; `paragraphs` is rebuilt as a plain-text fallback (one paragraph per
+/// source line, no bullets) used while editing / for thumbnails / on Typst compile failure.
+/// Used both for the final commit (via history) and—applied directly—for live preview and revert.
+pub fn set_typst_source(world: &World, e: Entity, source: String) -> Transaction {
+    let existing = world.texts.get(&e);
+    let template = existing
+        .and_then(|b| b.paragraphs.first())
+        .and_then(|p| p.runs.first())
+        .cloned()
+        .unwrap_or_else(|| default_run(String::new()));
+    let align = existing
+        .and_then(|b| b.paragraphs.first())
+        .map(|p| p.align)
+        .unwrap_or(HAlign::Left);
+    let mut paragraphs: Vec<Paragraph> = source
+        .split('\n')
+        .map(|line| {
+            let mut run = template.clone();
+            run.text = line.to_string();
+            let mut para = Paragraph::new(vec![run]);
+            para.align = align;
+            para
+        })
+        .collect();
+    if paragraphs.is_empty() {
+        let mut run = template.clone();
+        run.text = String::new();
+        let mut para = Paragraph::new(vec![run]);
+        para.align = align;
+        paragraphs.push(para);
+    }
+    let body = TextBody {
+        paragraphs,
+        autofit: existing.map(|b| b.autofit).unwrap_or(false),
+        typst_source: Some(source),
+    };
+    Transaction::new(
+        "set typst source",
         vec![Operation::SetComponent {
             entity: e,
             value: CompValue::Text(body),
@@ -544,6 +593,7 @@ pub fn append_paragraph(world: &World, e: Entity, text: String) -> Transaction {
         None => TextBody {
             paragraphs: Vec::new(),
             autofit: false,
+            typst_source: None,
         },
     };
     body.paragraphs

@@ -30,6 +30,7 @@ fn node_contains(node: &SceneNode, x: f32, y: f32) -> bool {
         Primitive::Quad { .. }
         | Primitive::Text(_)
         | Primitive::Image { .. }
+        | Primitive::Typst { .. }
         | Primitive::Line { .. } => rect_contains(bounds, lx, ly),
         Primitive::Ellipse { .. } => ellipse_contains(bounds, lx, ly),
     }
@@ -42,6 +43,7 @@ fn primitive_bounds(prim: &Primitive) -> PxRect {
         Primitive::Ellipse { bounds, .. } => *bounds,
         Primitive::Text(block) => block.bounds,
         Primitive::Image { bounds, .. } => *bounds,
+        Primitive::Typst { bounds, .. } => *bounds,
         Primitive::Line { .. } => crate::scene::prim_bounds(prim),
     }
 }

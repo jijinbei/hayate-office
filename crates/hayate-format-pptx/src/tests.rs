@@ -45,6 +45,7 @@ fn exports_valid_pptx_zip() {
                 underline: false,
             }])],
             autofit: false,
+            typst_source: None,
         },
     );
 
@@ -140,6 +141,7 @@ fn export_then_import_roundtrips() {
                 underline: false,
             }])],
             autofit: false,
+            typst_source: None,
         },
     );
 

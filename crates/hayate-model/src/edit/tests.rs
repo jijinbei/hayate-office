@@ -216,6 +216,7 @@ fn set_run_text_preserves_formatting() {
     let body = TextBody {
         paragraphs: vec![Paragraph::new(vec![original.clone()])],
         autofit: false,
+        typst_source: None,
     };
     w.set(e, CompValue::Text(body));
 
@@ -265,6 +266,51 @@ fn set_run_text_creates_body_when_absent() {
 }
 
 #[test]
+fn set_typst_source_stores_source_and_plain_fallback() {
+    let mut w = World::new();
+    let mut h = History::new();
+    let e = w.spawn();
+
+    let tx = set_typst_source(&w, e, "- a\n- b".to_string());
+    h.commit(&mut w, tx);
+
+    let got = w.texts.get(&e).expect("text present");
+    assert_eq!(got.typst_source.as_deref(), Some("- a\n- b"));
+    // Plain-text fallback: one paragraph per source line.
+    assert_eq!(got.paragraphs.len(), 2);
+    assert_eq!(got.paragraphs[0].runs[0].text, "- a");
+    assert_eq!(got.paragraphs[1].runs[0].text, "- b");
+
+    // Undo removes the (previously absent) body.
+    assert!(h.undo(&mut w));
+    assert!(w.texts.get(&e).is_none());
+}
+
+#[test]
+fn set_typst_source_preserves_first_run_size() {
+    let mut w = World::new();
+    let mut h = History::new();
+    let e = w.spawn();
+    // Seed a body whose first run is 40pt so the template size is preserved.
+    let mut run = styled_run("x");
+    run.size = pt(40);
+    w.set(
+        e,
+        CompValue::Text(TextBody {
+            paragraphs: vec![Paragraph::new(vec![run])],
+            autofit: false,
+            typst_source: None,
+        }),
+    );
+
+    let tx = set_typst_source(&w, e, "hello".to_string());
+    h.commit(&mut w, tx);
+    let got = w.texts.get(&e).expect("text present");
+    assert_eq!(got.typst_source.as_deref(), Some("hello"));
+    assert_eq!(got.paragraphs[0].runs[0].size, pt(40), "template size kept");
+}
+
+#[test]
 fn append_paragraph_increases_count_and_undoes() {
     let mut w = World::new();
     let mut h = History::new();
@@ -274,6 +320,7 @@ fn append_paragraph_increases_count_and_undoes() {
     let body = TextBody {
         paragraphs: vec![Paragraph::new(vec![styled_run("first")])],
         autofit: false,
+        typst_source: None,
     };
     w.set(e, CompValue::Text(body));
 
@@ -315,6 +362,7 @@ fn two_paragraph_body(w: &mut World, e: Entity) {
             Paragraph::new(vec![styled_run("second")]),
         ],
         autofit: false,
+        typst_source: None,
     };
     w.set(e, CompValue::Text(body));
 }

@@ -1114,75 +1114,116 @@ fn apply_color_preset_changes_theme(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
-fn list_editing_markdown_and_tab(cx: &mut TestAppContext) {
+fn typst_text_edit_shows_source_then_typesets(cx: &mut TestAppContext) {
+    use hayate_render::scene::Primitive;
     let app = cx.new(|cx| HayateApp::new(cx));
     app.update(cx, |s, _| s.add_text_box());
     let e = app.read_with(cx, |s, _| s.selection.unwrap());
+
+    // Enter edit, clear the default "Text", and type a two-item Typst list.
     app.update(cx, |s, _| s.begin_text_edit(e));
-    // Clear the default "Text".
     app.update(cx, |s, cx| {
         if let Some(te) = s.text_edit.as_mut() {
             te.selected = 0..te.buf.len();
         }
         s.text_key(&keydown("backspace"), cx);
     });
-    // Markdown-like: typing "- " turns the line into a bullet and removes the marker.
-    app.update(cx, |s, _| s.apply_ime(None, "- ", false));
-    app.read_with(cx, |s, _| {
-        let te = s.text_edit.as_ref().unwrap();
-        assert_eq!(te.buf, "", "the '- ' marker is stripped");
-        assert_eq!(te.levels, vec![1], "the line becomes a bullet");
-    });
-    app.update(cx, |s, _| s.apply_ime(None, "Item", false));
-    // Enter continues the bullet on a new line at the same level.
+    app.update(cx, |s, _| s.apply_ime(None, "- a", false));
     app.update(cx, |s, cx| s.text_key(&keydown("enter"), cx));
+    app.update(cx, |s, _| s.apply_ime(None, "- b", false));
+
+    // While editing, the box renders as its RAW SOURCE (plain Text), not Typst — so the caret
+    // tracks literal characters. The scene node for `e` is a Text whose lines equal the source.
     app.read_with(cx, |s, _| {
-        let te = s.text_edit.as_ref().unwrap();
-        assert_eq!(te.buf, "Item\n");
-        assert_eq!(te.levels, vec![1, 1], "new line inherits the bullet level");
+        let node = s.scene.nodes.iter().find(|n| n.source == Some(e)).unwrap();
+        match &node.prim {
+            Primitive::Text(tb) => {
+                let lines: Vec<String> = tb
+                    .paragraphs
+                    .iter()
+                    .map(|p| p.runs.iter().map(|r| r.text.as_str()).collect())
+                    .collect();
+                assert_eq!(lines, vec!["- a".to_string(), "- b".to_string()]);
+            }
+            other => panic!("editing should show raw source as Text, got {other:?}"),
+        }
+        assert_eq!(s.text_edit.as_ref().unwrap().buf, "- a\n- b");
     });
-    // Tab demotes the current (second) line to level 2.
-    app.update(cx, |s, cx| s.text_key(&keydown("tab"), cx));
+
+    // Commit by clicking elsewhere (empty canvas corner).
+    let (cx_, cy_) = app.read_with(cx, |s, _| (s.scene.size.w * 0.97, s.scene.size.h * 0.97));
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, cx_, cy_), cx)
+    });
+    app.read_with(cx, |s, _| {
+        assert!(s.text_edit.is_none(), "click commits the edit");
+        assert_eq!(
+            s.pres.world.texts.get(&e).unwrap().typst_source.as_deref(),
+            Some("- a\n- b"),
+            "the Typst source is stored"
+        );
+        // Not editing now → the box typesets via Typst (a Typst primitive, not plain Text).
+        let node = s.scene.nodes.iter().find(|n| n.source == Some(e)).unwrap();
+        assert!(
+            matches!(node.prim, Primitive::Typst { .. }),
+            "preview typesets the box"
+        );
+    });
+
+    // Undo restores the pre-edit box (the default "Text").
+    app.update(cx, |s, cx| s.on_key_down(&keydown("ctrl-z"), cx));
     assert_eq!(
-        app.read_with(cx, |s, _| s.text_edit.as_ref().unwrap().levels[1]),
-        2
-    );
-    // Enter on the empty bullet exits the list (level back to 0, no new line).
-    app.update(cx, |s, cx| s.text_key(&keydown("enter"), cx));
-    let levels = app.read_with(cx, |s, _| s.text_edit.as_ref().unwrap().levels.clone());
-    assert_eq!(levels, vec![1, 0], "empty-bullet Enter exits the list");
-    // The live text body carries one paragraph per line with its bullet level.
-    let para_levels = app.read_with(cx, |s, _| {
-        s.pres
+        app.read_with(cx, |s, _| s
+            .pres
             .world
             .texts
             .get(&e)
             .unwrap()
-            .paragraphs
-            .iter()
-            .map(|p| p.bullet_level)
-            .collect::<Vec<_>>()
-    });
-    assert_eq!(para_levels, vec![1, 0]);
+            .typst_source
+            .clone()),
+        Some("Text".to_string()),
+        "undo reverts to the original source"
+    );
 }
 
 #[gpui::test]
-fn shift_tab_outdents(cx: &mut TestAppContext) {
+fn font_size_change_keeps_typst_source(cx: &mut TestAppContext) {
+    use hayate_render::scene::Primitive;
     let app = cx.new(|cx| HayateApp::new(cx));
     app.update(cx, |s, _| s.add_text_box());
     let e = app.read_with(cx, |s, _| s.selection.unwrap());
-    app.update(cx, |s, _| s.begin_text_edit(e));
-    app.update(cx, |s, cx| s.text_key(&keydown("tab"), cx));
-    app.update(cx, |s, cx| s.text_key(&keydown("tab"), cx));
-    assert_eq!(
-        app.read_with(cx, |s, _| s.text_edit.as_ref().unwrap().levels[0]),
-        2
-    );
-    app.update(cx, |s, cx| s.text_key(&keydown("shift-tab"), cx));
-    assert_eq!(
-        app.read_with(cx, |s, _| s.text_edit.as_ref().unwrap().levels[0]),
-        1
-    );
+    // add_text_box drops straight into edit mode (raw source shown); leave it so the box previews
+    // via Typst, then measure the typeset default size.
+    app.update(cx, |s, cx| s.on_key_down(&keydown("escape"), cx));
+
+    let pt_before = |s: &HayateApp| match s
+        .scene
+        .nodes
+        .iter()
+        .find(|n| n.source == Some(e))
+        .map(|n| &n.prim)
+    {
+        Some(Primitive::Typst { default_pt, .. }) => *default_pt,
+        _ => 0.0,
+    };
+    let before = app.read_with(cx, |s, _| pt_before(s));
+    app.update(cx, |s, _| {
+        s.selection = Some(e);
+        s.change_font_size(8);
+    });
+    app.read_with(cx, |s, _| {
+        // Source is preserved and the typeset default size grew.
+        assert!(
+            s.pres.world.texts.get(&e).unwrap().typst_source.is_some(),
+            "font-size change keeps the box Typst"
+        );
+        assert!(
+            pt_before(s) > before,
+            "the Typst default point size increased ({} > {})",
+            pt_before(s),
+            before
+        );
+    });
 }
 
 #[gpui::test]

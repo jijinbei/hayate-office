@@ -41,6 +41,7 @@ fn deck() -> (Presentation, Entity) {
                 underline: false,
             }])],
             autofit: false,
+            typst_source: None,
         },
     );
 
@@ -372,6 +373,7 @@ fn empty_placeholder_renders_prompt_text() {
                 underline: false,
             }])],
             autofit: false,
+            typst_source: None,
         },
     );
     let scene2 = build_slide_scene(&p, slide, PxSize { w: 960.0, h: 540.0 });
@@ -407,6 +409,7 @@ fn bullet_level_flows_into_resolved_paragraph() {
             underline: false,
         }])],
         autofit: false,
+        typst_source: None,
     };
     body.paragraphs[0].bullet_level = 2;
     p.world.texts.insert(tx, body);

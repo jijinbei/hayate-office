@@ -106,6 +106,8 @@ fn emit_node(out: &mut String, node: &SceneNode) {
             start_arrow: _,
             end_arrow: _,
         } => emit_line(out, node, *from, *to, stroke),
+        // SVG export of Typst boxes is not implemented; omit (on-screen/raster previews show it).
+        Primitive::Typst { .. } => {}
     }
 }
 

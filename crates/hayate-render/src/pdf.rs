@@ -326,6 +326,9 @@ fn build_page(
                     ops.push(Op::Glyphs(glyphs));
                 }
             }
+            // Phase 2 will re-layout the Typst source into real PDF text + vectors; until then a
+            // Typst box is omitted from the PDF (on-screen/raster previews show it).
+            Primitive::Typst { .. } => {}
         }
     }
     Page {
@@ -983,6 +986,7 @@ mod tests {
                     underline: false,
                 }])],
                 autofit: false,
+                typst_source: None,
             },
         );
         let pdf = export_pdf(&p, &PdfOptions::default());
@@ -1035,6 +1039,7 @@ mod tests {
                         underline: false,
                     }])],
                     autofit: false,
+                    typst_source: None,
                 },
             );
             p

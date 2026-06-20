@@ -20,6 +20,12 @@ pub struct TextBody {
     pub paragraphs: Vec<Paragraph>,
     /// Shrink text to fit the box; the scale factor is computed in the app layer.
     pub autofit: bool,
+    /// Canonical Typst markup for the box, when present. `paragraphs` then holds a plain-text
+    /// fallback (one paragraph per source line) used while editing, for thumbnails, and when the
+    /// Typst compile fails. `None` = a legacy plain-text box (rendered from `paragraphs`); it
+    /// becomes Typst the moment it is edited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub typst_source: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

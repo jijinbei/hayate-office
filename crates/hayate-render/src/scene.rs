@@ -134,6 +134,20 @@ pub enum Primitive {
         start_arrow: bool,
         end_arrow: bool,
     },
+    /// A Typst-typeset text box. `rgba`/`px_w`/`px_h` are a premultiplied-RGBA raster of the
+    /// typeset content (used by the on-screen painter and the software rasterizer). `source` +
+    /// `default_pt`/`color`/`align` let the PDF exporter re-layout the same markup into real
+    /// selectable text + vectors instead of embedding the raster.
+    Typst {
+        bounds: PxRect,
+        source: String,
+        default_pt: f32,
+        color: Rgba,
+        align: HAlign,
+        rgba: std::sync::Arc<Vec<u8>>,
+        px_w: u32,
+        px_h: u32,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -162,6 +176,7 @@ pub fn prim_bounds(prim: &Primitive) -> PxRect {
         Primitive::Ellipse { bounds, .. } => *bounds,
         Primitive::Text(block) => block.bounds,
         Primitive::Image { bounds, .. } => *bounds,
+        Primitive::Typst { bounds, .. } => *bounds,
         Primitive::Line { from, to, .. } => {
             let min_x = from.0.min(to.0);
             let min_y = from.1.min(to.1);

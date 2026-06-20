@@ -719,6 +719,7 @@ fn world_with_text_shape() -> (World, Entity) {
             default_run("World"),
         ])],
         autofit: false,
+        typst_source: None,
     };
     w.set(e, CompValue::Text(body));
     (w, e)

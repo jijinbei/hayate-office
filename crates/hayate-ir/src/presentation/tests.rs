@@ -26,6 +26,7 @@ fn simple_text(s: &str) -> TextBody {
     TextBody {
         paragraphs: vec![Paragraph::new(vec![run])],
         autofit: false,
+        typst_source: None,
     }
 }
 

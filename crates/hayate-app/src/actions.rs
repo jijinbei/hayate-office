@@ -12,7 +12,6 @@ use hayate_ir::text::{Paragraph, Run, TextBody};
 use hayate_ir::units::{inch_f, pt};
 use hayate_ir::world::{CompValue, Entity};
 use hayate_model::{edit, Operation, Transaction};
-use hayate_render::build_slide_scene;
 
 use crate::{view_px, EditScope, HayateApp};
 
@@ -245,6 +244,7 @@ impl HayateApp {
                     underline: false,
                 }])],
                 autofit: false,
+                typst_source: None,
             };
             let tx =
                 edit::create_placeholder(e, layout, order.clone(), spec.ph, spec.frame, Some(body));
@@ -393,6 +393,7 @@ impl HayateApp {
                 underline: false,
             }])],
             autofit: false,
+            typst_source: None,
         };
         let order = {
             let kids = self.pres.children(layout);
@@ -642,6 +643,8 @@ impl HayateApp {
                 underline: false,
             }])],
             autofit: false,
+            // New text boxes are Typst from the start (so editing shows source, preview typesets).
+            typst_source: Some("Text".to_string()),
         };
         let tx = Transaction::new(
             "add text",
@@ -697,18 +700,33 @@ impl HayateApp {
     pub(crate) fn rebuild(&mut self) {
         let target = view_px(&self.pres, self.zoom);
         let c = self.container();
+        // The text box being edited renders as raw Typst source (not typeset) so the caret tracks
+        // the literal characters; everything else previews via Typst.
+        let raw = self.text_edit.as_ref().map(|te| te.entity);
         self.scene = match self.scope {
-            EditScope::Slide(_) => build_slide_scene(&self.pres, c, target),
+            EditScope::Slide(_) => {
+                hayate_render::build_slide_scene_edit(&self.pres, c, target, raw)
+            }
             EditScope::Layout(_) => {
                 let theme = self.pres.container_theme(c).cloned().unwrap_or_default();
                 let bg = self.pres.container_background(c);
                 let context: Vec<Entity> = self.pres.owning_master(c).into_iter().collect();
-                hayate_render::build_container_scene(&self.pres, c, &theme, bg, &context, target)
+                hayate_render::build_container_scene_edit(
+                    &self.pres, c, &theme, bg, &context, target, raw,
+                )
             }
             EditScope::Master(_) => {
                 let theme = self.pres.container_theme(c).cloned().unwrap_or_default();
                 let bg = self.pres.container_background(c);
-                hayate_render::build_container_scene(&self.pres, c, &theme, bg, &[], target)
+                hayate_render::build_container_scene_edit(
+                    &self.pres,
+                    c,
+                    &theme,
+                    bg,
+                    &[],
+                    target,
+                    raw,
+                )
             }
         };
     }

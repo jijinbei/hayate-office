@@ -23,45 +23,42 @@ use hayate_model::{Operation, Transaction};
 
 impl HayateApp {
     pub(crate) fn begin_text_edit(&mut self, e: Entity) {
-        let (buf, levels) = self
+        let buf = self
             .pres
             .world
             .texts
             .get(&e)
-            .map(text_body_to_lines)
-            .unwrap_or_else(|| (String::new(), vec![0]));
+            .map(typst_source_of)
+            .unwrap_or_default();
         let caret = buf.len();
         self.text_edit = Some(TextEdit {
             entity: e,
             original: buf.clone(),
-            orig_levels: levels.clone(),
             buf,
-            levels,
             selected: caret..caret,
             marked: None,
         });
     }
 
-    /// Apply the current edit buffer (one paragraph per line, with bullet levels) live, without
-    /// recording history. Used for the in-canvas preview while editing.
+    /// Apply the current edit buffer as the box's Typst source live (no history), so the in-canvas
+    /// preview shows it. While editing, the scene builder renders this box as raw source (the box
+    /// is the `raw_text_entity`), so the caret tracks the literal characters.
     pub(crate) fn apply_edit_live(&mut self) {
         let Some(te) = self.text_edit.as_ref() else {
             return;
         };
-        let e = te.entity;
-        let lines = buf_to_lines(&te.buf, &te.levels);
-        let tx = edit::set_paragraphs(&self.pres.world, e, &lines);
+        let (e, src) = (te.entity, te.buf.clone());
+        let tx = edit::set_typst_source(&self.pres.world, e, src);
         for op in tx.ops {
             op.apply(&mut self.pres.world);
         }
         self.rebuild();
     }
 
-    /// Revert an entity's text to the given lines (used to undo the live preview before a commit
-    /// or on Esc), without recording history.
-    pub(crate) fn revert_text_live(&mut self, e: Entity, buf: &str, levels: &[u8]) {
-        let lines = buf_to_lines(buf, levels);
-        let tx = edit::set_paragraphs(&self.pres.world, e, &lines);
+    /// Revert an entity's text to the given Typst source (used to undo the live preview before a
+    /// commit or on Esc), without recording history.
+    pub(crate) fn revert_text_live(&mut self, e: Entity, source: &str) {
+        let tx = edit::set_typst_source(&self.pres.world, e, source.to_string());
         for op in tx.ops {
             op.apply(&mut self.pres.world);
         }
@@ -87,77 +84,40 @@ impl HayateApp {
         match key {
             "escape" => {
                 if let Some(te) = self.text_edit.take() {
-                    let (e, buf, lv) = (te.entity, te.original, te.orig_levels);
-                    self.revert_text_live(e, &buf, &lv);
+                    let (e, src) = (te.entity, te.original);
+                    self.revert_text_live(e, &src);
                 }
             }
             "tab" => {
-                // Tab / Shift+Tab change the current line's bullet level (PowerPoint-style).
+                // Typst source editing: Tab inserts two spaces (lists use `-`/`+` typed literally).
                 if let Some(te) = self.text_edit.as_mut() {
-                    te.reconcile_levels();
-                    let li = te.caret_line();
-                    if let Some(l) = te.levels.get_mut(li) {
-                        *l = if mods.shift {
-                            l.saturating_sub(1)
-                        } else {
-                            (*l + 1).min(LIST_MAX_LEVEL)
-                        };
-                    }
+                    te.buf.replace_range(te.selected.clone(), "  ");
+                    let c = te.selected.start + 2;
+                    te.selected = c..c;
+                    te.marked = None;
                     live = true;
                 }
             }
             "enter" => {
+                // Insert a newline (Typst paragraphs/lines are plain `\n` in the source).
                 if let Some(te) = self.text_edit.as_mut() {
-                    te.reconcile_levels();
-                    let li = te.caret_line();
-                    let line_text = te.buf.split('\n').nth(li).unwrap_or("");
-                    let on_empty_bullet =
-                        line_text.is_empty() && te.levels.get(li).copied().unwrap_or(0) > 0;
-                    if on_empty_bullet {
-                        // Enter on an empty bullet exits the list (Markdown/Notion behaviour).
-                        if let Some(l) = te.levels.get_mut(li) {
-                            *l = 0;
-                        }
-                    } else {
-                        // Split the line; the new line inherits this line's bullet level.
-                        te.buf.replace_range(te.selected.clone(), "\n");
-                        let c = te.selected.start + 1;
-                        te.selected = c..c;
-                        let level = te.levels.get(li).copied().unwrap_or(0);
-                        te.levels.insert((li + 1).min(te.levels.len()), level);
-                    }
+                    te.buf.replace_range(te.selected.clone(), "\n");
+                    let c = te.selected.start + 1;
+                    te.selected = c..c;
                     te.marked = None;
                     live = true;
                 }
             }
             "backspace" => {
                 if let Some(te) = self.text_edit.as_mut() {
-                    te.reconcile_levels();
-                    let li = te.caret_line();
-                    let at_line_start = te.selected.start == te.selected.end
-                        && te.buf[..te.selected.start].chars().last() != Some('\n')
-                        && (te.selected.start == 0
-                            || te.buf.as_bytes()[te.selected.start - 1] == b'\n');
-                    if te.selected.start == te.selected.end
-                        && at_line_start
-                        && te.levels.get(li).copied().unwrap_or(0) > 0
-                    {
-                        // Backspace at the start of a bulleted line outdents instead of merging.
-                        if let Some(l) = te.levels.get_mut(li) {
-                            *l = l.saturating_sub(1);
-                        }
-                    } else if te.selected.start != te.selected.end {
+                    if te.selected.start != te.selected.end {
                         te.buf.replace_range(te.selected.clone(), "");
                         let c = te.selected.start;
                         te.selected = c..c;
                     } else if te.selected.start > 0 {
                         let p = prev_char_boundary(&te.buf, te.selected.start);
-                        let merged_line = te.buf.as_bytes()[te.selected.start - 1] == b'\n';
                         te.buf.replace_range(p..te.selected.start, "");
                         te.selected = p..p;
-                        if merged_line && li < te.levels.len() {
-                            te.levels.remove(li); // this line merged into the previous one
-                        }
                     }
                     te.marked = None;
                     live = true;
@@ -171,12 +131,7 @@ impl HayateApp {
                         te.selected = c..c;
                     } else if te.selected.end < te.buf.len() {
                         let n = next_char_boundary(&te.buf, te.selected.end);
-                        let merged_line = te.buf.as_bytes()[te.selected.end] == b'\n';
-                        let next_li = te.caret_line() + 1;
                         te.buf.replace_range(te.selected.end..n, "");
-                        if merged_line && next_li < te.levels.len() {
-                            te.levels.remove(next_li);
-                        }
                         // Caret stays at the deletion point.
                     }
                     te.marked = None;
@@ -202,9 +157,6 @@ impl HayateApp {
             _ => {}
         }
         if live {
-            if let Some(te) = self.text_edit.as_mut() {
-                te.reconcile_levels();
-            }
             self.apply_edit_live();
         }
         cx.notify();
@@ -236,21 +188,7 @@ impl HayateApp {
                 None
             };
             te.selected = new_end..new_end;
-            te.reconcile_levels();
-            // Markdown-like auto-bullet: typing "- " (or "* ") at the start of a line turns it
-            // into a bullet and removes the marker. Only when not composing (no marked range).
-            if te.marked.is_none() {
-                let li = te.caret_line();
-                let line_start = te.selected.start - line_prefix_len(&te.buf, te.selected.start);
-                let line = te.buf.split('\n').nth(li).unwrap_or("");
-                if (line == "- " || line == "* ") && te.levels.get(li).copied().unwrap_or(0) == 0 {
-                    te.buf.replace_range(line_start..line_start + 2, "");
-                    te.selected = line_start..line_start;
-                    if let Some(l) = te.levels.get_mut(li) {
-                        *l = 1;
-                    }
-                }
-            }
+            // No markdown auto-bullet: `-`/`+` stay literal in the Typst source.
         }
         self.apply_edit_live();
     }
@@ -979,39 +917,22 @@ impl EntityInputHandler for HayateApp {
     }
 }
 
-/// Maximum bullet indent level (0 = none).
-const LIST_MAX_LEVEL: u8 = 4;
-
-/// Reconstruct the edit buffer (lines joined by '\n') and per-line bullet levels from a text body.
-/// Legacy single-paragraph bodies with embedded newlines are split into one line per newline,
-/// each carrying that paragraph's bullet level.
-fn text_body_to_lines(tb: &hayate_ir::text::TextBody) -> (String, Vec<u8>) {
-    let mut lines: Vec<String> = Vec::new();
-    let mut levels: Vec<u8> = Vec::new();
-    for para in &tb.paragraphs {
-        let text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
-        for line in text.split('\n') {
-            lines.push(line.to_string());
-            levels.push(para.bullet_level);
-        }
+/// The Typst source to edit for a text box: its `typst_source` if present, else a plain-text
+/// migration of the paragraphs (one line per paragraph) for a legacy box being edited for the
+/// first time.
+pub(crate) fn typst_source_of(tb: &hayate_ir::text::TextBody) -> String {
+    if let Some(src) = &tb.typst_source {
+        return src.clone();
     }
-    if lines.is_empty() {
-        lines.push(String::new());
-        levels.push(0);
-    }
-    (lines.join("\n"), levels)
-}
-
-/// Split the edit buffer into `(line, bullet_level)` pairs (one paragraph per line).
-pub(crate) fn buf_to_lines(buf: &str, levels: &[u8]) -> Vec<(String, u8)> {
-    buf.split('\n')
-        .enumerate()
-        .map(|(i, line)| (line.to_string(), levels.get(i).copied().unwrap_or(0)))
-        .collect()
-}
-
-/// Number of bytes from the start of the line containing byte offset `pos` up to `pos`.
-fn line_prefix_len(buf: &str, pos: usize) -> usize {
-    let start = buf[..pos].rfind('\n').map(|i| i + 1).unwrap_or(0);
-    pos - start
+    let lines: Vec<String> = tb
+        .paragraphs
+        .iter()
+        .map(|para| {
+            para.runs
+                .iter()
+                .map(|r| r.text.as_str())
+                .collect::<String>()
+        })
+        .collect();
+    lines.join("\n")
 }

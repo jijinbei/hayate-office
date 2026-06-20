@@ -81,6 +81,19 @@ impl HayateApp {
                 if has_text {
                     menu = menu
                         .child(menu_divider())
+                        .child(menu_item("m_size_up", "Text Size +", cx, |t, _w, cx| {
+                            t.change_font_size(4);
+                            cx.notify();
+                        }))
+                        .child(menu_item(
+                            "m_size_down",
+                            "Text Size −",
+                            cx,
+                            |t, _w, cx| {
+                                t.change_font_size(-4);
+                                cx.notify();
+                            },
+                        ))
                         .child(menu_item("m_bold", "Bold", cx, |t, _w, cx| {
                             t.run_on_selection("shape.toggle_bold");
                             cx.notify();

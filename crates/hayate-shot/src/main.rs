@@ -430,6 +430,7 @@ fn pdf_demo() -> Presentation {
                 true,
             )])],
             autofit: false,
+            typst_source: None,
         },
     );
 
@@ -452,6 +453,7 @@ fn pdf_demo() -> Presentation {
                 bullet("Back to level 1", 1),
             ],
             autofit: false,
+            typst_source: None,
         },
     );
 
@@ -547,6 +549,7 @@ fn deck() -> (Presentation, Entity, History) {
                 underline: false,
             }])],
             autofit: false,
+            typst_source: None,
         },
     );
 

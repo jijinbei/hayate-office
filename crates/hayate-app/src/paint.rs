@@ -3,7 +3,7 @@
 
 use gpui::{
     point, px, quad, rgb, size, App, Background, Bounds, Corners, Image, ImageFormat, PathBuilder,
-    Pixels, Point, SharedString, TextRun, Window,
+    Pixels, Point, RenderImage, SharedString, TextRun, Window,
 };
 
 use hayate_ir::color::Rgba;
@@ -428,7 +428,62 @@ pub(crate) fn paint_scene(
                 }
             }
             Primitive::Text(tb) => paint_text(tb, o.x, o.y, indent_em, window, cx),
+            Primitive::Typst {
+                bounds: r,
+                rgba,
+                px_w,
+                px_h,
+                ..
+            } => {
+                if *px_w > 0 && *px_h > 0 {
+                    let b = Bounds {
+                        origin: point(o.x + px(r.x), o.y + px(r.y)),
+                        size: size(px(r.w), px(r.h)),
+                    };
+                    let render = typst_render_image(rgba, *px_w, *px_h);
+                    let _ = window.paint_image(b, Corners::default(), render, 0, false);
+                }
+            }
             _ => {}
         }
     }
+}
+
+thread_local! {
+    /// Cache of gpui `RenderImage`s built from Typst rasters, keyed by the raster `Arc`'s pointer.
+    /// build.rs reuses the same `Arc<Vec<u8>>` across rebuilds (its own memoization), so the same
+    /// box maps to one `RenderImage` instead of re-uploading to the sprite atlas every frame.
+    static TYPST_IMAGES: std::cell::RefCell<
+        std::collections::HashMap<usize, std::sync::Arc<RenderImage>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Build (or fetch from cache) a gpui `RenderImage` for a Typst raster. typst gives premultiplied
+/// RGBA; gpui wants premultiplied BGRA, so swap R and B per pixel.
+fn typst_render_image(
+    rgba: &std::sync::Arc<Vec<u8>>,
+    px_w: u32,
+    px_h: u32,
+) -> std::sync::Arc<RenderImage> {
+    let key = std::sync::Arc::as_ptr(rgba) as usize;
+    TYPST_IMAGES.with(|cache| {
+        if let Some(hit) = cache.borrow().get(&key) {
+            return std::sync::Arc::clone(hit);
+        }
+        let mut bgra = (**rgba).clone();
+        for px in bgra.chunks_exact_mut(4) {
+            px.swap(0, 2);
+        }
+        let frame = image::Frame::new(
+            image::RgbaImage::from_raw(px_w, px_h, bgra)
+                .unwrap_or_else(|| image::RgbaImage::new(1, 1)),
+        );
+        let render = std::sync::Arc::new(RenderImage::new(vec![frame]));
+        let mut c = cache.borrow_mut();
+        if c.len() >= 512 {
+            c.clear();
+        }
+        c.insert(key, std::sync::Arc::clone(&render));
+        render
+    })
 }

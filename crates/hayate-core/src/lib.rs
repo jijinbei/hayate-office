@@ -687,6 +687,7 @@ pub fn builtins() -> CommandRegistry {
                     None => TextBody {
                         paragraphs: vec![Paragraph::new(vec![default_run(text)])],
                         autofit: false,
+                        typst_source: None,
                     },
                 };
                 vec![Operation::SetComponent {
@@ -1068,6 +1069,7 @@ pub fn builtins() -> CommandRegistry {
                 let body = TextBody {
                     paragraphs: vec![Paragraph::new(vec![default_run(text)])],
                     autofit: false,
+                    typst_source: None,
                 };
                 vec![
                     Operation::Spawn { entity: e },

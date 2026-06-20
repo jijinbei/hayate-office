@@ -52,6 +52,7 @@ fn prompt_body(ph: hayate_ir::doc::PlaceholderType) -> TextBody {
             underline: false,
         }])],
         autofit: false,
+        typst_source: None,
     }
 }
 
@@ -102,6 +103,18 @@ fn geometry_prim(
 
 /// Build the scene for `slide` rendered to fit `target` pixels.
 pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Scene {
+    build_slide_scene_edit(p, slide, target, None)
+}
+
+/// Like [`build_slide_scene`], but `raw_text_entity` (the text box currently being edited, if any)
+/// is rendered as its raw plain-text source instead of Typst-typeset, so the in-canvas editor and
+/// caret operate on the literal source.
+pub fn build_slide_scene_edit(
+    p: &Presentation,
+    slide: Entity,
+    target: PxSize,
+    raw_text_entity: Option<Entity>,
+) -> Scene {
     let vp = Viewport::fit(p.slide_size, target);
     let default;
     let theme = match p.theme_of(slide) {
@@ -123,10 +136,30 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
     // behind everything and are display-only on the slide, so editing the master or layout
     // updates every slide that uses it.
     if let Some(master) = p.owning_master(slide) {
-        push_raw_children(p, master, theme, &vp, true, false, 1.0, &mut nodes);
+        push_raw_children(
+            p,
+            master,
+            theme,
+            &vp,
+            true,
+            false,
+            1.0,
+            raw_text_entity,
+            &mut nodes,
+        );
     }
     if let Some(layout) = p.layout_of(slide) {
-        push_raw_children(p, layout, theme, &vp, true, false, 1.0, &mut nodes);
+        push_raw_children(
+            p,
+            layout,
+            theme,
+            &vp,
+            true,
+            false,
+            1.0,
+            raw_text_entity,
+            &mut nodes,
+        );
     }
 
     // Inherited placeholders are drawn first (behind the slide's own content). Each
@@ -139,8 +172,15 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
         };
         let bounds = vp.rect(frame);
         let fill = p.ph_fill(slide, ph).map(|f| fill_to_paint(&f, theme));
+        let source = p.find_placeholder(slide, ph);
         let prim = if let Some(tb) = p.ph_text(slide, ph) {
-            Primitive::Text(resolve_text(tb, theme, &vp, bounds))
+            typst_or_text(
+                tb,
+                theme,
+                &vp,
+                bounds,
+                source == raw_text_entity && source.is_some(),
+            )
         } else if let Some(geom) = p.ph_geometry(slide, ph) {
             geometry_prim(&geom, bounds, fill, None, &vp)
         } else {
@@ -148,7 +188,6 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
             let body = prompt_body(ph.ph_type);
             Primitive::Text(resolve_text(&body, theme, &vp, bounds))
         };
-        let source = p.find_placeholder(slide, ph);
         let rotation_deg = source
             .and_then(|e| p.world.rotations.get(&e).copied())
             .unwrap_or(0.0);
@@ -161,7 +200,17 @@ pub fn build_slide_scene(p: &Presentation, slide: Entity, target: PxSize) -> Sce
     }
 
     // The slide's own non-placeholder shapes (placeholders were handled above).
-    push_raw_children(p, slide, theme, &vp, true, true, 1.0, &mut nodes);
+    push_raw_children(
+        p,
+        slide,
+        theme,
+        &vp,
+        true,
+        true,
+        1.0,
+        raw_text_entity,
+        &mut nodes,
+    );
 
     Scene {
         size: vp.size(p.slide_size),
@@ -184,6 +233,7 @@ fn push_raw_children(
     skip_placeholders: bool,
     selectable: bool,
     opacity_mul: f32,
+    raw_text_entity: Option<Entity>,
     nodes: &mut Vec<SceneNode>,
 ) {
     for e in p.children(container) {
@@ -203,7 +253,7 @@ fn push_raw_children(
             width: vp.len(s.width),
         });
         let prim = if let Some(tb) = p.world.texts.get(&e) {
-            Primitive::Text(resolve_text(tb, theme, vp, bounds))
+            typst_or_text(tb, theme, vp, bounds, raw_text_entity == Some(e))
         } else if let Some(pic) = p.world.pictures.get(&e) {
             Primitive::Image {
                 bounds,
@@ -236,15 +286,50 @@ pub fn build_container_scene(
     context: &[Entity],
     target: PxSize,
 ) -> Scene {
+    build_container_scene_edit(p, container, theme, background, context, target, None)
+}
+
+/// Like [`build_container_scene`], but `raw_text_entity` (a text box being edited in this
+/// layout/master) renders as raw plain-text source instead of Typst-typeset.
+#[allow(clippy::too_many_arguments)]
+pub fn build_container_scene_edit(
+    p: &Presentation,
+    container: Entity,
+    theme: &Theme,
+    background: Option<Fill>,
+    context: &[Entity],
+    target: PxSize,
+    raw_text_entity: Option<Entity>,
+) -> Scene {
     let vp = Viewport::fit(p.slide_size, target);
     let background = background
         .map(|f| paint_to_rgba(&f, theme))
         .unwrap_or(Rgba::WHITE);
     let mut nodes = Vec::new();
     for &anc in context {
-        push_raw_children(p, anc, theme, &vp, false, false, 0.5, &mut nodes);
+        push_raw_children(
+            p,
+            anc,
+            theme,
+            &vp,
+            false,
+            false,
+            0.5,
+            raw_text_entity,
+            &mut nodes,
+        );
     }
-    push_raw_children(p, container, theme, &vp, false, true, 1.0, &mut nodes);
+    push_raw_children(
+        p,
+        container,
+        theme,
+        &vp,
+        false,
+        true,
+        1.0,
+        raw_text_entity,
+        &mut nodes,
+    );
     Scene {
         size: vp.size(p.slide_size),
         background,
@@ -356,6 +441,50 @@ fn fill_to_paint(fill: &Fill, theme: &Theme) -> Paint {
             angle_deg: *angle_deg,
         },
     }
+}
+
+/// Build the primitive for a text box. When the box carries Typst markup and is NOT the one being
+/// edited, typeset it with Typst and emit a `Primitive::Typst` (raster for preview; the PDF
+/// exporter re-lays-out the source). Otherwise — a plain/legacy box, or the box currently being
+/// edited (which must show its raw source) — emit `Primitive::Text` from the paragraphs.
+fn typst_or_text(
+    tb: &TextBody,
+    theme: &Theme,
+    vp: &Viewport,
+    bounds: PxRect,
+    editing: bool,
+) -> Primitive {
+    if let (Some(src), false) = (&tb.typst_source, editing) {
+        let first = tb.paragraphs.first().and_then(|p| p.runs.first());
+        let default_pt = first
+            .map(|r| r.size as f32 / hayate_ir::units::EMU_PER_PT as f32)
+            .unwrap_or(18.0);
+        let color = first
+            .map(|r| theme.resolve_color(&r.color))
+            .unwrap_or(Rgba::rgb(0, 0, 0));
+        let align = tb
+            .paragraphs
+            .first()
+            .map(|p| p.align)
+            .unwrap_or(hayate_ir::text::HAlign::Left);
+        let ppp = (vp.scale * hayate_ir::units::EMU_PER_PT as f64) as f32;
+        let res =
+            crate::typst_render::render_typst_raster(src, bounds.w, ppp, default_pt, color, align);
+        if let Ok(img) = res.as_ref() {
+            return Primitive::Typst {
+                bounds,
+                source: src.clone(),
+                default_pt,
+                color,
+                align,
+                rgba: std::sync::Arc::clone(&img.rgba),
+                px_w: img.px_w,
+                px_h: img.px_h,
+            };
+        }
+        // Compile error: fall through to plain-text rendering of the fallback paragraphs.
+    }
+    Primitive::Text(resolve_text(tb, theme, vp, bounds))
 }
 
 fn resolve_text(

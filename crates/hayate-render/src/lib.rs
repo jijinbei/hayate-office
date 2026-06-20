@@ -15,10 +15,13 @@ pub mod png;
 pub mod raster;
 pub mod scene;
 pub mod svg;
+pub mod typst_render;
 
 pub use build::build_container_scene;
+pub use build::build_container_scene_edit;
 pub use build::build_slide_scene;
 pub use build::build_slide_scene_at;
+pub use build::build_slide_scene_edit;
 pub use build::prompt_text;
 pub use grid::{grid_lines, GridLines};
 pub use guides::{alignment_guides, Guide, GuideKind};

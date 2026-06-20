@@ -880,6 +880,7 @@ fn commit_shape(
             TextBody {
                 paragraphs,
                 autofit: false,
+                typst_source: None,
             },
         );
     }

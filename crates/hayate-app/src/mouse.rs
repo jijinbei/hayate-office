@@ -29,11 +29,10 @@ impl HayateApp {
         // A click commits an in-progress text edit (Enter now inserts newlines instead). Revert
         // the live preview, then commit the final buffer as one undoable transaction.
         if let Some(te) = self.text_edit.take() {
-            // Revert the live preview to the original, then commit the final buffer (one
-            // paragraph per line, each with its bullet level) as one undoable transaction.
-            self.revert_text_live(te.entity, &te.original, &te.orig_levels);
-            let lines = crate::input::buf_to_lines(&te.buf, &te.levels);
-            let tx = edit::set_paragraphs(&self.pres.world, te.entity, &lines);
+            // Revert the live preview to the original, then commit the final Typst source as one
+            // undoable transaction (so undo restores the pre-edit box, not the live-preview state).
+            self.revert_text_live(te.entity, &te.original);
+            let tx = edit::set_typst_source(&self.pres.world, te.entity, te.buf.clone());
             self.commit_tx(tx);
         }
         let o = self.canvas_origin.get();

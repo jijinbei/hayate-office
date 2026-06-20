@@ -119,10 +119,73 @@ pub fn rasterize(scene: &Scene, out_w: u32, out_h: u32) -> Vec<u8> {
                     }
                 }
             }
+            Primitive::Typst {
+                bounds,
+                rgba,
+                px_w,
+                px_h,
+                ..
+            } => {
+                draw_typst_raster(&mut buf, w, h, bounds, rgba, *px_w, *px_h, sx, sy, op);
+            }
         }
     }
 
     buf
+}
+
+/// Composite a Typst box's premultiplied-RGBA raster into the output buffer, nearest-neighbor
+/// scaling it into the box's output-pixel rect. typst's pixels are premultiplied, so un-premultiply
+/// to straight alpha before `blend_over` (which expects straight alpha).
+#[allow(clippy::too_many_arguments)]
+fn draw_typst_raster(
+    buf: &mut [u8],
+    w: usize,
+    h: usize,
+    bounds: &PxRect,
+    src: &[u8],
+    px_w: u32,
+    px_h: u32,
+    sx: f32,
+    sy: f32,
+    op: f32,
+) {
+    if px_w == 0 || px_h == 0 {
+        return;
+    }
+    let dx0 = bounds.x * sx;
+    let dy0 = bounds.y * sy;
+    let dw = (bounds.w * sx).max(1.0);
+    let dh = (bounds.h * sy).max(1.0);
+    for py in 0..dh as i32 {
+        let dy = dy0 as i32 + py;
+        if dy < 0 || dy as usize >= h {
+            continue;
+        }
+        let sv = ((py as f32 / dh) * px_h as f32) as u32;
+        for px in 0..dw as i32 {
+            let dx = dx0 as i32 + px;
+            if dx < 0 || dx as usize >= w {
+                continue;
+            }
+            let su = ((px as f32 / dw) * px_w as f32) as u32;
+            let si = ((sv.min(px_h - 1) * px_w + su.min(px_w - 1)) * 4) as usize;
+            let (pr, pg, pb, pa) = (src[si], src[si + 1], src[si + 2], src[si + 3]);
+            if pa == 0 {
+                continue;
+            }
+            // Un-premultiply to straight alpha.
+            let a = pa as f32 / 255.0;
+            let straight = Rgba::rgba(
+                ((pr as f32 / a).round().clamp(0.0, 255.0)) as u8,
+                ((pg as f32 / a).round().clamp(0.0, 255.0)) as u8,
+                ((pb as f32 / a).round().clamp(0.0, 255.0)) as u8,
+                pa,
+            );
+            let di = ((dy as usize) * w + dx as usize) * 4;
+            blend_over(buf, di, apply_opacity(straight, op));
+        }
+    }
 }
 
 /// A resolved fill in output-pixel space: either a solid color or a two-stop linear gradient.
