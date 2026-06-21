@@ -352,6 +352,11 @@ impl HayateApp {
             }
             _ => {}
         }
+        // The caret lives on the last line; keep it in view as the buffer grows (e.g. after a
+        // long paste). Reading without typing still leaves wheel-scrolling free.
+        if let Some(p) = self.script_panel.as_ref() {
+            p.scroll.scroll_to_bottom();
+        }
         cx.notify();
     }
 
@@ -614,7 +619,10 @@ impl HayateApp {
             }
             // Ctrl/Cmd+Shift+R opens the script console (R = Run script).
             "r" if cmd && k.modifiers.shift => {
-                self.script_panel = Some(ScriptPanel { buf: String::new() });
+                self.script_panel = Some(ScriptPanel {
+                    buf: String::new(),
+                    scroll: gpui::ScrollHandle::new(),
+                });
                 cx.notify();
             }
             // Ctrl/Cmd+Shift+A opens the AI prompt (A = Ask AI).

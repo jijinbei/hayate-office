@@ -475,9 +475,11 @@ struct SaveModal {
 }
 
 /// Script console state: an editable Rhai source buffer. Run with Ctrl/Cmd+Enter; the result
-/// (op count / print log / error) is shown in the notice modal.
+/// (op count / print log / error) is shown in the notice modal. `scroll` lets the (possibly tall)
+/// source area scroll, and is nudged to the bottom as the caret-bearing last line grows.
 struct ScriptPanel {
     buf: String,
+    scroll: gpui::ScrollHandle,
 }
 
 /// AI prompt state: a natural-language request that the Anthropic API turns into a script

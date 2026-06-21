@@ -29,8 +29,8 @@ use serde_json::{json, Value};
 
 mod script;
 pub use script::{
-    examples as script_examples, run_script, script_api_metadata, RegisteredCommand, ScriptContext,
-    ScriptError, ScriptOutcome,
+    check_script, examples as script_examples, run_script, script_api_metadata, RegisteredCommand,
+    ScriptContext, ScriptError, ScriptOutcome,
 };
 
 mod ai;

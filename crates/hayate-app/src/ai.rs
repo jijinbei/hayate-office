@@ -119,7 +119,10 @@ impl HayateApp {
                 match check {
                     Ok(Ok(())) => {
                         let _ = this.update(cx, |a, cx| {
-                            a.script_panel = Some(ScriptPanel { buf: src });
+                            a.script_panel = Some(ScriptPanel {
+                                buf: src,
+                                scroll: gpui::ScrollHandle::new(),
+                            });
                             a.notice = Some(
                                 "AI が生成しました。確認して Ctrl+Enter で実行してください"
                                     .to_string(),

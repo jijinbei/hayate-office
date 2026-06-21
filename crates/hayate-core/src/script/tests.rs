@@ -229,6 +229,24 @@ fn intro_lt_builds_a_full_deck() {
 }
 
 #[test]
+fn check_script_flags_syntax_errors_only() {
+    use crate::check_script;
+    assert!(check_script("").is_none(), "empty source is not an error");
+    assert!(
+        check_script("let x = 1; shape_add_rect(x);").is_none(),
+        "well-formed source (even with unknown fns) parses clean"
+    );
+    assert!(
+        check_script("let x = ;").is_some(),
+        "a real syntax error is reported"
+    );
+    assert!(
+        check_script("for e in selection() { ").is_some(),
+        "an unclosed block is reported"
+    );
+}
+
+#[test]
 fn metadata_lists_callable_functions() {
     let json = script_api_metadata(Rc::new(builtins()));
     assert!(

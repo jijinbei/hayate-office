@@ -1448,6 +1448,7 @@ fn script_console_runs_and_commits(cx: &mut TestAppContext) {
     app.update(cx, |a, _| {
         a.script_panel = Some(super::ScriptPanel {
             buf: "let s = current_slide(); shape_add_rect(s, 10, 10, 100, 50);".to_string(),
+            scroll: gpui::ScrollHandle::new(),
         });
     });
     app.update(cx, |a, cx| a.on_key_down(&keydown("ctrl-enter"), cx));
@@ -1667,6 +1668,7 @@ fn script_panel_pastes_clipboard_text(cx: &mut TestAppContext) {
     app.update(cx, |a, _| {
         a.script_panel = Some(super::ScriptPanel {
             buf: "shape.".into(),
+            scroll: gpui::ScrollHandle::new(),
         })
     });
     cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("add_rect(1)".into())));
@@ -1693,7 +1695,10 @@ fn tools_tab_opens_panels(cx: &mut TestAppContext) {
     // the same state the keyboard shortcuts do, so drive that state directly.
     app.update(cx, |a, _| a.ribbon_tab = super::RibbonTab::Tools);
     app.update(cx, |a, _| {
-        a.script_panel = Some(super::ScriptPanel { buf: String::new() })
+        a.script_panel = Some(super::ScriptPanel {
+            buf: String::new(),
+            scroll: gpui::ScrollHandle::new(),
+        })
     });
     assert!(app.read_with(cx, |a, _| a.script_panel.is_some()));
     app.update(cx, |a, cx| a.on_key_down(&keydown("escape"), cx));

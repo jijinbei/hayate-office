@@ -1525,7 +1525,10 @@ impl HayateApp {
             .gap_2()
             .items_center()
             .child(tool_button("rb_script", "Script", cx, |t, _w, cx| {
-                t.script_panel = Some(crate::ScriptPanel { buf: String::new() });
+                t.script_panel = Some(crate::ScriptPanel {
+                    buf: String::new(),
+                    scroll: gpui::ScrollHandle::new(),
+                });
                 cx.notify();
             }))
             .child(tool_button("rb_ai", "\u{2728} Ask AI", cx, |t, _w, cx| {
@@ -2139,11 +2142,14 @@ impl HayateApp {
     /// individually (gpui does not break a single text child on `\n`); a caret marks the end.
     fn script_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let p = self.script_panel.as_ref()?;
+        // Scrollable, syntax-highlighted source area with a fixed height so a long script no
+        // longer pushes the dialog off-screen — the wheel scrolls it, and edits track the caret.
         let mut body = div()
+            .id("script_body")
             .flex()
             .flex_col()
             .w_full()
-            .min_h(px(220.))
+            .h(px(360.))
             .px_3()
             .py_2()
             .rounded_md()
@@ -2151,25 +2157,49 @@ impl HayateApp {
             .border_1()
             .border_color(rgb(0x3b82f6))
             .text_color(rgb(0xeaeaea))
-            .font_family("monospace");
+            .font_family("monospace")
+            .overflow_y_scroll()
+            .track_scroll(&p.scroll);
         let lines: Vec<&str> = p.buf.split('\n').collect();
         let last = lines.len().saturating_sub(1);
         for (i, line) in lines.iter().enumerate() {
-            // Caret on the final line; non-breaking space keeps empty lines from collapsing.
-            let text = if i == last {
-                format!("{line}|")
-            } else if line.is_empty() {
-                "\u{00a0}".to_string()
-            } else {
-                line.to_string()
-            };
-            body = body.child(div().child(text));
+            let mut row = div().flex().flex_row().child(
+                // Right-aligned gutter line number.
+                div()
+                    .w(px(34.))
+                    .pr_2()
+                    .flex_none()
+                    .text_color(rgb(0x5a5a5a))
+                    .child(format!("{:>3}", i + 1)),
+            );
+            // Highlighted segments; keep empty lines from collapsing with a non-breaking space.
+            let mut content = div().flex().flex_row().flex_wrap();
+            if line.is_empty() && i != last {
+                content = content.child(div().child("\u{00a0}"));
+            }
+            for (text, color) in highlight_rhai(line) {
+                content = content.child(div().text_color(rgb(color)).child(text));
+            }
+            // Caret on the final line.
+            if i == last {
+                content = content.child(div().text_color(rgb(0x3b82f6)).child("|"));
+            }
+            body = body.child(row.child(content));
         }
+        let footer = match hayate_core::check_script(&p.buf) {
+            Some(err) => div()
+                .text_xs()
+                .text_color(rgb(0xff6b6b))
+                .child(format!("⚠ {err}")),
+            None => div().text_xs().text_color(rgb(0x888888)).child(
+                "Ctrl/Cmd+Enter to run · Enter for newline · Ctrl/Cmd+V to paste · Esc to close",
+            ),
+        };
         let dialog = div()
             .flex()
             .flex_col()
             .gap_3()
-            .w(px(640.))
+            .w(px(720.))
             .p_4()
             .bg(rgb(0x2b2b2b))
             .border_1()
@@ -2184,10 +2214,7 @@ impl HayateApp {
                     .child("Script Console (Rhai)"),
             )
             .child(body)
-            .child(div().text_xs().text_color(rgb(0x888888)).child(
-                "Ctrl/Cmd+Enter to run · Enter for newline · Esc to close — \
-                     e.g. for e in selection() { shape_set_fill(e, \"#ff0000\"); }",
-            ));
+            .child(footer);
         let backdrop = div()
             .id("script_backdrop")
             .absolute()
@@ -2301,5 +2328,116 @@ impl HayateApp {
             }))
             .child(dialog);
         Some(backdrop.into_any_element())
+    }
+}
+
+/// Rhai keywords we tint blue in the script console.
+const RHAI_KEYWORDS: [&str; 16] = [
+    "let", "const", "fn", "for", "in", "if", "else", "while", "loop", "return", "break",
+    "continue", "switch", "true", "false", "throw",
+];
+
+/// Token colors for the editor (VS Code "Dark+"-ish).
+const HL_DEFAULT: u32 = 0xeaeaea;
+const HL_COMMENT: u32 = 0x6a9955;
+const HL_STRING: u32 = 0xce9178;
+const HL_NUMBER: u32 = 0xb5cea8;
+const HL_KEYWORD: u32 = 0x569cd6;
+
+/// Split a single source line into `(text, color)` segments for lightweight syntax highlighting.
+/// Per-line only (no multi-line string tracking) — cheap and good enough for the console. Consec-
+/// utive punctuation/whitespace is merged into one default-colored run to keep the element count
+/// low.
+fn highlight_rhai(line: &str) -> Vec<(String, u32)> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out: Vec<(String, u32)> = Vec::new();
+    let mut plain = String::new();
+    let flush = |plain: &mut String, out: &mut Vec<(String, u32)>| {
+        if !plain.is_empty() {
+            out.push((std::mem::take(plain), HL_DEFAULT));
+        }
+    };
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        // Line comment: the rest of the line.
+        if c == '/' && chars.get(i + 1) == Some(&'/') {
+            flush(&mut plain, &mut out);
+            out.push((chars[i..].iter().collect(), HL_COMMENT));
+            break;
+        }
+        // String literal up to the closing quote (or end of line).
+        if c == '"' {
+            flush(&mut plain, &mut out);
+            let start = i;
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == '\\' && i + 1 < chars.len() {
+                    i += 2;
+                    continue;
+                }
+                if chars[i] == '"' {
+                    i += 1;
+                    break;
+                }
+                i += 1;
+            }
+            out.push((chars[start..i].iter().collect(), HL_STRING));
+            continue;
+        }
+        // Identifier / keyword / number word.
+        if c.is_alphanumeric() || c == '_' {
+            flush(&mut plain, &mut out);
+            let start = i;
+            while i < chars.len()
+                && (chars[i].is_alphanumeric() || chars[i] == '_' || chars[i] == '.')
+            {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            let color = if word.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                HL_NUMBER
+            } else if RHAI_KEYWORDS.contains(&word.as_str()) {
+                HL_KEYWORD
+            } else {
+                HL_DEFAULT
+            };
+            out.push((word, color));
+            continue;
+        }
+        // Punctuation / whitespace: accumulate into the default run.
+        plain.push(c);
+        i += 1;
+    }
+    flush(&mut plain, &mut out);
+    out
+}
+
+#[cfg(test)]
+mod highlight_tests {
+    use super::{highlight_rhai, HL_COMMENT, HL_KEYWORD, HL_NUMBER, HL_STRING};
+
+    fn color_of<'a>(segs: &'a [(String, u32)], needle: &str) -> Option<u32> {
+        segs.iter().find(|(t, _)| t == needle).map(|(_, c)| *c)
+    }
+
+    #[test]
+    fn keywords_strings_numbers_and_comments_are_tinted() {
+        let segs = highlight_rhai(r#"let x = 42; // note"#);
+        assert_eq!(color_of(&segs, "let"), Some(HL_KEYWORD));
+        assert_eq!(color_of(&segs, "x"), Some(super::HL_DEFAULT));
+        assert_eq!(color_of(&segs, "42"), Some(HL_NUMBER));
+        assert_eq!(
+            segs.iter()
+                .find(|(t, _)| t.starts_with("//"))
+                .map(|(_, c)| *c),
+            Some(HL_COMMENT)
+        );
+
+        let segs = highlight_rhai(r##"shape_set_fill(e, "#ff0000");"##);
+        assert_eq!(color_of(&segs, "\"#ff0000\""), Some(HL_STRING));
+        // A `//` inside a string is part of the string, not a comment.
+        let segs = highlight_rhai(r#"let u = "http://x";"#);
+        assert_eq!(color_of(&segs, "\"http://x\""), Some(HL_STRING));
     }
 }

@@ -428,6 +428,17 @@ pub fn run_script(
     })
 }
 
+/// Compile-check `src` without running it. Returns a one-line syntax-error message (with the
+/// line/column Rhai reports) when the script fails to parse, or `None` when it parses cleanly.
+/// Cheap enough to call on every keystroke for live editor feedback; it does NOT verify that the
+/// functions a script calls actually exist — that is resolved at run time.
+pub fn check_script(src: &str) -> Option<String> {
+    if src.trim().is_empty() {
+        return None;
+    }
+    sandboxed_engine().compile(src).err().map(|e| e.to_string())
+}
+
 /// The Rhai-callable surface as JSON (function signatures), for editor autocomplete / AI
 /// context. Built from the same registry, so it matches what scripts can actually call.
 pub fn script_api_metadata(registry: Rc<CommandRegistry>) -> String {
