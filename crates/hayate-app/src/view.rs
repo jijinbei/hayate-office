@@ -1264,6 +1264,7 @@ impl HayateApp {
             .child(self.ribbon_tab_button("rb_home", "Home", Home, cx))
             .child(self.ribbon_tab_button("rb_insert", "Insert", Insert, cx))
             .child(self.ribbon_tab_button("rb_slideshow", "Slideshow", Slideshow, cx))
+            .child(self.ribbon_tab_button("rb_tools", "Tools", Tools, cx))
             .into_any_element()
     }
 
@@ -1274,6 +1275,7 @@ impl HayateApp {
             crate::RibbonTab::Home => self.ribbon_home(cx),
             crate::RibbonTab::Insert => self.ribbon_insert(cx),
             crate::RibbonTab::Slideshow => self.ribbon_slideshow(cx),
+            crate::RibbonTab::Tools => self.ribbon_tools(cx),
         };
         div()
             .flex()
@@ -1509,6 +1511,36 @@ impl HayateApp {
                 cx,
                 |t, _w, cx| {
                     t.start_present();
+                    cx.notify();
+                },
+            ))
+            .into_any_element()
+    }
+
+    /// Tools tab: the Rhai script console, AI authoring prompt, and command palette.
+    fn ribbon_tools(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .flex()
+            .flex_row()
+            .gap_2()
+            .items_center()
+            .child(tool_button("rb_script", "Script", cx, |t, _w, cx| {
+                t.script_panel = Some(crate::ScriptPanel { buf: String::new() });
+                cx.notify();
+            }))
+            .child(tool_button("rb_ai", "\u{2728} Ask AI", cx, |t, _w, cx| {
+                t.ai_panel = Some(crate::AiPanel { buf: String::new() });
+                cx.notify();
+            }))
+            .child(tool_button(
+                "rb_palette",
+                "Commands\u{2026}",
+                cx,
+                |t, _w, cx| {
+                    t.palette = Some(crate::PaletteState {
+                        query: String::new(),
+                        sel: 0,
+                    });
                     cx.notify();
                 },
             ))

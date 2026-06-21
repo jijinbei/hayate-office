@@ -1660,3 +1660,20 @@ fn ribbon_helpers_drive_actions(cx: &mut TestAppContext) {
         "redo restores it"
     );
 }
+
+#[gpui::test]
+fn tools_tab_opens_panels(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // The Tools tab's buttons open the script console, AI prompt, and command palette. They set
+    // the same state the keyboard shortcuts do, so drive that state directly.
+    app.update(cx, |a, _| a.ribbon_tab = super::RibbonTab::Tools);
+    app.update(cx, |a, _| {
+        a.script_panel = Some(super::ScriptPanel { buf: String::new() })
+    });
+    assert!(app.read_with(cx, |a, _| a.script_panel.is_some()));
+    app.update(cx, |a, cx| a.on_key_down(&keydown("escape"), cx));
+    app.update(cx, |a, _| {
+        a.ai_panel = Some(super::AiPanel { buf: String::new() })
+    });
+    assert!(app.read_with(cx, |a, _| a.ai_panel.is_some()));
+}

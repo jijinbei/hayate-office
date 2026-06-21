@@ -301,6 +301,7 @@ enum RibbonTab {
     Home,
     Insert,
     Slideshow,
+    Tools,
 }
 
 /// What the canvas is currently editing. Slides are the normal case; a layout or master is
