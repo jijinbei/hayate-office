@@ -68,3 +68,10 @@ Each command is exposed to Rhai scripts as the listed function (positional argum
 | `shape_add_rect(parent, x, y, w, h)` | `shape.add_rect` | Create a rectangle on a slide/group at (x, y) with size (w, h), in points. |
 | `shape_add_ellipse(parent, x, y, w, h)` | `shape.add_ellipse` | Create an ellipse on a slide/group at (x, y) with size (w, h), in points. |
 | `shape_add_text(parent, x, y, w, h, text)` | `shape.add_text` | Create a text box on a slide/group at (x, y) with size (w, h) in points and the given text. |
+
+## Slide
+
+| Script call | Command id | Description |
+| --- | --- | --- |
+| `slide_add(layout)` | `slide.add` | Create a new slide using the given layout; returns the new slide id. |
+| `slide_set_background(slide, color)` | `slide.set_background` | Set the slide's background to a solid color (#RRGGBB or a theme token). |

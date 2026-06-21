@@ -12,6 +12,7 @@
 //! a deliberate placeholder for that.
 
 use hayate_ir::color::{Color, Rgba, ThemeColorToken};
+use hayate_ir::doc::SlideInfo;
 use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::{PointEmu, RectEmu, SizeEmu};
@@ -1066,10 +1067,12 @@ pub fn builtins() -> CommandRegistry {
                 let e = world.next_id();
                 let order = append_order(world, parent);
                 let frame = rect_pt(args);
+                // The text is Typst markup (headings `=`, lists `-`, math `$…$`, `*bold*`), matching
+                // the editor's Typst-first text boxes; `paragraphs` is the plain-text fallback.
                 let body = TextBody {
-                    paragraphs: vec![Paragraph::new(vec![default_run(text)])],
+                    paragraphs: vec![Paragraph::new(vec![default_run(text.clone())])],
                     autofit: false,
-                    typst_source: None,
+                    typst_source: Some(text),
                 };
                 vec![
                     Operation::Spawn { entity: e },
@@ -1095,7 +1098,63 @@ pub fn builtins() -> CommandRegistry {
         },
     );
 
+    // slide.add — create a new slide using an existing layout, appended after the last slide.
+    // Returns the new slide's entity id (scripts use it as the `parent` for text/shapes).
+    reg.register(
+        CommandMeta::new("slide.add", "Add Slide", "Slide")
+            .describe("Create a new slide using the given layout; returns the new slide id."),
+        vec![ParamSpec::new("layout", ParamType::Entity)],
+        |world, args| match arg_entity(args, "layout") {
+            Some(layout) => {
+                let e = world.next_id();
+                let order = append_slide_order(world);
+                vec![
+                    Operation::Spawn { entity: e },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Slide(SlideInfo { layout }),
+                    },
+                    Operation::SetComponent {
+                        entity: e,
+                        value: CompValue::Order(order),
+                    },
+                ]
+            }
+            None => vec![],
+        },
+    );
+
+    // slide.set_background — set a slide's background to a solid color.
+    reg.register(
+        CommandMeta::new("slide.set_background", "Set Slide Background", "Slide")
+            .describe("Set the slide's background to a solid color (#RRGGBB or a theme token)."),
+        vec![
+            ParamSpec::new("slide", ParamType::Entity),
+            ParamSpec::new("color", ParamType::Color),
+        ],
+        |_world, args| match (arg_entity(args, "slide"), arg_color(args, "color")) {
+            (Some(slide), Some(color)) => vec![Operation::SetComponent {
+                entity: slide,
+                value: CompValue::Background(Fill::Solid(color)),
+            }],
+            _ => vec![],
+        },
+    );
+
     reg
+}
+
+/// A `FracIndex` that appends after the last existing slide (entities carrying a `Slide` component).
+fn append_slide_order(world: &World) -> FracIndex {
+    let last = world
+        .iter()
+        .filter(|e| world.slide_info.contains_key(e))
+        .filter_map(|e| match world.get(e, CompKind::Order) {
+            Some(CompValue::Order(o)) => Some(o),
+            _ => None,
+        })
+        .max();
+    FracIndex::after(last.as_ref())
 }
 
 /// Read x/y/w/h (points) out of a create command's args into an EMU rect.

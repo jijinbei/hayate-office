@@ -192,6 +192,43 @@ fn bundled_examples_run_without_error() {
 }
 
 #[test]
+fn intro_lt_builds_a_full_deck() {
+    let reg = Rc::new(builtins());
+    // Empty deck with just a master + layout (as a freshly created presentation has).
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let _layout = p.add_layout(master, "Title and Content");
+    let ctx = ScriptContext {
+        current_slide: None,
+        selection: vec![],
+    };
+    let before = p.slides().len();
+
+    let src = crate::script_examples()
+        .iter()
+        .find(|(n, _)| *n == "intro-lt")
+        .expect("intro-lt example is registered")
+        .1;
+    let out = run_script(Rc::clone(&reg), &p, &ctx, src).expect("intro-lt runs");
+    apply(&mut p, out.ops);
+
+    // The LT adds 10 slides on top of whatever the deck started with.
+    assert_eq!(p.slides().len(), before + 10, "intro-lt creates 10 slides");
+
+    // Every created slide carries a solid background and at least one Typst text box.
+    for slide in p.slides() {
+        assert!(
+            matches!(p.world.get(slide, CompKind::Background), Some(_)),
+            "each LT slide has a background"
+        );
+        let has_typst = p.children(slide).into_iter().any(|c| {
+            matches!(p.world.get(c, CompKind::Text), Some(CompValue::Text(b)) if b.typst_source.is_some())
+        });
+        assert!(has_typst, "each LT slide has a Typst text box");
+    }
+}
+
+#[test]
 fn metadata_lists_callable_functions() {
     let json = script_api_metadata(Rc::new(builtins()));
     assert!(

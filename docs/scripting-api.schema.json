@@ -837,5 +837,46 @@
       "type": "object"
     },
     "name": "shape.add_text"
+  },
+  {
+    "description": "Create a new slide using the given layout; returns the new slide id.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "layout": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "layout"
+      ],
+      "type": "object"
+    },
+    "name": "slide.add"
+  },
+  {
+    "description": "Set the slide's background to a solid color (#RRGGBB or a theme token).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "color": {
+          "description": "#RRGGBB hex or a theme token (e.g. accent1)",
+          "type": "string"
+        },
+        "slide": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "slide",
+        "color"
+      ],
+      "type": "object"
+    },
+    "name": "slide.set_background"
   }
 ]

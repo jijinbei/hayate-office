@@ -254,6 +254,19 @@ fn register_all(
         });
     }
     {
+        // Layout entity ids (pass one to `slide_add`). The deck's master/layout already exist.
+        let st = Rc::clone(state);
+        engine.register_fn("layouts", move || -> Array {
+            st.borrow()
+                .pres
+                .world
+                .layout_info
+                .keys()
+                .map(|e| Dynamic::from(e.0 as i64))
+                .collect()
+        });
+    }
+    {
         let current = ctx.current_slide;
         engine.register_fn("current_slide", move || -> Dynamic {
             match current {
@@ -448,6 +461,10 @@ pub fn examples() -> &'static [(&'static str, &'static str)] {
         (
             "nudge-all",
             include_str!("../../../docs/script-examples/nudge-all.rhai"),
+        ),
+        (
+            "intro-lt",
+            include_str!("../../../docs/script-examples/intro-lt.rhai"),
         ),
     ]
 }
