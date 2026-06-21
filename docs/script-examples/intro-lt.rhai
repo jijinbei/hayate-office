@@ -2,28 +2,40 @@
 // 新規/空デッキで Tools → Script から実行（Ctrl+Enter）。スライドはデッキ末尾に追記され、
 // まとめて 1 回の undo で取り消せます。
 //
+// ポイント: 共通の体裁（背景・上部アクセント帯・フッターのブランド名）は *スライドマスター*
+// に一度だけ置きます。マスターの装飾は全スライドへ継承されるので、各スライドはタイトルと
+// 本文を入れるだけ。マスターを 1 行直せば全スライドに反映されます。
+//
 // 使う関数（すべて生成 API。docs/scripting-api.md 参照）:
-//   layouts()                         -> レイアウト id の配列
+//   masters() / layouts()             -> マスター / レイアウト id の配列
 //   slide_add(layout)                 -> 新規スライド id
-//   slide_set_background(slide, "#..")
-//   shape_add_text(slide, x,y,w,h, "Typstソース") -> テキストboxの id（Typstで描画）
-//   shape_add_rect(slide, x,y,w,h)    -> 矩形 id
+//   slide_set_background(entity,"#..")-> 背景（マスター/レイアウト/スライドに設定可、下位へ継承）
+//   shape_add_text(c, x,y,w,h, "Typstソース") -> テキストboxの id（Typstで描画）
+//   shape_add_rect(c, x,y,w,h)        -> 矩形 id（マスターに置くと全スライドの装飾になる）
 //   shape_set_font_size(id, pt) / shape_fill_accent1(id)
 
+let m = masters()[0];
 let lay = layouts()[0];
 
-// タイトル＋本文の1枚を作るヘルパ。本文は Typst マークアップ（- リスト, $数式$, *太字* 等）。
+// --- スライドマスターを一度だけブランディング（全スライドが継承）---
+slide_set_background(m, "#ffffff");
+// 上部アクセント帯
+let bar = shape_add_rect(m, 0, 0, 960, 12);
+shape_fill_accent1(bar);
+// 下部アクセント帯 + フッターのブランド名（全スライドの隅に出る）
+let foot = shape_add_rect(m, 0, 524, 960, 4);
+shape_fill_accent1(foot);
+let brand = shape_add_text(m, 40, 500, 400, 28, "HayateOffice");
+shape_set_font_size(brand, 14);
+
+// タイトル＋本文の1枚を作るヘルパ。装飾はマスター任せ、ここは中身だけ。
 fn titled(lay, title, body) {
     let s = slide_add(lay);
-    slide_set_background(s, "#ffffff");
-    // 上部アクセント帯
-    let bar = shape_add_rect(s, 0, 0, 960, 12);
-    shape_fill_accent1(bar);
     // 見出し（Typst の `=` 見出し）
-    let t = shape_add_text(s, 48, 40, 864, 96, "= " + title);
+    let t = shape_add_text(s, 48, 48, 864, 96, "= " + title);
     shape_set_font_size(t, 40);
     // 本文
-    let b = shape_add_text(s, 56, 168, 848, 332, body);
+    let b = shape_add_text(s, 56, 176, 848, 320, body);
     shape_set_font_size(b, 26);
     s
 }
@@ -48,9 +60,9 @@ titled(lay, "テキストは Typst",
 titled(lay, "PDF は「本物のテキスト」",
     "- 画像だらけにしない方針\n- 文字は *選択・検索* 可能（埋め込み CID フォント）\n- 数式も glyph + ベクター線で出力\n- $ integral_0^1 x^2 dif x = 1/3 $ も選べる");
 
-// 6. スライドマスター
+// 6. スライドマスター（このLTの体裁もマスターで作っています）
 titled(lay, "スライドマスター",
-    "- マスター → レイアウト → スライドの階層\n- プレースホルダを継承\n- マスター変更が全スライドへ波及");
+    "- マスター → レイアウト → スライドの階層\n- 背景・帯・フッターはマスターに一度だけ\n- 全スライドが自動で継承\n- _この帯とフッターもマスター由来_");
 
 // 7. リボン UI
 titled(lay, "リボン UI",
@@ -66,6 +78,6 @@ titled(lay, "AI オーサリング",
 
 // 10. まとめ
 titled(lay, "まとめ / Thank you",
-    "- 軽量・高速（Rust + gpui）\n- Typst テキスト & 選択可能 PDF\n- マスター / レイアウト\n- *スクリプト & AI で拡張自在*\n\nありがとうございました！");
+    "- 軽量・高速（Rust + gpui）\n- Typst テキスト & 選択可能 PDF\n- マスター / レイアウトで一貫した体裁\n- *スクリプト & AI で拡張自在*\n\nありがとうございました！");
 
-print("Generated 10 slides for the HayateOffice intro LT.");
+print("Generated 10 slides; brand chrome lives on the slide master.");

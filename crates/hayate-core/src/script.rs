@@ -267,6 +267,20 @@ fn register_all(
         });
     }
     {
+        // Master entity ids. Decorations added to a master (or layout) are inherited by every
+        // slide that uses it — set the background or a brand bar once instead of per slide.
+        let st = Rc::clone(state);
+        engine.register_fn("masters", move || -> Array {
+            st.borrow()
+                .pres
+                .world
+                .master_info
+                .keys()
+                .map(|e| Dynamic::from(e.0 as i64))
+                .collect()
+        });
+    }
+    {
         let current = ctx.current_slide;
         engine.register_fn("current_slide", move || -> Dynamic {
             match current {

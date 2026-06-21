@@ -2089,6 +2089,12 @@ impl HayateApp {
     /// OK button, clicking the backdrop, or Esc/Enter (handled in on_key_down).
     fn notice_overlay(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
         let msg = self.notice.clone()?;
+        // gpui panics on a text child containing '\n', so render each line as its own row.
+        let mut text = div().flex().flex_col().gap_1().text_sm();
+        for line in msg.split('\n') {
+            let line = if line.is_empty() { "\u{00a0}" } else { line };
+            text = text.child(div().child(line.to_string()));
+        }
         let dialog = div()
             .flex()
             .flex_col()
@@ -2101,7 +2107,7 @@ impl HayateApp {
             .rounded_lg()
             .shadow_lg()
             .text_color(rgb(0xffffff))
-            .child(div().text_sm().child(msg))
+            .child(text)
             .child(
                 div()
                     .id("notice_ok")
@@ -2163,7 +2169,7 @@ impl HayateApp {
         let lines: Vec<&str> = p.buf.split('\n').collect();
         let last = lines.len().saturating_sub(1);
         for (i, line) in lines.iter().enumerate() {
-            let mut row = div().flex().flex_row().child(
+            let row = div().flex().flex_row().child(
                 // Right-aligned gutter line number.
                 div()
                     .w(px(34.))
@@ -2187,10 +2193,11 @@ impl HayateApp {
             body = body.child(row.child(content));
         }
         let footer = match hayate_core::check_script(&p.buf) {
+            // Collapse to one line — a text child must not contain '\n'.
             Some(err) => div()
                 .text_xs()
                 .text_color(rgb(0xff6b6b))
-                .child(format!("⚠ {err}")),
+                .child(format!("⚠ {}", err.replace('\n', " "))),
             None => div().text_xs().text_color(rgb(0x888888)).child(
                 "Ctrl/Cmd+Enter to run · Enter for newline · Ctrl/Cmd+V to paste · Esc to close",
             ),

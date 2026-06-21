@@ -215,17 +215,27 @@ fn intro_lt_builds_a_full_deck() {
     // The LT adds 10 slides on top of whatever the deck started with.
     assert_eq!(p.slides().len(), before + 10, "intro-lt creates 10 slides");
 
-    // Every created slide carries a solid background and at least one Typst text box.
+    // The background is branded once on the master, so every slide resolves one by inheritance
+    // (not a per-slide component). Each slide still owns its title/body Typst text boxes.
     for slide in p.slides() {
         assert!(
-            matches!(p.world.get(slide, CompKind::Background), Some(_)),
-            "each LT slide has a background"
+            p.background_of(slide).is_some(),
+            "each LT slide inherits a background from the master"
         );
         let has_typst = p.children(slide).into_iter().any(|c| {
             matches!(p.world.get(c, CompKind::Text), Some(CompValue::Text(b)) if b.typst_source.is_some())
         });
         assert!(has_typst, "each LT slide has a Typst text box");
     }
+
+    // The brand chrome (accent bars + footer) lives on the master, not duplicated per slide.
+    let master = p
+        .owning_master(p.slides()[0])
+        .expect("slides have a master");
+    assert!(
+        p.children(master).len() >= 3,
+        "master carries the shared brand chrome"
+    );
 }
 
 #[test]
