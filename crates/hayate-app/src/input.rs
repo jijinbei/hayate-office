@@ -582,6 +582,9 @@ impl HayateApp {
             match ev.keystroke.key.as_str() {
                 "escape" => {
                     self.present = false;
+                    // The editor scene wasn't kept in sync during the slideshow (see next_slide);
+                    // rebuild it for the slide we landed on so the editor shows the right one.
+                    self.rebuild();
                     cx.notify();
                 }
                 "space" => {

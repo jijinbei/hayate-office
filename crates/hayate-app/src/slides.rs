@@ -19,7 +19,12 @@ impl HayateApp {
             self.slide = slides[ni as usize];
             self.selection = None;
             self.also.clear();
-            self.rebuild();
+            // In the slideshow the fullscreen render builds its own scene via build_slide_scene_at;
+            // rebuilding the editor scene here is wasted work on the transition path. The editor
+            // scene is refreshed when present mode exits (see the Esc handler).
+            if !self.present {
+                self.rebuild();
+            }
         }
     }
 

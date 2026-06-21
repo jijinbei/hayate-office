@@ -133,7 +133,11 @@ impl HayateApp {
         // at 96 DPI (9525 EMU/px); the on-slide frame scales that down to fit a sensible box
         // while preserving the ratio. Unknown headers fall back to a 3x2 inch frame.
         let (nat_w, nat_h, frame_w, frame_h) = match crate::paint::image_dimensions(
-            self.pres.media.get(&key).map(Vec::as_slice).unwrap_or(&[]),
+            self.pres
+                .media
+                .get(&key)
+                .map(|b| b.as_slice())
+                .unwrap_or(&[]),
         ) {
             Some((pw, ph)) if pw > 0 && ph > 0 => {
                 const EMU_PER_PX: f64 = 9525.0;

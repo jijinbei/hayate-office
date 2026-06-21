@@ -240,7 +240,7 @@ pub(crate) fn image_dimensions(bytes: &[u8]) -> Option<(u32, u32)> {
 pub(crate) fn paint_scene(
     scene: &Scene,
     o: Point<Pixels>,
-    media: &std::collections::BTreeMap<String, Vec<u8>>,
+    media: &std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>>,
     indent_em: f32,
     window: &mut Window,
     cx: &mut App,
@@ -340,15 +340,13 @@ pub(crate) fn paint_scene(
                 };
                 // Try to decode and paint the real image; fall back to a placeholder.
                 let mut painted = false;
-                if let Some(bytes) = media.get(media_key) {
-                    if let Some(format) = guess_image_format(bytes) {
-                        let image = std::sync::Arc::new(Image::from_bytes(format, bytes.clone()));
-                        // gpui decodes asynchronously via its asset system; the first paint may
-                        // return None and schedule a re-render once the image is ready.
-                        if let Some(render) = image.use_render_image(window, cx) {
-                            let _ = window.paint_image(b, Corners::default(), render, 0, false);
-                            painted = true;
-                        }
+                if let Some(image) = cached_image(media, media_key) {
+                    // gpui decodes asynchronously via its asset system; the first paint may
+                    // return None and schedule a re-render once the image is ready. Reusing the
+                    // same `Arc<Image>` per key keeps gpui's decode cached across frames.
+                    if let Some(render) = image.use_render_image(window, cx) {
+                        let _ = window.paint_image(b, Corners::default(), render, 0, false);
+                        painted = true;
                     }
                 }
                 if !painted {
@@ -452,6 +450,38 @@ pub(crate) fn paint_scene(
             _ => {}
         }
     }
+}
+
+thread_local! {
+    /// Cache of decoded gpui `Image` assets, keyed by media content key. Media is content-
+    /// addressed (the key is a hash of the bytes), so an entry is never stale. Reusing the same
+    /// `Arc<Image>` lets gpui keep the decoded texture cached instead of re-decoding every paint
+    /// (and every slide transition in the slideshow).
+    static MEDIA_IMAGES: std::cell::RefCell<
+        std::collections::HashMap<String, std::sync::Arc<Image>>,
+    > = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// Fetch (or build and cache) the gpui `Image` for `media_key`. Returns `None` if the key is
+/// absent or the bytes are an unrecognized image format.
+fn cached_image(
+    media: &std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>>,
+    media_key: &str,
+) -> Option<std::sync::Arc<Image>> {
+    MEDIA_IMAGES.with(|cache| {
+        if let Some(hit) = cache.borrow().get(media_key) {
+            return Some(std::sync::Arc::clone(hit));
+        }
+        let bytes = media.get(media_key)?;
+        let format = guess_image_format(bytes)?;
+        let image = std::sync::Arc::new(Image::from_bytes(format, (**bytes).clone()));
+        let mut c = cache.borrow_mut();
+        if c.len() >= 256 {
+            c.clear();
+        }
+        c.insert(media_key.to_string(), std::sync::Arc::clone(&image));
+        Some(image)
+    })
 }
 
 thread_local! {

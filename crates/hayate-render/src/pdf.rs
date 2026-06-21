@@ -198,7 +198,7 @@ pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
         .par_iter()
         .enumerate()
         .map(|(ii, &key)| {
-            let bytes = p.media.get(key)?;
+            let bytes = p.media.get(key)?.as_slice();
             let (iw, ih, filter, data) = embed_image(bytes, opts.image_dpi, pt_w, pt_h)?;
             Some((ii, iw, ih, filter, data))
         })

@@ -407,7 +407,7 @@ struct RecentThumb {
     path: String,
     name: String,
     scene: Scene,
-    media: std::collections::BTreeMap<String, Vec<u8>>,
+    media: std::collections::BTreeMap<String, std::sync::Arc<Vec<u8>>>,
 }
 
 impl HayateApp {

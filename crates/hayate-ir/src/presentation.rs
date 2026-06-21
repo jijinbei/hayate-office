@@ -12,15 +12,17 @@ use crate::units::inch_f;
 use crate::world::{Entity, World};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Presentation {
     pub world: World,
     pub slide_size: SizeEmu,
     pub default_master: Option<Entity>,
-    /// In-memory store of embedded media, keyed by content hash. Persistence to
-    /// the .hayate/PPTX package is handled elsewhere.
-    pub media: BTreeMap<String, Vec<u8>>,
+    /// In-memory store of embedded media, keyed by content hash. Values are `Arc`-wrapped so the
+    /// map can be cloned cheaply (e.g. into per-frame render closures) without copying image bytes.
+    /// Persistence to the .hayate/PPTX package is handled elsewhere.
+    pub media: BTreeMap<String, Arc<Vec<u8>>>,
 }
 
 impl Presentation {
@@ -40,13 +42,15 @@ impl Presentation {
     /// idempotent: adding identical bytes yields the same key and a single entry.
     pub fn add_media(&mut self, bytes: Vec<u8>) -> String {
         let key = media_key(&bytes);
-        self.media.entry(key.clone()).or_insert(bytes);
+        self.media
+            .entry(key.clone())
+            .or_insert_with(|| Arc::new(bytes));
         key
     }
 
     /// Look up media bytes by content key.
     pub fn get_media(&self, key: &str) -> Option<&[u8]> {
-        self.media.get(key).map(Vec::as_slice)
+        self.media.get(key).map(|b| b.as_slice())
     }
 
     /// Order key to append after the current maximum among `siblings`.
