@@ -194,24 +194,46 @@ pub fn export_pdf(p: &Presentation, opts: &PdfOptions) -> Vec<u8> {
     // Decode + compress each image across cores; assign object ids sequentially afterwards so the
     // output (and the "Im{ii}" names, gaps included) stays byte-identical to the serial path.
     let image_keys: Vec<&String> = used_images.iter().collect();
-    let embedded: Vec<Option<(usize, u32, u32, &'static str, std::borrow::Cow<[u8]>)>> = image_keys
+    let embedded: Vec<Option<(usize, EmbeddedImage)>> = image_keys
         .par_iter()
         .enumerate()
         .map(|(ii, &key)| {
             let bytes = p.media.get(key)?.as_slice();
-            let (iw, ih, filter, data) = embed_image(bytes, opts.image_dpi, pt_w, pt_h)?;
-            Some((ii, iw, ih, filter, data))
+            Some((ii, embed_image(bytes, opts.image_dpi, pt_w, pt_h)?))
         })
         .collect();
-    for (ii, iw, ih, filter, data) in embedded.into_iter().flatten() {
+    for (ii, img) in embedded.into_iter().flatten() {
+        // A transparent image gets a grayscale soft mask (/SMask); allocate it first so the
+        // main image dict can reference it.
+        let smask_id = img.alpha.as_ref().map(|alpha| {
+            let id = pdf.alloc();
+            let mut body = format!(
+                "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceGray \
+                 /BitsPerComponent 8 /Filter /FlateDecode /Length {} >>\nstream\n",
+                img.w,
+                img.h,
+                alpha.len()
+            )
+            .into_bytes();
+            body.extend_from_slice(alpha);
+            body.extend_from_slice(b"\nendstream");
+            pdf.put(id, obj_bytes(id, &body));
+            id
+        });
         let id = pdf.alloc();
+        let smask = smask_id
+            .map(|sid| format!("/SMask {sid} 0 R "))
+            .unwrap_or_default();
         let mut body = format!(
-            "<< /Type /XObject /Subtype /Image /Width {iw} /Height {ih} /ColorSpace /DeviceRGB \
-             /BitsPerComponent 8 /Filter /{filter} /Length {} >>\nstream\n",
-            data.len()
+            "<< /Type /XObject /Subtype /Image /Width {} /Height {} /ColorSpace /DeviceRGB \
+             /BitsPerComponent 8 {smask}/Filter /{} /Length {} >>\nstream\n",
+            img.w,
+            img.h,
+            img.filter,
+            img.data.len()
         )
         .into_bytes();
-        body.extend_from_slice(&data);
+        body.extend_from_slice(&img.data);
         body.extend_from_slice(b"\nendstream");
         pdf.put(id, obj_bytes(id, &body));
         image_res.insert(image_keys[ii].clone(), (format!("Im{ii}"), id));
@@ -894,42 +916,65 @@ fn arrowhead(
     );
 }
 
-/// Decode an embedded image to an image XObject payload: `(width, height, filter, data)`.
-/// JPEG is passed through as `DCTDecode`; other formats are decoded to RGB and `FlateDecode`d.
-/// Images larger than `image_dpi` over the page are downscaled to bound size.
-fn embed_image<'a>(
-    bytes: &'a [u8],
-    image_dpi: f32,
-    _pt_w: f32,
-    _pt_h: f32,
-) -> Option<(u32, u32, &'static str, std::borrow::Cow<'a, [u8]>)> {
+/// A decoded image ready to embed: RGB color stream plus, for images with transparency, a
+/// grayscale alpha stream emitted as a PDF `/SMask`. Without the mask, transparent pixels (whose
+/// dropped RGB is often black) would render as black.
+struct EmbeddedImage<'a> {
+    w: u32,
+    h: u32,
+    filter: &'static str,
+    data: std::borrow::Cow<'a, [u8]>,
+    /// FlateDecode'd 8-bit grayscale alpha (same dimensions), `Some` iff the image is non-opaque.
+    alpha: Option<Vec<u8>>,
+}
+
+/// Decode an embedded image to an image XObject payload. JPEG is passed through as `DCTDecode`
+/// (opaque, no alpha); other formats are decoded to RGB + an optional alpha soft mask and
+/// `FlateDecode`d. Images larger than `image_dpi` over the page are downscaled to bound size.
+fn embed_image(bytes: &[u8], image_dpi: f32, _pt_w: f32, _pt_h: f32) -> Option<EmbeddedImage<'_>> {
     let is_jpeg = bytes.starts_with(&[0xFF, 0xD8, 0xFF]);
     let img = image::load_from_memory(bytes).ok()?;
-    let (mut w, mut h) = (img.width(), img.height());
+    let (w, h) = (img.width(), img.height());
     if w == 0 || h == 0 {
         return None;
     }
-    // Cap dimensions to keep files reasonable (image_dpi over a ~13in page).
-    let max_dim = (image_dpi * 14.0).max(64.0) as u32;
     if is_jpeg {
-        // Pass the original JPEG bytes through (no re-encode); DCTDecode handles it.
-        return Some((w, h, "DCTDecode", std::borrow::Cow::Borrowed(bytes)));
+        // Pass the original JPEG bytes through (no re-encode); DCTDecode handles it. JPEG is opaque.
+        return Some(EmbeddedImage {
+            w,
+            h,
+            filter: "DCTDecode",
+            data: std::borrow::Cow::Borrowed(bytes),
+            alpha: None,
+        });
     }
-    let mut rgb = img.to_rgb8();
+    // Decode to RGBA so we can carry transparency, downscaling oversized images first.
+    let max_dim = (image_dpi * 14.0).max(64.0) as u32;
+    let mut rgba = img.to_rgba8();
+    let (mut w, mut h) = (w, h);
     if w > max_dim || h > max_dim {
         let scale = (max_dim as f32 / w as f32).min(max_dim as f32 / h as f32);
         let nw = ((w as f32 * scale) as u32).max(1);
         let nh = ((h as f32 * scale) as u32).max(1);
-        rgb = image::imageops::resize(&rgb, nw, nh, image::imageops::FilterType::Triangle);
+        rgba = image::imageops::resize(&rgba, nw, nh, image::imageops::FilterType::Triangle);
         w = nw;
         h = nh;
     }
-    Some((
+    // Split into an RGB color stream and (when any pixel is non-opaque) an alpha mask stream.
+    let has_alpha = rgba.pixels().any(|p| p[3] != 255);
+    let mut rgb = Vec::with_capacity((w * h * 3) as usize);
+    let mut a = Vec::with_capacity((w * h) as usize);
+    for px in rgba.pixels() {
+        rgb.extend_from_slice(&[px[0], px[1], px[2]]);
+        a.push(px[3]);
+    }
+    Some(EmbeddedImage {
         w,
         h,
-        "FlateDecode",
-        std::borrow::Cow::Owned(flate(rgb.as_raw())),
-    ))
+        filter: "FlateDecode",
+        data: std::borrow::Cow::Owned(flate(&rgb)),
+        alpha: has_alpha.then(|| flate(&a)),
+    })
 }
 
 fn solid(fill: &Option<Paint>) -> Option<(u8, u8, u8)> {
@@ -1237,5 +1282,55 @@ mod tests {
         assert!(pdf.starts_with(b"%PDF-"));
         assert!(count(&pdf, b"%%EOF") >= 1);
         assert!(count(&pdf, b"/Count 0") >= 1);
+    }
+
+    /// Encode a tiny PNG with one fully-transparent pixel so it carries an alpha channel.
+    fn transparent_png() -> Vec<u8> {
+        let mut img = image::RgbaImage::new(2, 2);
+        img.put_pixel(0, 0, image::Rgba([255, 0, 0, 255]));
+        img.put_pixel(1, 0, image::Rgba([0, 255, 0, 0])); // transparent
+        img.put_pixel(0, 1, image::Rgba([0, 0, 255, 128]));
+        img.put_pixel(1, 1, image::Rgba([255, 255, 0, 255]));
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgba8(img)
+            .write_to(
+                &mut std::io::Cursor::new(&mut bytes),
+                image::ImageFormat::Png,
+            )
+            .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn transparent_image_gets_a_soft_mask() {
+        let mut p = Presentation::new();
+        let master = p.add_master(Theme::default());
+        let layout = p.add_layout(master, "Blank");
+        let slide = p.add_slide(layout);
+        let key = p.add_media(transparent_png());
+        let e = p.add_shape(slide);
+        p.world.frames.insert(
+            e,
+            RectEmu::new(inch_f(1.0), inch_f(1.0), inch_f(2.0), inch_f(2.0)),
+        );
+        p.world.pictures.insert(
+            e,
+            hayate_ir::image::PictureRef {
+                media_key: key,
+                natural: hayate_ir::geom::SizeEmu::new(inch_f(2.0), inch_f(2.0)),
+            },
+        );
+
+        let pdf = export_pdf(&p, &PdfOptions::default());
+        assert!(
+            count(&pdf, b"/SMask") >= 1,
+            "a transparent image embeds an alpha soft mask"
+        );
+        assert!(
+            count(&pdf, b"/DeviceGray") >= 1,
+            "the soft mask is a grayscale image"
+        );
+        // The color image is still RGB.
+        assert!(count(&pdf, b"/ColorSpace /DeviceRGB") >= 1);
     }
 }
