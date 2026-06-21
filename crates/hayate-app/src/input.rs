@@ -595,10 +595,12 @@ impl HayateApp {
                 "right" | "down" => {
                     self.next_slide(1);
                     self.present_t = 0;
+                    cx.notify();
                 }
                 "left" | "up" => {
                     self.next_slide(-1);
                     self.present_t = 0;
+                    cx.notify();
                 }
                 _ => {}
             }
