@@ -11,7 +11,7 @@ use hayate_ir::font::Script;
 use hayate_ir::paint::Fill;
 use hayate_ir::presentation::Presentation;
 use hayate_ir::shape::{ArrowHead, Geometry};
-use hayate_ir::text::TextBody;
+use hayate_ir::text::{Paragraph, Run, TextBody};
 use hayate_ir::theme::Theme;
 use hayate_ir::world::Entity;
 
@@ -174,13 +174,31 @@ pub fn build_slide_scene_edit(
         let fill = p.ph_fill(slide, ph).map(|f| fill_to_paint(&f, theme));
         let source = p.find_placeholder(slide, ph);
         let prim = if let Some(tb) = p.ph_text(slide, ph) {
-            typst_or_text(
-                tb,
-                theme,
-                &vp,
-                bounds,
-                source == raw_text_entity && source.is_some(),
-            )
+            let editing = source == raw_text_entity && source.is_some();
+            // A fill that deferred styling carries no runs: adopt the template slot's run style
+            // (font/size/bold/color) so the layout/master drives the look — and a later edit to
+            // that slot propagates to every slide that filled it without its own styling.
+            let has_run = tb.paragraphs.iter().any(|para| !para.runs.is_empty());
+            let styled;
+            let tb = if !has_run {
+                match p.ph_run_style(slide, ph) {
+                    Some(style) => {
+                        styled = TextBody {
+                            paragraphs: vec![Paragraph::new(vec![Run {
+                                text: String::new(),
+                                ..style.clone()
+                            }])],
+                            autofit: tb.autofit,
+                            typst_source: tb.typst_source.clone(),
+                        };
+                        &styled
+                    }
+                    None => tb,
+                }
+            } else {
+                tb
+            };
+            typst_or_text(tb, theme, &vp, bounds, editing)
         } else if let Some(geom) = p.ph_geometry(slide, ph) {
             geometry_prim(&geom, bounds, fill, None, &vp)
         } else {
@@ -462,14 +480,18 @@ fn typst_or_text(
         let color = first
             .map(|r| theme.resolve_color(&r.color))
             .unwrap_or(Rgba::rgb(0, 0, 0));
+        // The run's bold flag becomes the Typst base weight, so a bold slot (e.g. a master Title)
+        // renders bold from plain text — no `*…*` needed.
+        let bold = first.map(|r| r.bold).unwrap_or(false);
         let align = tb
             .paragraphs
             .first()
             .map(|p| p.align)
             .unwrap_or(hayate_ir::text::HAlign::Left);
         let ppp = (vp.scale * hayate_ir::units::EMU_PER_PT as f64) as f32;
-        let res =
-            crate::typst_render::render_typst_raster(src, bounds.w, ppp, default_pt, color, align);
+        let res = crate::typst_render::render_typst_raster(
+            src, bounds.w, ppp, default_pt, color, align, bold,
+        );
         if let Ok(img) = res.as_ref() {
             return Primitive::Typst {
                 bounds,
@@ -477,6 +499,7 @@ fn typst_or_text(
                 default_pt,
                 color,
                 align,
+                bold,
                 rgba: std::sync::Arc::clone(&img.rgba),
                 px_w: img.px_w,
                 px_h: img.px_h,

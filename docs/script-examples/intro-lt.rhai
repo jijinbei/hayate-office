@@ -35,8 +35,8 @@ shape_set_font_size(brand, 14);
 // （「New」直後のデッキはレイアウトに Title / Body のテンプレ枠を持っています）
 fn titled(lay, title, body) {
     let s = slide_add(lay);
-    // Title 枠に Typst 見出し（`=`）で大きく。位置・サイズはテンプレ枠から継承。
-    slide_set_title(s, "= " + title);
+    // タイトルはプレーンテキストでOK。Title 枠の大きさ・太字はテンプレ（マスター）から継承する。
+    slide_set_title(s, title);
     slide_set_body(s, body);
     s
 }

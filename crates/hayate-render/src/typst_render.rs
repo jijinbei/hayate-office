@@ -91,12 +91,18 @@ fn load_faces(data: Bytes, fonts: &mut Vec<Font>) {
 }
 
 /// Common system paths for Noto Sans CJK JP, so Japanese renders in Typst boxes. Mirrors the
-/// font discovery used by the PDF CID embedder.
-const CJK_FONT_PATHS: &[&str] = &[
+/// font discovery used by the PDF CID embedder. Regular and Bold are separate files, so we load
+/// one of each weight — otherwise `weight: "bold"` (e.g. a master Title) has no CJK bold face and
+/// silently falls back to regular.
+const CJK_REGULAR_PATHS: &[&str] = &[
     "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
-    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
     "/run/current-system/sw/share/X11/fonts/NotoSansCJK-Regular.ttc",
     "/usr/share/fonts/truetype/noto/NotoSansCJK-Regular.ttc",
+];
+const CJK_BOLD_PATHS: &[&str] = &[
+    "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+    "/run/current-system/sw/share/X11/fonts/NotoSansCJK-Bold.ttc",
+    "/usr/share/fonts/truetype/noto/NotoSansCJK-Bold.ttc",
 ];
 
 fn build_engine() -> Engine {
@@ -105,11 +111,14 @@ fn build_engine() -> Engine {
     for data in typst_assets::fonts() {
         load_faces(Bytes::new(data), &mut fonts);
     }
-    // System CJK so Japanese text/labels render.
-    for path in CJK_FONT_PATHS {
-        if let Ok(bytes) = std::fs::read(path) {
-            load_faces(Bytes::new(bytes), &mut fonts);
-            break;
+    // System CJK so Japanese text/labels render — load a regular AND a bold face so bold weights
+    // (master Title etc.) actually render bold rather than falling back to regular.
+    for paths in [CJK_REGULAR_PATHS, CJK_BOLD_PATHS] {
+        for path in paths {
+            if let Ok(bytes) = std::fs::read(path) {
+                load_faces(Bytes::new(bytes), &mut fonts);
+                break;
+            }
         }
     }
     let book = FontBook::from_infos(fonts.iter().map(|f| f.info().clone()));
@@ -132,16 +141,26 @@ thread_local! {
 const CACHE_CAP: usize = 256;
 
 /// Build the full Typst document (preamble + user source) for a box of width `box_w_pt`.
-fn wrap_source(source: &str, box_w_pt: f32, default_pt: f32, color: Rgba, align: HAlign) -> String {
+/// `bold` sets the base font weight so a placeholder/run styled bold (e.g. a master Title) renders
+/// bold even when the source carries no `*…*` markup.
+fn wrap_source(
+    source: &str,
+    box_w_pt: f32,
+    default_pt: f32,
+    color: Rgba,
+    align: HAlign,
+    bold: bool,
+) -> String {
     let al = match align {
         HAlign::Left | HAlign::Justify => "left",
         HAlign::Center => "center",
         HAlign::Right => "right",
     };
     let justify = matches!(align, HAlign::Justify);
+    let weight = if bold { ", weight: \"bold\"" } else { "" };
     format!(
         "#set page(width: {w}pt, height: auto, margin: 0pt, fill: none)\n\
-         #set text(size: {sz}pt, fill: rgb(\"#{r:02x}{g:02x}{b:02x}\"), \
+         #set text(size: {sz}pt, fill: rgb(\"#{r:02x}{g:02x}{b:02x}\"){weight}, \
          font: (\"Noto Sans CJK JP\", \"New Computer Modern\"), \
          top-edge: \"ascender\", bottom-edge: \"descender\")\n\
          #set par(justify: {justify})\n\
@@ -152,6 +171,7 @@ fn wrap_source(source: &str, box_w_pt: f32, default_pt: f32, color: Rgba, align:
         r = color.r,
         g = color.g,
         b = color.b,
+        weight = weight,
         justify = justify,
         al = al,
         body = source,
@@ -204,9 +224,10 @@ pub fn render_typst_raster(
     default_pt: f32,
     color: Rgba,
     align: HAlign,
+    bold: bool,
 ) -> Rc<Result<RasterImage, String>> {
     let box_w_pt = (box_w_px / ppp.max(0.1)).max(1.0);
-    let full = wrap_source(source, box_w_pt, default_pt, color, align);
+    let full = wrap_source(source, box_w_pt, default_pt, color, align, bold);
     // Key on the exact compiled source + quantized scale: any change to text/size/color/align/width
     // changes `full`, so the cache self-invalidates.
     let key = format!("{}\u{0}{}", (ppp * 100.0).round() as i64, full);
@@ -375,8 +396,9 @@ pub fn layout_typst(
     default_pt: f32,
     color: Rgba,
     align: HAlign,
+    bold: bool,
 ) -> Rc<Result<TypstLayout, String>> {
-    let full = wrap_source(source, box_w_pt, default_pt, color, align);
+    let full = wrap_source(source, box_w_pt, default_pt, color, align, bold);
     LAYOUT_CACHE.with(|cache| {
         if let Some(hit) = cache.borrow().get(&full) {
             return Rc::clone(hit);
@@ -430,7 +452,7 @@ mod tests {
 
     #[test]
     fn renders_a_bulleted_list() {
-        let r = render_typst_raster("- a\n- b", 400.0, 1.0, 18.0, black(), HAlign::Left);
+        let r = render_typst_raster("- a\n- b", 400.0, 1.0, 18.0, black(), HAlign::Left, false);
         let img = r.as_ref().as_ref().expect("list compiles");
         assert!(img.px_w > 0 && img.px_h > 0);
         assert!(has_ink(img), "the list drew some pixels");
@@ -438,7 +460,15 @@ mod tests {
 
     #[test]
     fn renders_math() {
-        let r = render_typst_raster("$x^2 + y^2$", 400.0, 1.0, 18.0, black(), HAlign::Left);
+        let r = render_typst_raster(
+            "$x^2 + y^2$",
+            400.0,
+            1.0,
+            18.0,
+            black(),
+            HAlign::Left,
+            false,
+        );
         let img = r
             .as_ref()
             .as_ref()
@@ -448,20 +478,20 @@ mod tests {
 
     #[test]
     fn broken_source_errors() {
-        let r = render_typst_raster("$ x ^", 400.0, 1.0, 18.0, black(), HAlign::Left);
+        let r = render_typst_raster("$ x ^", 400.0, 1.0, 18.0, black(), HAlign::Left, false);
         assert!(r.as_ref().is_err(), "unbalanced math is a compile error");
     }
 
     #[test]
     fn identical_inputs_hit_cache() {
-        let a = render_typst_raster("hello", 300.0, 1.0, 18.0, black(), HAlign::Left);
-        let b = render_typst_raster("hello", 300.0, 1.0, 18.0, black(), HAlign::Left);
+        let a = render_typst_raster("hello", 300.0, 1.0, 18.0, black(), HAlign::Left, false);
+        let b = render_typst_raster("hello", 300.0, 1.0, 18.0, black(), HAlign::Left, false);
         assert!(Rc::ptr_eq(&a, &b), "second call returns the cached Rc");
     }
 
     #[test]
     fn layout_extracts_positioned_glyphs() {
-        let r = layout_typst("hello", 400.0, 18.0, black(), HAlign::Left);
+        let r = layout_typst("hello", 400.0, 18.0, black(), HAlign::Left, false);
         let layout = r.as_ref().as_ref().expect("compiles");
         let total: usize = layout.glyph_runs.iter().map(|g| g.glyphs.len()).sum();
         assert!(total >= 5, "at least one glyph per letter, got {total}");
@@ -474,7 +504,7 @@ mod tests {
     #[test]
     fn layout_math_has_a_fraction_bar() {
         // A fraction renders a horizontal rule (Shape) between numerator and denominator.
-        let r = layout_typst("$ 1/2 $", 400.0, 24.0, black(), HAlign::Left);
+        let r = layout_typst("$ 1/2 $", 400.0, 24.0, black(), HAlign::Left, false);
         let layout = r.as_ref().as_ref().expect("math compiles");
         assert!(!layout.glyph_runs.is_empty(), "digits are glyphs");
         assert!(

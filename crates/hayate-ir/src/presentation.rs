@@ -6,7 +6,7 @@ use crate::frac::FracIndex;
 use crate::geom::{RectEmu, SizeEmu};
 use crate::paint::Fill;
 use crate::shape::Geometry;
-use crate::text::TextBody;
+use crate::text::{Run, TextBody};
 use crate::theme::Theme;
 use crate::units::inch_f;
 use crate::world::{Entity, World};
@@ -233,6 +233,23 @@ impl Presentation {
             .into_iter()
             .flatten()
             .find_map(|e| self.world.texts.get(&e))
+    }
+
+    /// Resolve a placeholder's base run style (font/size/bold/color), walking the chain and
+    /// returning the first run present. A text-only override that carries no runs (a script fill
+    /// deferring to the template) is skipped, so the layout/master slot's styling governs — and a
+    /// later edit to that slot propagates to every slide that filled it without its own styling.
+    pub fn ph_run_style(&self, slide: Entity, ph: PlaceholderRef) -> Option<&Run> {
+        self.placeholder_chain(slide, ph)
+            .into_iter()
+            .flatten()
+            .find_map(|e| {
+                self.world
+                    .texts
+                    .get(&e)
+                    .and_then(|tb| tb.paragraphs.first())
+                    .and_then(|p| p.runs.first())
+            })
     }
 
     /// Resolve a placeholder's fill, walking the chain and returning the first present.

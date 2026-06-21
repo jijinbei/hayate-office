@@ -247,24 +247,49 @@ fn set_title_fills_the_template_placeholder() {
     let mut p = Presentation::new();
     let master = p.add_master(Theme::default());
     let layout = p.add_layout(master, "Title and Content");
+    let title = PlaceholderRef {
+        ph_type: PlaceholderType::Title,
+        idx: 0,
+    };
+    // Seed the layout slots WITH styled label text (as the app's preset fill does), so the slot
+    // carries a run style (e.g. a big bold Title) that fills can inherit.
+    let mut layout_title_run = None;
     let mut order = hayate_ir::frac::FracIndex::after(None);
     for spec in edit::preset_placeholders(LayoutPreset::TitleAndContent, p.slide_size) {
         let e = p.world.reserve_id();
-        let tx = edit::create_placeholder(e, layout, order.clone(), spec.ph, spec.frame, None);
+        let run = hayate_ir::text::Run {
+            text: spec.label.to_string(),
+            font: hayate_ir::font::FontRef::Theme(spec.slot),
+            size: hayate_ir::units::pt(spec.size_pt),
+            color: hayate_ir::color::Color::theme(hayate_ir::color::ThemeColorToken::Dk1),
+            bold: spec.bold,
+            italic: false,
+            underline: false,
+        };
+        if spec.ph == title {
+            layout_title_run = Some(e);
+        }
+        let body = hayate_ir::text::TextBody {
+            paragraphs: vec![hayate_ir::text::Paragraph::new(vec![run])],
+            autofit: false,
+            typst_source: None,
+        };
+        let tx =
+            edit::create_placeholder(e, layout, order.clone(), spec.ph, spec.frame, Some(body));
         apply(&mut p, tx.ops);
         order = hayate_ir::frac::FracIndex::after(Some(&order));
     }
     let slide = p.add_slide(layout);
 
-    let title = PlaceholderRef {
-        ph_type: PlaceholderType::Title,
-        idx: 0,
-    };
     // The title slot resolves a frame from the layout before we fill it.
     assert!(
         p.ph_frame(slide, title).is_some(),
         "layout defines a Title slot"
     );
+    let template_pt = p
+        .ph_run_style(slide, title)
+        .expect("layout styles Title")
+        .size;
 
     let ctx = ScriptContext {
         current_slide: Some(slide),
@@ -287,8 +312,38 @@ fn set_title_fills_the_template_placeholder() {
     let body = p.ph_text(slide, title).expect("title text resolves");
     assert_eq!(body.typst_source.as_deref(), Some("Hello"));
     assert!(
+        body.paragraphs.iter().all(|para| para.runs.is_empty()),
+        "the fill carries no runs (defers styling to the template)"
+    );
+    assert!(
         p.ph_frame(slide, title).is_some(),
         "geometry still inherited"
+    );
+
+    // A2: the filled title inherits the slot's run style (size/bold) from the layout, and a later
+    // edit to the layout slot propagates to the already-filled slide.
+    assert_eq!(
+        p.ph_run_style(slide, title).map(|r| r.size),
+        Some(template_pt),
+        "filled title inherits the layout slot's font size"
+    );
+    let bigger = template_pt + hayate_ir::units::pt(20);
+    if let Some(e) = layout_title_run {
+        if let Some(hayate_ir::world::CompValue::Text(mut tb)) = p.world.get(e, CompKind::Text) {
+            tb.paragraphs[0].runs[0].size = bigger;
+            apply(
+                &mut p,
+                vec![Operation::SetComponent {
+                    entity: e,
+                    value: CompValue::Text(tb),
+                }],
+            );
+        }
+    }
+    assert_eq!(
+        p.ph_run_style(slide, title).map(|r| r.size),
+        Some(bigger),
+        "editing the layout Title size propagates to the filled slide"
     );
 
     // Re-setting the same placeholder updates in place (no duplicate override child).

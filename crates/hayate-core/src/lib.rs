@@ -1230,9 +1230,12 @@ fn set_placeholder_ops(
     ph: PlaceholderRef,
     text: String,
 ) -> Vec<Operation> {
-    // Typst-first body (matches shape.add_text); the plain paragraph is the fallback.
+    // Store text only, with NO runs: a "defer styling to the template" marker. At render time the
+    // slot's run style (font/size/bold/color) is resolved from the layout/master, so a Title stays
+    // big & bold from plain text AND a later edit to the master slot propagates here. Geometry also
+    // stays inherited (no Frame on the override).
     let body = TextBody {
-        paragraphs: vec![Paragraph::new(vec![default_run(text.clone())])],
+        paragraphs: Vec::new(),
         autofit: false,
         typst_source: Some(text),
     };

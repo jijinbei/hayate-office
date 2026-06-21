@@ -144,6 +144,9 @@ pub enum Primitive {
         default_pt: f32,
         color: Rgba,
         align: HAlign,
+        /// Base font weight (from the resolved run/placeholder style), so plain text in a bold
+        /// slot (e.g. a master Title) renders bold without `*…*` markup.
+        bold: bool,
         rgba: std::sync::Arc<Vec<u8>>,
         px_w: u32,
         px_h: u32,
