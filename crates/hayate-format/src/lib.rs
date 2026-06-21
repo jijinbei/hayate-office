@@ -9,14 +9,17 @@
 
 use hayate_ir::presentation::Presentation;
 use hayate_ir::world::{CompValue, Entity};
-use redb::{Database, ReadableTable, TableDefinition};
+use redb::{Database, ReadableTable, TableDefinition, TableError};
 use std::path::Path;
+use std::sync::Arc;
 
 /// On-disk format version (semver). Stored in `meta` for forward-compat policy.
 pub const FORMAT_VERSION: &str = "0.1.0";
 
 const META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 const ENTITIES: TableDefinition<u64, &[u8]> = TableDefinition::new("entities");
+/// Embedded media (images), keyed by content hash, holding the raw encoded bytes.
+const MEDIA: TableDefinition<&str, &[u8]> = TableDefinition::new("media");
 
 pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error>>;
 
@@ -45,6 +48,12 @@ pub fn save(pres: &Presentation, path: impl AsRef<Path>) -> Result<()> {
             for e in pres.world.iter() {
                 let comps = pres.world.components_of(e);
                 ents.insert(e.0, serde_json::to_vec(&comps)?.as_slice())?;
+            }
+
+            // Embedded media (images). Without this, a reloaded deck shows gray placeholders.
+            let mut media = wtx.open_table(MEDIA)?;
+            for (key, bytes) in &pres.media {
+                media.insert(key.as_str(), bytes.as_slice())?;
             }
         }
         wtx.commit()?;
@@ -80,6 +89,18 @@ pub fn load(path: impl AsRef<Path>) -> Result<Presentation> {
                 pres.world.set(e, c);
             }
         }
+    }
+    // Embedded media (absent in pre-media files, which is fine — those simply have no images).
+    match rtx.open_table(MEDIA) {
+        Ok(media) => {
+            for row in media.iter()? {
+                let (k, v) = row?;
+                pres.media
+                    .insert(k.value().to_string(), Arc::new(v.value().to_vec()));
+            }
+        }
+        Err(TableError::TableDoesNotExist(_)) => {}
+        Err(e) => return Err(e.into()),
     }
     Ok(pres)
 }

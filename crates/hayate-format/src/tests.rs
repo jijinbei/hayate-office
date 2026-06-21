@@ -52,6 +52,24 @@ fn roundtrip_preserves_document() {
 }
 
 #[test]
+fn roundtrip_preserves_media() {
+    let mut p = Presentation::new();
+    let bytes = vec![0u8, 1, 2, 3, 4, 5, 6, 7];
+    let key = p.add_media(bytes.clone());
+
+    let path = temp_path("media");
+    save(&p, &path).unwrap();
+    let loaded = load(&path).unwrap();
+
+    assert_eq!(
+        loaded.get_media(&key),
+        Some(bytes.as_slice()),
+        "embedded media survives a save/load round-trip"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn save_is_atomic_rename() {
     // A successful save leaves no .tmp behind.
     let p = Presentation::new();
