@@ -142,7 +142,8 @@ fn wrap_source(source: &str, box_w_pt: f32, default_pt: f32, color: Rgba, align:
     format!(
         "#set page(width: {w}pt, height: auto, margin: 0pt, fill: none)\n\
          #set text(size: {sz}pt, fill: rgb(\"#{r:02x}{g:02x}{b:02x}\"), \
-         font: (\"New Computer Modern\", \"Noto Sans CJK JP\"))\n\
+         font: (\"Noto Sans CJK JP\", \"New Computer Modern\"), \
+         top-edge: \"ascender\", bottom-edge: \"descender\")\n\
          #set par(justify: {justify})\n\
          #set align({al})\n\
          {body}",
