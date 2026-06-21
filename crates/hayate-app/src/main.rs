@@ -254,6 +254,10 @@ struct HayateApp {
     /// Last canvas mouse-down (time, x, y), for manual double-click detection when the platform
     /// does not deliver `click_count >= 2`.
     last_click: Option<(std::time::Instant, f32, f32)>,
+    /// An already-selected text box pressed this gesture: if the press ends as a click (no drag),
+    /// mouse-up enters text editing. Cleared when a drag begins. Lets a click on a selected text
+    /// box edit it while a press-and-drag still moves it.
+    pending_text_click: Option<Entity>,
     /// Whether the home/start screen is shown instead of the editor. True at launch; left when a
     /// presentation is created ("New") or opened from the recents list.
     home: bool,
@@ -443,6 +447,7 @@ impl HayateApp {
             marquee: None,
             last_viewport: None,
             last_click: None,
+            pending_text_click: None,
             home: true,
             home_recents: Vec::new(),
             home_loaded: false,

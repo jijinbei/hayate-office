@@ -1553,3 +1553,59 @@ fn add_slide_with_layout_uses_the_chosen_layout(cx: &mut TestAppContext) {
         assert!(!a.add_slide_menu, "the picker closes after adding");
     });
 }
+
+#[gpui::test]
+fn click_on_selected_text_enters_edit(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |s, _| s.add_text_box());
+    let e = app.read_with(cx, |s, _| s.selection.unwrap());
+    // add_text_box drops into edit; commit it (click empty corner) to get a selected, non-editing box.
+    let (ex, ey) = app.read_with(cx, |s, _| {
+        let b = prim_bounds(
+            &s.scene
+                .nodes
+                .iter()
+                .find(|n| n.source == Some(e))
+                .unwrap()
+                .prim,
+        );
+        (b.x + b.w * 0.5, b.y + b.h * 0.5)
+    });
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, 5.0, 5.0), cx); // empty-ish corner commits + deselects
+        s.on_mouse_up(&mouse_up(5.0, 5.0), cx);
+    });
+    // First click selects the text box (no edit yet).
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, ex, ey), cx);
+        s.on_mouse_up(&mouse_up(ex, ey), cx);
+    });
+    assert_eq!(
+        app.read_with(cx, |s, _| s.selection),
+        Some(e),
+        "first click selects"
+    );
+    assert!(
+        app.read_with(cx, |s, _| s.text_edit.is_none()),
+        "first click does not edit"
+    );
+    // Second click (now selected) enters edit mode.
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, ex, ey), cx);
+        s.on_mouse_up(&mouse_up(ex, ey), cx);
+    });
+    assert_eq!(
+        app.read_with(cx, |s, _| s.text_edit.as_ref().map(|t| t.entity)),
+        Some(e),
+        "clicking the already-selected text box enters edit mode"
+    );
+    // Clicking elsewhere commits and returns to preview.
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, 5.0, 5.0), cx);
+        s.on_mouse_up(&mouse_up(5.0, 5.0), cx);
+    });
+    assert!(
+        app.read_with(cx, |s, _| s.text_edit.is_none()),
+        "clicking elsewhere exits edit"
+    );
+}

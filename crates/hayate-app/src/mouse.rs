@@ -184,6 +184,11 @@ impl HayateApp {
                 }
             }
         }
+        // A click (press without drag) on an ALREADY-selected text box enters edit mode on
+        // mouse-up (a press-and-drag still moves it; clicking an unselected box just selects it).
+        self.pending_text_click = hit.filter(|&h| {
+            already_selected && self.text_edit.is_none() && self.pres.world.texts.contains_key(&h)
+        });
         // Drag moves every selected shape (group / multi-select) together — except a locked
         // placeholder, whose position is fixed by the layout (it can still be selected and have its
         // text edited, just not moved).
@@ -275,6 +280,10 @@ impl HayateApp {
         let Some(d) = self.drag.take() else { return };
         let dx = (f32::from(ev.position.x - d.start_cursor.x) as f64 / scale) as i64;
         let dy = (f32::from(ev.position.y - d.start_cursor.y) as f64 / scale) as i64;
+        // This press became a real drag, not a click: cancel the pending click-to-edit.
+        if dx != 0 || dy != 0 {
+            self.pending_text_click = None;
+        }
         // Snap the primary shape to guides, then apply the same (snapped) delta to every member.
         let Some(&(_, prim_start)) = d.entities.iter().find(|(e, _)| *e == d.primary) else {
             // Primary should always be in `entities`; restore the drag and bail without dropping it.
@@ -484,7 +493,14 @@ impl HayateApp {
             return;
         }
         self.guides.clear();
-        let Some(d) = self.drag.take() else { return };
+        let Some(d) = self.drag.take() else {
+            // No drag (e.g. a locked placeholder): a click on a selected text box still edits.
+            if let Some(e) = self.pending_text_click.take() {
+                self.begin_text_edit(e);
+                cx.notify();
+            }
+            return;
+        };
         // Revert every member to its start, then commit the whole move as one undoable step.
         let mut ops = Vec::new();
         for (e, start) in &d.entities {
@@ -500,6 +516,10 @@ impl HayateApp {
         }
         if !ops.is_empty() {
             self.commit_tx(Transaction::new("move", ops));
+            self.pending_text_click = None;
+        } else if let Some(e) = self.pending_text_click.take() {
+            // A click (no move) on an already-selected text box: enter edit mode.
+            self.begin_text_edit(e);
         }
         cx.notify();
     }

@@ -38,6 +38,9 @@ impl HayateApp {
             selected: caret..caret,
             marked: None,
         });
+        // Rebuild so the box now renders as its raw Typst source (not typeset), and the caret can
+        // be placed on the plain-text node.
+        self.rebuild();
     }
 
     /// Apply the current edit buffer as the box's Typst source live (no history), so the in-canvas
