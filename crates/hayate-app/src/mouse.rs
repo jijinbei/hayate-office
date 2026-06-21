@@ -38,10 +38,20 @@ impl HayateApp {
         let o = self.canvas_origin.get();
         let x = f32::from(ev.position.x - o.x);
         let y = f32::from(ev.position.y - o.y);
+        // Double-click detection. The Linux backends do not populate `click_count`, so detect it
+        // ourselves: a second press near the previous one within 450ms. (Tests set `click_count`
+        // explicitly, which is honored too.) On a double, consume the streak so a following click
+        // is a fresh single click.
+        let now = std::time::Instant::now();
+        let is_double = ev.click_count >= 2
+            || self.last_click.is_some_and(|(t, lx, ly)| {
+                now.duration_since(t).as_millis() <= 450 && (x - lx).hypot(y - ly) <= 6.0
+            });
+        self.last_click = if is_double { None } else { Some((now, x, y)) };
         // Double-click drills into a group: select just the shape under the cursor (clearing the
         // group/multi-selection) so it can be moved or edited on its own. For a text shape it
         // also starts in-canvas text editing.
-        if ev.click_count >= 2 {
+        if is_double {
             if let Some(e) = hit_test(&self.scene, x, y) {
                 self.selection = Some(e);
                 self.also.clear();
@@ -59,7 +69,7 @@ impl HayateApp {
         // locked, layout-owned placeholder untouched — matching how the panel shows it as locked and
         // how every other text shape begins editing on double-click. A bare click no longer creates
         // a phantom slide-level copy.
-        if ev.click_count >= 2 && self.scope.is_slide() && hit_test(&self.scene, x, y).is_none() {
+        if is_double && self.scope.is_slide() && hit_test(&self.scene, x, y).is_none() {
             let scale = self.scale();
             if scale > 0.0 {
                 let ex = (x as f64 / scale) as i64;

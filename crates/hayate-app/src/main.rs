@@ -251,6 +251,9 @@ struct HayateApp {
     marquee: Option<(f32, f32, f32, f32)>,
     /// Last window viewport size; used to refit the slide when the window is resized.
     last_viewport: Option<gpui::Size<gpui::Pixels>>,
+    /// Last canvas mouse-down (time, x, y), for manual double-click detection when the platform
+    /// does not deliver `click_count >= 2`.
+    last_click: Option<(std::time::Instant, f32, f32)>,
     /// Whether the home/start screen is shown instead of the editor. True at launch; left when a
     /// presentation is created ("New") or opened from the recents list.
     home: bool,
@@ -439,6 +442,7 @@ impl HayateApp {
             resizing_sidebar: false,
             marquee: None,
             last_viewport: None,
+            last_click: None,
             home: true,
             home_recents: Vec::new(),
             home_loaded: false,
