@@ -1149,6 +1149,16 @@ impl HayateApp {
     /// insert it as a Picture shape (via `insert_image_bytes`) and return `true` to signal the
     /// paste was handled. Returns `false` when there is no clipboard image, so the caller can
     /// fall back to the internal shape paste.
+    /// Read plain text from the system clipboard, if any. Used by the text-only panels (script,
+    /// AI prompt) where paste should insert characters rather than shapes or images.
+    pub(crate) fn read_clipboard_text(&self, cx: &mut Context<Self>) -> Option<String> {
+        let item = cx.read_from_clipboard()?;
+        item.entries().iter().find_map(|e| match e {
+            ClipboardEntry::String(s) => Some(s.text().to_string()),
+            _ => None,
+        })
+    }
+
     pub(crate) fn paste_clipboard_image(&mut self, cx: &mut Context<Self>) -> bool {
         // 1) gpui's own clipboard read: a decoded image, or file paths / a file URI pointing at
         //    an image. On Wayland gpui returns text in preference to an image when the source

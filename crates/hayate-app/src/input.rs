@@ -316,6 +316,13 @@ impl HayateApp {
                     self.run_script_src(&p.buf);
                 }
             }
+            "v" if cmd => {
+                if let Some(text) = self.read_clipboard_text(cx) {
+                    if let Some(p) = self.script_panel.as_mut() {
+                        p.buf.push_str(&text);
+                    }
+                }
+            }
             "enter" => {
                 if let Some(p) = self.script_panel.as_mut() {
                     p.buf.push('\n');
@@ -336,7 +343,9 @@ impl HayateApp {
                     p.buf.push_str("  ");
                 }
             }
-            s if s.chars().count() == 1 => {
+            // Plain typed character. Ignore modifier combos (e.g. Cmd+C) so they don't insert
+            // literal letters into the buffer.
+            s if s.chars().count() == 1 && !cmd => {
                 if let Some(p) = self.script_panel.as_mut() {
                     p.buf.push_str(s);
                 }
@@ -349,8 +358,17 @@ impl HayateApp {
     /// Key handling for the AI prompt. Enter submits the natural-language request to the AI
     /// authoring loop (and closes the prompt); Esc cancels. Single-line editing like the dialog.
     pub(crate) fn ai_panel_key(&mut self, ev: &KeyDownEvent, cx: &mut Context<Self>) {
-        match ev.keystroke.key.as_str() {
+        let k = &ev.keystroke;
+        let cmd = k.modifiers.platform || k.modifiers.control;
+        match k.key.as_str() {
             "escape" => self.ai_panel = None,
+            "v" if cmd => {
+                if let Some(text) = self.read_clipboard_text(cx) {
+                    if let Some(p) = self.ai_panel.as_mut() {
+                        p.buf.push_str(&text);
+                    }
+                }
+            }
             "enter" => {
                 if let Some(p) = self.ai_panel.take() {
                     let req = p.buf.trim().to_string();
@@ -369,7 +387,7 @@ impl HayateApp {
                     p.buf.push(' ');
                 }
             }
-            s if s.chars().count() == 1 => {
+            s if s.chars().count() == 1 && !cmd => {
                 if let Some(p) = self.ai_panel.as_mut() {
                     p.buf.push_str(s);
                 }

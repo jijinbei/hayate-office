@@ -1662,6 +1662,31 @@ fn ribbon_helpers_drive_actions(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn script_panel_pastes_clipboard_text(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    app.update(cx, |a, _| {
+        a.script_panel = Some(super::ScriptPanel {
+            buf: "shape.".into(),
+        })
+    });
+    cx.update(|cx| cx.write_to_clipboard(gpui::ClipboardItem::new_string("add_rect(1)".into())));
+    // Cmd/Ctrl+V appends the clipboard text; a bare "v" would insert a literal letter.
+    app.update(cx, |a, cx| a.on_key_down(&keydown("cmd-v"), cx));
+    assert_eq!(
+        app.read_with(cx, |a, _| a.script_panel.as_ref().unwrap().buf.clone()),
+        "shape.add_rect(1)",
+        "paste appends clipboard text into the script buffer"
+    );
+    // A modified letter that is not paste must not insert itself.
+    app.update(cx, |a, cx| a.on_key_down(&keydown("cmd-c"), cx));
+    assert_eq!(
+        app.read_with(cx, |a, _| a.script_panel.as_ref().unwrap().buf.clone()),
+        "shape.add_rect(1)",
+        "Cmd+C does not insert a literal 'c'"
+    );
+}
+
+#[gpui::test]
 fn tools_tab_opens_panels(cx: &mut TestAppContext) {
     let app = cx.new(|cx| HayateApp::new(cx));
     // The Tools tab's buttons open the script console, AI prompt, and command palette. They set
