@@ -8,11 +8,14 @@
 //
 // 使う関数（すべて生成 API。docs/scripting-api.md 参照）:
 //   masters() / layouts()             -> マスター / レイアウト id の配列
+//   placeholders(slide)               -> そのスライドのテンプレ枠（"title","body" など）
 //   slide_add(layout)                 -> 新規スライド id
+//   slide_set_title(slide, "text")    -> Title プレースホルダを埋める（位置・体裁はテンプレ継承）
+//   slide_set_body(slide, "text")     -> Body プレースホルダを埋める（同上）
+//   slide_set_placeholder(slide, kind, idx, "text") -> 汎用（kind="title"|"body"|"subtitle"…）
 //   slide_set_background(entity,"#..")-> 背景（マスター/レイアウト/スライドに設定可、下位へ継承）
-//   shape_add_text(c, x,y,w,h, "Typstソース") -> テキストboxの id（Typstで描画）
 //   shape_add_rect(c, x,y,w,h)        -> 矩形 id（マスターに置くと全スライドの装飾になる）
-//   shape_set_font_size(id, pt) / shape_fill_accent1(id)
+//   shape_add_text(c, x,y,w,h,"...")  -> 自由配置テキスト / shape_set_font_size / shape_fill_accent1
 
 let m = masters()[0];
 let lay = layouts()[0];
@@ -28,15 +31,13 @@ shape_fill_accent1(foot);
 let brand = shape_add_text(m, 40, 500, 400, 28, "HayateOffice");
 shape_set_font_size(brand, 14);
 
-// タイトル＋本文の1枚を作るヘルパ。装飾はマスター任せ、ここは中身だけ。
+// タイトル＋本文の1枚を作るヘルパ。位置や体裁はレイアウト/マスターのテンプレ枠に従う。
+// （「New」直後のデッキはレイアウトに Title / Body のテンプレ枠を持っています）
 fn titled(lay, title, body) {
     let s = slide_add(lay);
-    // 見出し（Typst の `=` 見出し）
-    let t = shape_add_text(s, 48, 48, 864, 96, "= " + title);
-    shape_set_font_size(t, 40);
-    // 本文
-    let b = shape_add_text(s, 56, 176, 848, 320, body);
-    shape_set_font_size(b, 26);
+    // Title 枠に Typst 見出し（`=`）で大きく。位置・サイズはテンプレ枠から継承。
+    slide_set_title(s, "= " + title);
+    slide_set_body(s, body);
     s
 }
 

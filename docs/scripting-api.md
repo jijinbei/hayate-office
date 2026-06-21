@@ -75,3 +75,6 @@ Each command is exposed to Rhai scripts as the listed function (positional argum
 | --- | --- | --- |
 | `slide_add(layout)` | `slide.add` | Create a new slide using the given layout; returns the new slide id. |
 | `slide_set_background(slide, color)` | `slide.set_background` | Set the slide's background to a solid color (#RRGGBB or a theme token). |
+| `slide_set_placeholder(slide, kind, idx, text)` | `slide.set_placeholder` | Fill a template placeholder on a slide by type (title|centered_title|subtitle|body|footer|slide_number|date) and index. The text is Typst markup; geometry and style are inherited from the slide's layout/master, so it lands in the template slot. |
+| `slide_set_title(slide, text)` | `slide.set_title` | Fill the slide's Title placeholder (type=Title, idx=0) with Typst text, following the layout/master template. Shorthand for slide.set_placeholder(slide, "title", 0, text). |
+| `slide_set_body(slide, text)` | `slide.set_body` | Fill the slide's Body placeholder (type=Body, idx=0) with Typst text, following the layout/master template. Shorthand for slide.set_placeholder(slide, "body", 0, text). |

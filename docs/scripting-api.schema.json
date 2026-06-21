@@ -878,5 +878,79 @@
       "type": "object"
     },
     "name": "slide.set_background"
+  },
+  {
+    "description": "Fill a template placeholder on a slide by type (title|centered_title|subtitle|body|footer|slide_number|date) and index. The text is Typst markup; geometry and style are inherited from the slide's layout/master, so it lands in the template slot.",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "idx": {
+          "type": "integer"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "slide": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slide",
+        "kind",
+        "idx",
+        "text"
+      ],
+      "type": "object"
+    },
+    "name": "slide.set_placeholder"
+  },
+  {
+    "description": "Fill the slide's Title placeholder (type=Title, idx=0) with Typst text, following the layout/master template. Shorthand for slide.set_placeholder(slide, \"title\", 0, text).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "slide": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slide",
+        "text"
+      ],
+      "type": "object"
+    },
+    "name": "slide.set_title"
+  },
+  {
+    "description": "Fill the slide's Body placeholder (type=Body, idx=0) with Typst text, following the layout/master template. Shorthand for slide.set_placeholder(slide, \"body\", 0, text).",
+    "input_schema": {
+      "additionalProperties": false,
+      "properties": {
+        "slide": {
+          "description": "entity id",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "slide",
+        "text"
+      ],
+      "type": "object"
+    },
+    "name": "slide.set_body"
   }
 ]

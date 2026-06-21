@@ -12,7 +12,7 @@
 //! a deliberate placeholder for that.
 
 use hayate_ir::color::{Color, Rgba, ThemeColorToken};
-use hayate_ir::doc::SlideInfo;
+use hayate_ir::doc::{PlaceholderRef, PlaceholderType, SlideInfo};
 use hayate_ir::font::{FontRef, ThemeFontSlot};
 use hayate_ir::frac::FracIndex;
 use hayate_ir::geom::{PointEmu, RectEmu, SizeEmu};
@@ -1141,7 +1141,152 @@ pub fn builtins() -> CommandRegistry {
         },
     );
 
+    // slide.set_placeholder — fill a template placeholder (Title/Body/…) on a slide, following
+    // the layout/master template: the override carries only the text, so position, size and style
+    // keep resolving from the layout/master. Re-setting the same (type, idx) updates it in place.
+    reg.register(
+        CommandMeta::new("slide.set_placeholder", "Set Placeholder Text", "Slide").describe(
+            "Fill a template placeholder on a slide by type (title|centered_title|subtitle|body|\
+             footer|slide_number|date) and index. The text is Typst markup; geometry and style are \
+             inherited from the slide's layout/master, so it lands in the template slot.",
+        ),
+        vec![
+            ParamSpec::new("slide", ParamType::Entity),
+            ParamSpec::new("kind", ParamType::String),
+            ParamSpec::new("idx", ParamType::Int),
+            ParamSpec::new("text", ParamType::String),
+        ],
+        |world, args| match (
+            arg_entity(args, "slide"),
+            arg_str(args, "kind").and_then(|k| parse_ph_type(&k)),
+            arg_str(args, "text"),
+        ) {
+            (Some(slide), Some(ph_type), Some(text)) => {
+                let idx = arg_i64(args, "idx").unwrap_or(0).max(0) as u32;
+                set_placeholder_ops(world, slide, PlaceholderRef { ph_type, idx }, text)
+            }
+            _ => vec![],
+        },
+    );
+
+    // slide.set_title — convenience for the primary Title placeholder (type=Title, idx=0).
+    reg.register(
+        CommandMeta::new("slide.set_title", "Set Slide Title", "Slide").describe(
+            "Fill the slide's Title placeholder (type=Title, idx=0) with Typst text, following the \
+             layout/master template. Shorthand for slide.set_placeholder(slide, \"title\", 0, text).",
+        ),
+        vec![
+            ParamSpec::new("slide", ParamType::Entity),
+            ParamSpec::new("text", ParamType::String),
+        ],
+        |world, args| match (arg_entity(args, "slide"), arg_str(args, "text")) {
+            (Some(slide), Some(text)) => set_placeholder_ops(
+                world,
+                slide,
+                PlaceholderRef {
+                    ph_type: PlaceholderType::Title,
+                    idx: 0,
+                },
+                text,
+            ),
+            _ => vec![],
+        },
+    );
+
+    // slide.set_body — convenience for the primary Body placeholder (type=Body, idx=0).
+    reg.register(
+        CommandMeta::new("slide.set_body", "Set Slide Body", "Slide").describe(
+            "Fill the slide's Body placeholder (type=Body, idx=0) with Typst text, following the \
+             layout/master template. Shorthand for slide.set_placeholder(slide, \"body\", 0, text).",
+        ),
+        vec![
+            ParamSpec::new("slide", ParamType::Entity),
+            ParamSpec::new("text", ParamType::String),
+        ],
+        |world, args| match (arg_entity(args, "slide"), arg_str(args, "text")) {
+            (Some(slide), Some(text)) => set_placeholder_ops(
+                world,
+                slide,
+                PlaceholderRef {
+                    ph_type: PlaceholderType::Body,
+                    idx: 0,
+                },
+                text,
+            ),
+            _ => vec![],
+        },
+    );
+
     reg
+}
+
+/// Build the ops to fill `ph` on `slide` with Typst `text`, following the template: the slide-level
+/// override stores the text only (no `Frame`), so geometry/style keep resolving from the layout and
+/// master. If the slide already overrides this exact `(type, idx)`, the text is replaced in place
+/// (idempotent re-set); otherwise a new override placeholder is spawned and parented to the slide.
+fn set_placeholder_ops(
+    world: &World,
+    slide: Entity,
+    ph: PlaceholderRef,
+    text: String,
+) -> Vec<Operation> {
+    // Typst-first body (matches shape.add_text); the plain paragraph is the fallback.
+    let body = TextBody {
+        paragraphs: vec![Paragraph::new(vec![default_run(text.clone())])],
+        autofit: false,
+        typst_source: Some(text),
+    };
+    let existing = world
+        .iter()
+        .find(|e| world.parent.get(e) == Some(&slide) && world.placeholders.get(e) == Some(&ph));
+    if let Some(e) = existing {
+        return vec![Operation::SetComponent {
+            entity: e,
+            value: CompValue::Text(body),
+        }];
+    }
+    let e = world.next_id();
+    vec![
+        Operation::Spawn { entity: e },
+        Operation::SetComponent {
+            entity: e,
+            value: CompValue::Parent(slide),
+        },
+        Operation::SetComponent {
+            entity: e,
+            value: CompValue::Order(append_order(world, slide)),
+        },
+        Operation::SetComponent {
+            entity: e,
+            value: CompValue::Placeholder(ph),
+        },
+        Operation::SetComponent {
+            entity: e,
+            value: CompValue::Text(body),
+        },
+    ]
+}
+
+/// Parse a placeholder-type name (case-insensitive, `_` optional) into a [`PlaceholderType`].
+fn parse_ph_type(s: &str) -> Option<PlaceholderType> {
+    let key: String = s
+        .chars()
+        .filter(|c| !c.is_whitespace() && *c != '_')
+        .flat_map(|c| c.to_lowercase())
+        .collect();
+    Some(match key.as_str() {
+        "title" => PlaceholderType::Title,
+        "centeredtitle" | "ctitle" => PlaceholderType::CenteredTitle,
+        "subtitle" => PlaceholderType::Subtitle,
+        "body" | "content" => PlaceholderType::Body,
+        "picture" | "image" => PlaceholderType::Picture,
+        "chart" => PlaceholderType::Chart,
+        "table" => PlaceholderType::Table,
+        "date" => PlaceholderType::Date,
+        "footer" => PlaceholderType::Footer,
+        "slidenumber" | "pagenumber" => PlaceholderType::SlideNumber,
+        _ => return None,
+    })
 }
 
 /// A `FracIndex` that appends after the last existing slide (entities carrying a `Slide` component).

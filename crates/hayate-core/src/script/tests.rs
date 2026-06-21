@@ -239,6 +239,80 @@ fn intro_lt_builds_a_full_deck() {
 }
 
 #[test]
+fn set_title_fills_the_template_placeholder() {
+    use hayate_ir::doc::{PlaceholderRef, PlaceholderType};
+    use hayate_model::edit::{self, LayoutPreset};
+
+    // A deck whose layout carries the "Title and Content" template (Title + Body placeholders).
+    let mut p = Presentation::new();
+    let master = p.add_master(Theme::default());
+    let layout = p.add_layout(master, "Title and Content");
+    let mut order = hayate_ir::frac::FracIndex::after(None);
+    for spec in edit::preset_placeholders(LayoutPreset::TitleAndContent, p.slide_size) {
+        let e = p.world.reserve_id();
+        let tx = edit::create_placeholder(e, layout, order.clone(), spec.ph, spec.frame, None);
+        apply(&mut p, tx.ops);
+        order = hayate_ir::frac::FracIndex::after(Some(&order));
+    }
+    let slide = p.add_slide(layout);
+
+    let title = PlaceholderRef {
+        ph_type: PlaceholderType::Title,
+        idx: 0,
+    };
+    // The title slot resolves a frame from the layout before we fill it.
+    assert!(
+        p.ph_frame(slide, title).is_some(),
+        "layout defines a Title slot"
+    );
+
+    let ctx = ScriptContext {
+        current_slide: Some(slide),
+        selection: vec![],
+    };
+    let reg = Rc::new(builtins());
+    let out = run_script(
+        Rc::clone(&reg),
+        &p,
+        &ctx,
+        &format!(
+            "slide_set_title({0}, \"Hello\"); slide_set_body({0}, \"- a\\n- b\");",
+            slide.0
+        ),
+    )
+    .expect("runs");
+    apply(&mut p, out.ops);
+
+    // The slide now resolves the title text we set, in the inherited (template) frame.
+    let body = p.ph_text(slide, title).expect("title text resolves");
+    assert_eq!(body.typst_source.as_deref(), Some("Hello"));
+    assert!(
+        p.ph_frame(slide, title).is_some(),
+        "geometry still inherited"
+    );
+
+    // Re-setting the same placeholder updates in place (no duplicate override child).
+    let out = run_script(
+        Rc::clone(&reg),
+        &p,
+        &ctx,
+        &format!("slide_set_title({}, \"Hi\");", slide.0),
+    )
+    .expect("runs");
+    apply(&mut p, out.ops);
+    let title_children = p
+        .children(slide)
+        .into_iter()
+        .filter(|e| p.world.placeholders.get(e) == Some(&title))
+        .count();
+    assert_eq!(title_children, 1, "re-set updates in place, no duplicate");
+    assert_eq!(
+        p.ph_text(slide, title).unwrap().typst_source.as_deref(),
+        Some("Hi")
+    );
+}
+
+#[test]
 fn check_script_flags_syntax_errors_only() {
     use crate::check_script;
     assert!(check_script("").is_none(), "empty source is not an error");

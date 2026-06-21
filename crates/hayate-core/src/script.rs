@@ -30,6 +30,7 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
+use hayate_ir::doc::PlaceholderType;
 use hayate_ir::presentation::Presentation;
 use hayate_ir::world::{CompKind, CompValue, Entity};
 use hayate_model::Operation;
@@ -281,6 +282,27 @@ fn register_all(
         });
     }
     {
+        // Template slots available on a slide (resolved through layout/master), as names like
+        // "title" or "body#1". Pass the name's type to `slide_set_placeholder` to fill the slot.
+        let st = Rc::clone(state);
+        engine.register_fn("placeholders", move |slide: i64| -> Array {
+            st.borrow()
+                .pres
+                .effective_placeholders(Entity(slide as u64))
+                .into_iter()
+                .map(|ph| {
+                    let name = ph_type_name(ph.ph_type);
+                    let s = if ph.idx == 0 {
+                        name.to_string()
+                    } else {
+                        format!("{name}#{}", ph.idx)
+                    };
+                    Dynamic::from(s)
+                })
+                .collect()
+        });
+    }
+    {
         let current = ctx.current_slide;
         engine.register_fn("current_slide", move || -> Dynamic {
             match current {
@@ -378,6 +400,23 @@ fn register_all(
                 Ok(result)
             },
         );
+    }
+}
+
+/// Lowercase, underscore-free name for a placeholder type (matches `slide.set_placeholder`'s
+/// `kind` parser), used by the `placeholders()` query.
+fn ph_type_name(t: PlaceholderType) -> &'static str {
+    match t {
+        PlaceholderType::Title => "title",
+        PlaceholderType::CenteredTitle => "centeredtitle",
+        PlaceholderType::Subtitle => "subtitle",
+        PlaceholderType::Body => "body",
+        PlaceholderType::Picture => "picture",
+        PlaceholderType::Chart => "chart",
+        PlaceholderType::Table => "table",
+        PlaceholderType::Date => "date",
+        PlaceholderType::Footer => "footer",
+        PlaceholderType::SlideNumber => "slidenumber",
     }
 }
 
