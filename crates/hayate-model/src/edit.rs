@@ -544,6 +544,26 @@ pub fn set_paragraphs(world: &World, e: Entity, lines: &[(String, u8)]) -> Trans
 /// Used both for the final commit (via history) and—applied directly—for live preview and revert.
 pub fn set_typst_source(world: &World, e: Entity, source: String) -> Transaction {
     let existing = world.texts.get(&e);
+    // A placeholder fill that defers styling to the template carries an existing-but-runless
+    // TextBody (see hayate-core's slide.set_placeholder). Editing its text must KEEP it runless so
+    // it keeps inheriting the master/layout size & weight — otherwise the text would snap to a
+    // baked default size. (A brand-new text box has no Text component yet, so it still gets the
+    // plain-run fallback below.)
+    let defer = matches!(existing, Some(b) if b.paragraphs.iter().all(|p| p.runs.is_empty()));
+    if defer {
+        let body = TextBody {
+            paragraphs: Vec::new(),
+            autofit: existing.map(|b| b.autofit).unwrap_or(false),
+            typst_source: Some(source),
+        };
+        return Transaction::new(
+            "set typst source",
+            vec![Operation::SetComponent {
+                entity: e,
+                value: CompValue::Text(body),
+            }],
+        );
+    }
     let template = existing
         .and_then(|b| b.paragraphs.first())
         .and_then(|p| p.runs.first())

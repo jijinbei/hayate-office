@@ -365,6 +365,60 @@ fn set_title_fills_the_template_placeholder() {
         p.ph_text(slide, title).unwrap().typst_source.as_deref(),
         Some("Hi")
     );
+
+    // Find the slide-level override entity for the Title.
+    let title_entity = p
+        .children(slide)
+        .into_iter()
+        .find(|e| p.world.placeholders.get(e) == Some(&title))
+        .expect("title override exists");
+    let template_pt = p.ph_run_style(slide, title).map(|r| r.size).unwrap();
+
+    // Editing the text keeps the override runless, so it still inherits the template size.
+    let tx = hayate_model::edit::set_typst_source(&p.world, title_entity, "Edited".to_string());
+    apply(&mut p, tx.ops);
+    let edited = p.ph_text(slide, title).unwrap();
+    assert_eq!(edited.typst_source.as_deref(), Some("Edited"));
+    assert!(
+        edited.paragraphs.iter().all(|para| para.runs.is_empty()),
+        "editing text keeps the override runless (still inheriting)"
+    );
+    assert_eq!(
+        p.ph_run_style(slide, title).map(|r| r.size),
+        Some(template_pt),
+        "edited title still inherits the template size"
+    );
+
+    // Changing the font size in normal slide mode pins a per-slide size (the special case),
+    // materializing a run while keeping the template's other styling (e.g. bold).
+    let out = run_script(
+        Rc::clone(&reg),
+        &p,
+        &ctx,
+        &format!("shape_set_font_size({}, 12);", title_entity.0),
+    )
+    .expect("runs");
+    apply(&mut p, out.ops);
+    let resized = p.ph_text(slide, title).unwrap();
+    let run = resized
+        .paragraphs
+        .first()
+        .and_then(|para| para.runs.first())
+        .expect("size override materialized a run");
+    assert_eq!(
+        run.size,
+        hayate_ir::units::pt(12),
+        "per-slide size override applied"
+    );
+    assert!(
+        run.bold,
+        "template's bold styling is preserved through the resize"
+    );
+    assert_eq!(
+        resized.typst_source.as_deref(),
+        Some("Edited"),
+        "the text content is preserved through the resize"
+    );
 }
 
 #[test]

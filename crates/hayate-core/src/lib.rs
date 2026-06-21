@@ -713,18 +713,41 @@ pub fn builtins() -> CommandRegistry {
         |world, args| match (arg_entity(args, "entity"), arg_i64(args, "pt")) {
             (Some(entity), Some(points)) => match world.texts.get(&entity) {
                 Some(existing) => {
-                    // Clamp to a minimum of 1pt, then apply to every run.
+                    // Clamp to a minimum of 1pt.
                     let size = pt(points.max(1));
-                    let mut body = existing.clone();
-                    for para in &mut body.paragraphs {
-                        for run in &mut para.runs {
-                            run.size = size;
+                    let has_runs = existing.paragraphs.iter().any(|p| !p.runs.is_empty());
+                    if has_runs {
+                        // Apply to every run, preserving all other formatting.
+                        let mut body = existing.clone();
+                        for para in &mut body.paragraphs {
+                            for run in &mut para.runs {
+                                run.size = size;
+                            }
                         }
+                        vec![Operation::SetComponent {
+                            entity,
+                            value: CompValue::Text(body),
+                        }]
+                    } else {
+                        // A placeholder fill that inherits its style (no runs) gets a per-slide
+                        // size override: materialize one run from the template's style at the new
+                        // size, so this slide pins the size while keeping the rest of the look.
+                        let mut run = placeholder_template_run(world, entity)
+                            .unwrap_or_else(|| default_run(String::new()));
+                        run.size = size;
+                        if let Some(src) = &existing.typst_source {
+                            run.text = src.clone();
+                        }
+                        let body = TextBody {
+                            paragraphs: vec![Paragraph::new(vec![run])],
+                            autofit: existing.autofit,
+                            typst_source: existing.typst_source.clone(),
+                        };
+                        vec![Operation::SetComponent {
+                            entity,
+                            value: CompValue::Text(body),
+                        }]
                     }
-                    vec![Operation::SetComponent {
-                        entity,
-                        value: CompValue::Text(body),
-                    }]
                 }
                 // No text to size: lenient no-op.
                 None => vec![],
@@ -1268,6 +1291,36 @@ fn set_placeholder_ops(
             value: CompValue::Text(body),
         },
     ]
+}
+
+/// If `entity` is a placeholder override, the run style (font/size/bold/color) of the matching
+/// template placeholder resolved up its slide's layout→master chain. Used to seed a per-slide
+/// size override so it keeps the template's other styling. `None` for non-placeholder shapes or
+/// when the template defines no run.
+fn placeholder_template_run(world: &World, entity: Entity) -> Option<Run> {
+    let ph = match world.get(entity, CompKind::Placeholder) {
+        Some(CompValue::Placeholder(ph)) => ph,
+        _ => return None,
+    };
+    let slide = match world.get(entity, CompKind::Parent) {
+        Some(CompValue::Parent(p)) => p,
+        _ => return None,
+    };
+    let first_run_of = |container: Entity| -> Option<Run> {
+        let e = world.iter().find(|e| {
+            world.parent.get(e) == Some(&container) && world.placeholders.get(e) == Some(&ph)
+        })?;
+        match world.get(e, CompKind::Text) {
+            Some(CompValue::Text(tb)) => tb.paragraphs.first()?.runs.first().cloned(),
+            _ => None,
+        }
+    };
+    let layout = world.slide_info.get(&slide)?.layout;
+    if let Some(r) = first_run_of(layout) {
+        return Some(r);
+    }
+    let master = world.layout_info.get(&layout)?.master;
+    first_run_of(master)
 }
 
 /// Parse a placeholder-type name (case-insensitive, `_` optional) into a [`PlaceholderType`].

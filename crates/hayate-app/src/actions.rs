@@ -1101,13 +1101,24 @@ impl HayateApp {
     /// Current font size (in points) of the selected shape's first run, if any.
     pub(crate) fn sel_font_size_pt(&self) -> Option<i64> {
         let e = self.selection?;
-        self.pres
-            .world
-            .texts
-            .get(&e)
-            .and_then(|tb| tb.paragraphs.first())
-            .and_then(|p| p.runs.first())
-            .map(|r| r.size / hayate_ir::units::EMU_PER_PT)
+        let tb = self.pres.world.texts.get(&e)?;
+        if let Some(r) = tb.paragraphs.first().and_then(|p| p.runs.first()) {
+            return Some(r.size / hayate_ir::units::EMU_PER_PT);
+        }
+        // A placeholder fill that inherits its style (no runs) reports the template's size, so the
+        // A-/A+ buttons step from the size actually shown rather than from a default.
+        if let (Some(CompValue::Placeholder(ph)), Some(CompValue::Parent(slide))) = (
+            self.pres
+                .world
+                .get(e, hayate_ir::world::CompKind::Placeholder),
+            self.pres.world.get(e, hayate_ir::world::CompKind::Parent),
+        ) {
+            return self
+                .pres
+                .ph_run_style(slide, ph)
+                .map(|r| r.size / hayate_ir::units::EMU_PER_PT);
+        }
+        None
     }
 
     /// Adjust the selected shape's font size by `delta_pt` points via `shape.set_font_size`.
