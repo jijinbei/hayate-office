@@ -178,6 +178,19 @@ fn wrap_source(
     )
 }
 
+/// Convert premultiplied RGBA (typst's raster output) to the premultiplied BGRA that gpui's
+/// `RenderImage` wants, swapping the R and B channels. Defined here — in a dependency that the
+/// dev profile optimizes (`profile.dev.package."*"`) — so the per-pixel loop stays fast even in a
+/// debug build of the app crate, which is itself unoptimized. (At 4K this loop is ~100ms unopt vs
+/// a few ms optimized, and it runs on every slideshow transition.)
+pub fn rgba_to_bgra(rgba: &[u8]) -> Vec<u8> {
+    let mut bgra = rgba.to_vec();
+    for px in bgra.chunks_exact_mut(4) {
+        px.swap(0, 2);
+    }
+    bgra
+}
+
 /// Compile `full_src` and rasterize page 0 at `ppp` pixels-per-point.
 fn compile_raster(full_src: &str, ppp: f32) -> Result<RasterImage, String> {
     ENGINE.with(|engine| {

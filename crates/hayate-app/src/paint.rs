@@ -505,10 +505,9 @@ fn typst_render_image(
         if let Some(hit) = cache.borrow().get(&key) {
             return std::sync::Arc::clone(hit);
         }
-        let mut bgra = (**rgba).clone();
-        for px in bgra.chunks_exact_mut(4) {
-            px.swap(0, 2);
-        }
+        // The R/B swap runs in hayate-render (an optimized dependency), not here in the app crate,
+        // so it stays fast in debug builds — this is on the slideshow transition path.
+        let bgra = hayate_render::typst_render::rgba_to_bgra(rgba);
         let frame = image::Frame::new(
             image::RgbaImage::from_raw(px_w, px_h, bgra)
                 .unwrap_or_else(|| image::RgbaImage::new(1, 1)),
