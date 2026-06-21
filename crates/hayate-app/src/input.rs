@@ -593,8 +593,16 @@ impl HayateApp {
                     cx.notify();
                 }
                 "right" | "down" => {
-                    self.next_slide(1);
-                    self.present_t = 0;
+                    // Advancing past the last slide ends the slideshow (rather than wrapping).
+                    let slides = self.pres.slides();
+                    if slides.last() == Some(&self.slide) {
+                        self.present = false;
+                        // The editor scene wasn't kept in sync during the show; resync it.
+                        self.rebuild();
+                    } else {
+                        self.next_slide(1);
+                        self.present_t = 0;
+                    }
                     cx.notify();
                 }
                 "left" | "up" => {

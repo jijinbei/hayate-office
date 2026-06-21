@@ -1625,10 +1625,14 @@ fn ribbon_defaults_home_and_switches(cx: &mut TestAppContext) {
 #[gpui::test]
 fn slideshow_nav_advances_without_rebuilding_editor_scene(cx: &mut TestAppContext) {
     let app = cx.new(|cx| HayateApp::new(cx));
-    // Need at least two slides to navigate between.
+    // Two slides; start the show on the first one.
     app.update(cx, |a, _| a.add_slide());
-    let (first, n) = app.read_with(cx, |a, _| (a.slide, a.pres.slides().len()));
+    let (first, last, n) = app.read_with(cx, |a, _| {
+        let s = a.pres.slides();
+        (s[0], s[s.len() - 1], s.len())
+    });
     assert!(n >= 2, "deck has multiple slides");
+    app.update(cx, |a, _| a.slide = first);
 
     app.update(cx, |a, _| a.start_present());
     // The slideshow renders its own scene; the editor scene must NOT be rebuilt on a transition.
@@ -1636,21 +1640,18 @@ fn slideshow_nav_advances_without_rebuilding_editor_scene(cx: &mut TestAppContex
     app.update(cx, |a, cx| a.on_key_down(&keydown("right"), cx));
     let (after, present, scene_mid) =
         app.read_with(cx, |a, _| (a.slide, a.present, a.scene.clone()));
-    assert_ne!(
-        after, first,
-        "right advances the current slide in the slideshow"
-    );
+    assert_eq!(after, last, "right advances to the next (last) slide");
     assert!(present, "still presenting after navigating");
     assert_eq!(
         scene_mid, scene_before,
         "editor scene is left untouched during slideshow navigation"
     );
 
-    // Escape exits and resyncs the editor scene to the slide we landed on.
-    app.update(cx, |a, cx| a.on_key_down(&keydown("escape"), cx));
+    // Advancing past the last slide ends the slideshow.
+    app.update(cx, |a, cx| a.on_key_down(&keydown("right"), cx));
     assert!(
         app.read_with(cx, |a, _| !a.present),
-        "escape exits the slideshow"
+        "advancing past the last slide exits the slideshow"
     );
 }
 
