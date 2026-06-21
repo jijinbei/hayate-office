@@ -222,6 +222,8 @@ struct HayateApp {
     font_picker: bool,
     /// Which list the left panel shows (slide thumbnails vs. layers).
     left_tab: LeftTab,
+    /// The active top ribbon tab (File/Home/Insert/Slideshow).
+    ribbon_tab: RibbonTab,
     /// Layer being renamed in the Layers panel: (entity, edit buffer).
     renaming: Option<(Entity, String)>,
     /// Active line endpoint drag, if any.
@@ -289,6 +291,16 @@ enum FontTarget {
 enum LeftTab {
     Slides,
     Layers,
+}
+
+/// The active ribbon tab (the File/Home/Insert/Slideshow strip across the top). Selects which row
+/// of buttons the ribbon shows; the zoom controls are always present on the right.
+#[derive(Clone, Copy, PartialEq)]
+enum RibbonTab {
+    File,
+    Home,
+    Insert,
+    Slideshow,
 }
 
 /// What the canvas is currently editing. Slides are the normal case; a layout or master is
@@ -428,6 +440,7 @@ impl HayateApp {
             context_menu: None,
             font_picker: false,
             left_tab: LeftTab::Slides,
+            ribbon_tab: RibbonTab::Home,
             renaming: None,
             line_drag: None,
             doc_path: DOC_PATH.to_string(),

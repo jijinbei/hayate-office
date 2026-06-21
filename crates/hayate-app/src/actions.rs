@@ -697,6 +697,31 @@ impl HayateApp {
         self.scope.container()
     }
 
+    /// Enter fullscreen presentation (slideshow) mode from the start.
+    pub(crate) fn start_present(&mut self) {
+        self.present = true;
+        self.present_t = 0;
+    }
+
+    /// Undo the last document change (no-op if the history is empty).
+    pub(crate) fn undo(&mut self) {
+        self.history.undo(&mut self.pres.world);
+        self.after_doc_change();
+    }
+
+    /// Redo the last undone change.
+    pub(crate) fn redo(&mut self) {
+        self.history.redo(&mut self.pres.world);
+        self.after_doc_change();
+    }
+
+    /// Open the "Save As" dialog pre-filled with the current document path.
+    pub(crate) fn open_save_dialog(&mut self) {
+        self.save_modal = Some(crate::SaveModal {
+            buf: self.doc_path.clone(),
+        });
+    }
+
     pub(crate) fn rebuild(&mut self) {
         let target = view_px(&self.pres, self.zoom);
         let c = self.container();

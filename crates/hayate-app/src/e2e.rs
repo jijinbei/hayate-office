@@ -1609,3 +1609,54 @@ fn click_on_selected_text_enters_edit(cx: &mut TestAppContext) {
         "clicking elsewhere exits edit"
     );
 }
+
+#[gpui::test]
+fn ribbon_defaults_home_and_switches(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    assert!(
+        app.read_with(cx, |a, _| a.ribbon_tab == super::RibbonTab::Home),
+        "the ribbon starts on Home"
+    );
+    app.update(cx, |a, _| a.ribbon_tab = super::RibbonTab::Insert);
+    assert!(app.read_with(cx, |a, _| a.ribbon_tab == super::RibbonTab::Insert));
+}
+
+#[gpui::test]
+fn ribbon_helpers_drive_actions(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    // Slideshow: Start enters presentation mode.
+    app.update(cx, |a, _| a.start_present());
+    assert!(
+        app.read_with(cx, |a, _| a.present),
+        "start_present enters slideshow"
+    );
+    app.update(cx, |a, cx| a.on_key_down(&keydown("escape"), cx)); // leave present
+
+    // File: Save As opens the dialog.
+    app.update(cx, |a, _| a.open_save_dialog());
+    assert!(
+        app.read_with(cx, |a, _| a.save_modal.is_some()),
+        "open_save_dialog opens the dialog"
+    );
+    app.update(cx, |a, cx| a.on_key_down(&keydown("escape"), cx));
+
+    // Undo/redo round-trip a shape insertion (Insert tab action).
+    let before = app.read_with(cx, |a, _| a.pres.children(a.slide).len());
+    app.update(cx, |a, _| a.add_rect());
+    assert_eq!(
+        app.read_with(cx, |a, _| a.pres.children(a.slide).len()),
+        before + 1
+    );
+    app.update(cx, |a, _| a.undo());
+    assert_eq!(
+        app.read_with(cx, |a, _| a.pres.children(a.slide).len()),
+        before,
+        "undo removes the inserted rectangle"
+    );
+    app.update(cx, |a, _| a.redo());
+    assert_eq!(
+        app.read_with(cx, |a, _| a.pres.children(a.slide).len()),
+        before + 1,
+        "redo restores it"
+    );
+}

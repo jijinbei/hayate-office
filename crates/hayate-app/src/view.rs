@@ -1106,82 +1106,9 @@ impl Render for HayateApp {
             .text_color(rgb(0xffffff))
             // Window title bar (controls live here, ONLYOFFICE-style).
             .children(self.title_bar(cx))
-            // Toolbar: Home + shape-creation tools on the left, zoom on the right.
-            .child(
-                div()
-                    .flex()
-                    .flex_row()
-                    .justify_between()
-                    .items_center()
-                    .px_2()
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap_2()
-                            .items_center()
-                            .child(tool_button("go_home", "\u{2302} Home", cx, |t, _w, cx| {
-                                t.go_home();
-                                cx.notify();
-                            }))
-                            .child(
-                                div()
-                                    .flex()
-                                    .flex_row()
-                                    .gap_1()
-                                    .child(icon_button("tool_rect", "square", cx, |t, _w, cx| {
-                                        t.add_rect();
-                                        cx.notify();
-                                    }))
-                                    .child(icon_button(
-                                        "tool_ellipse",
-                                        "circle",
-                                        cx,
-                                        |t, _w, cx| {
-                                            t.add_ellipse();
-                                            cx.notify();
-                                        },
-                                    ))
-                                    .child(icon_button("tool_line", "line", cx, |t, _w, cx| {
-                                        t.add_line(false);
-                                        cx.notify();
-                                    }))
-                                    .child(icon_button("tool_arrow", "arrow", cx, |t, _w, cx| {
-                                        t.add_line(true);
-                                        cx.notify();
-                                    }))
-                                    .child(icon_button("tool_text", "type", cx, |t, _w, cx| {
-                                        t.add_text_box();
-                                        cx.notify();
-                                    }))
-                                    .child(icon_button("tool_image", "image", cx, |t, _w, cx| {
-                                        t.insert_image(cx);
-                                        cx.notify();
-                                    })),
-                            ),
-                    )
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .gap_2()
-                            .items_center()
-                            .child(icon_button("zoom_out", "minus", cx, |t, _w, cx| {
-                                let z = t.zoom / 1.25;
-                                t.set_zoom(z, cx);
-                            }))
-                            .child(div().child(format!("{}%", (self.zoom * 100.0).round() as i32)))
-                            .child(icon_button("zoom_in", "plus", cx, |t, _w, cx| {
-                                let z = t.zoom * 1.25;
-                                t.set_zoom(z, cx);
-                            }))
-                            .child(icon_button("zoom_fit", "maximize", cx, |t, w, cx| {
-                                t.fit_zoom(w);
-                                t.rebuild();
-                                cx.notify();
-                            })),
-                    ),
-            )
+            // Ribbon: a File/Home/Insert/Slideshow tab strip + the active tab's button row.
+            .child(self.ribbon_strip(cx))
+            .child(self.ribbon_row(cx))
             .children(palette_panel)
             .child(
                 div()
@@ -1287,6 +1214,307 @@ impl Render for HayateApp {
 }
 
 impl HayateApp {
+    /// One tab in the ribbon strip; filled when active, dimmed otherwise.
+    fn ribbon_tab_button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        tab: crate::RibbonTab,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
+        let active = self.ribbon_tab == tab;
+        div()
+            .id(id)
+            .px_3()
+            .py_1()
+            .rounded_md()
+            .text_sm()
+            .text_color(if active { rgb(0xffffff) } else { rgb(0xaaaaaa) })
+            .bg(if active {
+                rgb(SELECTION)
+            } else {
+                rgb(0x2a2a2a)
+            })
+            .hover(|s| {
+                s.bg(if active {
+                    rgb(SELECTION)
+                } else {
+                    rgb(0x3a3a3a)
+                })
+            })
+            .child(label)
+            .on_click(cx.listener(move |this, _ev: &ClickEvent, window, cx| {
+                window.focus(&this.focus, cx);
+                this.ribbon_tab = tab;
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
+    /// The ribbon tab strip (File / Home / Insert / Slideshow).
+    fn ribbon_strip(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        use crate::RibbonTab::*;
+        div()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .px_2()
+            .pt_1()
+            .child(self.ribbon_tab_button("rb_file", "File", File, cx))
+            .child(self.ribbon_tab_button("rb_home", "Home", Home, cx))
+            .child(self.ribbon_tab_button("rb_insert", "Insert", Insert, cx))
+            .child(self.ribbon_tab_button("rb_slideshow", "Slideshow", Slideshow, cx))
+            .into_any_element()
+    }
+
+    /// The active tab's button row, with the zoom controls always present on the right.
+    fn ribbon_row(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let left = match self.ribbon_tab {
+            crate::RibbonTab::File => self.ribbon_file(cx),
+            crate::RibbonTab::Home => self.ribbon_home(cx),
+            crate::RibbonTab::Insert => self.ribbon_insert(cx),
+            crate::RibbonTab::Slideshow => self.ribbon_slideshow(cx),
+        };
+        div()
+            .flex()
+            .flex_row()
+            .justify_between()
+            .items_center()
+            .px_2()
+            .py_1()
+            .border_b_1()
+            .border_color(rgb(0x2a2a2a))
+            .child(left)
+            // Zoom controls (always available).
+            .child(
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .items_center()
+                    .child(icon_button("zoom_out", "minus", cx, |t, _w, cx| {
+                        let z = t.zoom / 1.25;
+                        t.set_zoom(z, cx);
+                    }))
+                    .child(div().child(format!("{}%", (self.zoom * 100.0).round() as i32)))
+                    .child(icon_button("zoom_in", "plus", cx, |t, _w, cx| {
+                        let z = t.zoom * 1.25;
+                        t.set_zoom(z, cx);
+                    }))
+                    .child(icon_button("zoom_fit", "maximize", cx, |t, w, cx| {
+                        t.fit_zoom(w);
+                        t.rebuild();
+                        cx.notify();
+                    })),
+            )
+            .into_any_element()
+    }
+
+    /// A small vertical divider between ribbon button groups.
+    fn ribbon_sep() -> gpui::AnyElement {
+        div()
+            .w(px(1.))
+            .h(px(20.))
+            .bg(rgb(0x444444))
+            .into_any_element()
+    }
+
+    /// File tab: new / open / save / export.
+    fn ribbon_file(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .flex()
+            .flex_row()
+            .gap_2()
+            .items_center()
+            .child(tool_button("rb_new", "New", cx, |t, _w, cx| {
+                t.new_presentation();
+                cx.notify();
+            }))
+            .child(tool_button("rb_open", "Open", cx, |t, _w, cx| {
+                t.open();
+                cx.notify();
+            }))
+            .child(tool_button("rb_save", "Save", cx, |t, _w, cx| {
+                t.save();
+                cx.notify();
+            }))
+            .child(tool_button(
+                "rb_saveas",
+                "Save As\u{2026}",
+                cx,
+                |t, _w, cx| {
+                    t.open_save_dialog();
+                    cx.notify();
+                },
+            ))
+            .child(Self::ribbon_sep())
+            .child(tool_button("rb_pdf", "Export PDF", cx, |t, _w, cx| {
+                t.export_pdf();
+                cx.notify();
+            }))
+            .child(tool_button("rb_pptx", "Export PPTX", cx, |t, _w, _cx| {
+                t.export_pptx();
+            }))
+            .child(tool_button("rb_svg", "Export SVG", cx, |t, _w, _cx| {
+                t.export_svg();
+            }))
+            .child(tool_button("rb_import", "Import PPTX", cx, |t, _w, cx| {
+                t.import_pptx();
+                cx.notify();
+            }))
+            .child(Self::ribbon_sep())
+            .child(tool_button(
+                "rb_home_screen",
+                "\u{2302} Start",
+                cx,
+                |t, _w, cx| {
+                    t.go_home();
+                    cx.notify();
+                },
+            ))
+            .into_any_element()
+    }
+
+    /// Home tab: slide ops, clipboard/history, and text formatting.
+    fn ribbon_home(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .items_center()
+            .child(tool_button("rb_add_slide", "+ Slide", cx, |t, _w, cx| {
+                t.add_slide();
+                cx.notify();
+            }))
+            .child(Self::ribbon_sep())
+            .child(tool_button("rb_undo", "Undo", cx, |t, _w, cx| {
+                t.undo();
+                cx.notify();
+            }))
+            .child(tool_button("rb_redo", "Redo", cx, |t, _w, cx| {
+                t.redo();
+                cx.notify();
+            }))
+            .child(Self::ribbon_sep())
+            .child(tool_button("rb_copy", "Copy", cx, |t, _w, _cx| {
+                t.copy_selection();
+            }))
+            .child(tool_button("rb_paste", "Paste", cx, |t, _w, cx| {
+                t.paste_clipboard();
+                cx.notify();
+            }))
+            .child(tool_button("rb_dup", "Duplicate", cx, |t, _w, cx| {
+                t.duplicate_selection();
+                cx.notify();
+            }))
+            .child(tool_button("rb_del", "Delete", cx, |t, _w, cx| {
+                t.delete_selection();
+                cx.notify();
+            }))
+            .child(Self::ribbon_sep())
+            .child(icon_button("rb_bold", "bold", cx, |t, _w, cx| {
+                t.run_on_selection("shape.toggle_bold");
+                cx.notify();
+            }))
+            .child(icon_button("rb_italic", "italic", cx, |t, _w, cx| {
+                t.run_on_selection("shape.toggle_italic");
+                cx.notify();
+            }))
+            .child(icon_button("rb_underline", "underline", cx, |t, _w, cx| {
+                t.run_on_selection("shape.toggle_underline");
+                cx.notify();
+            }))
+            .child(tool_button("rb_size_down", "A-", cx, |t, _w, cx| {
+                t.change_font_size(-4);
+                cx.notify();
+            }))
+            .child(tool_button("rb_size_up", "A+", cx, |t, _w, cx| {
+                t.change_font_size(4);
+                cx.notify();
+            }))
+            .child(Self::ribbon_sep())
+            .child(icon_button("rb_align_l", "align-left", cx, |t, _w, cx| {
+                t.run_on_selection("shape.align_text_left");
+                cx.notify();
+            }))
+            .child(icon_button(
+                "rb_align_c",
+                "align-center",
+                cx,
+                |t, _w, cx| {
+                    t.run_on_selection("shape.align_text_center");
+                    cx.notify();
+                },
+            ))
+            .child(icon_button("rb_align_r", "align-right", cx, |t, _w, cx| {
+                t.run_on_selection("shape.align_text_right");
+                cx.notify();
+            }))
+            .child(Self::ribbon_sep())
+            .child(icon_button("rb_front", "bring-front", cx, |t, _w, cx| {
+                t.run_on_selection("shape.bring_to_front");
+                cx.notify();
+            }))
+            .child(icon_button("rb_back", "send-back", cx, |t, _w, cx| {
+                t.run_on_selection("shape.send_to_back");
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
+    /// Insert tab: shapes, text box, image.
+    fn ribbon_insert(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .flex()
+            .flex_row()
+            .gap_1()
+            .items_center()
+            .child(icon_button("tool_rect", "square", cx, |t, _w, cx| {
+                t.add_rect();
+                cx.notify();
+            }))
+            .child(icon_button("tool_ellipse", "circle", cx, |t, _w, cx| {
+                t.add_ellipse();
+                cx.notify();
+            }))
+            .child(icon_button("tool_line", "line", cx, |t, _w, cx| {
+                t.add_line(false);
+                cx.notify();
+            }))
+            .child(icon_button("tool_arrow", "arrow", cx, |t, _w, cx| {
+                t.add_line(true);
+                cx.notify();
+            }))
+            .child(icon_button("tool_text", "type", cx, |t, _w, cx| {
+                t.add_text_box();
+                cx.notify();
+            }))
+            .child(icon_button("tool_image", "image", cx, |t, _w, cx| {
+                t.insert_image(cx);
+                cx.notify();
+            }))
+            .into_any_element()
+    }
+
+    /// Slideshow tab: start the fullscreen presentation.
+    fn ribbon_slideshow(&self, cx: &mut Context<Self>) -> gpui::AnyElement {
+        div()
+            .flex()
+            .flex_row()
+            .gap_2()
+            .items_center()
+            .child(tool_button(
+                "rb_present",
+                "\u{25b6} Start",
+                cx,
+                |t, _w, cx| {
+                    t.start_present();
+                    cx.notify();
+                },
+            ))
+            .into_any_element()
+    }
+
     /// Custom window title bar (the window is client-side decorated, so we draw our own controls).
     /// A custom title bar for platforms that draw their own window decoration: a draggable strip
     /// with the app name on the left and minimize / maximize / close controls on the right.

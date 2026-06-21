@@ -607,8 +607,7 @@ impl HayateApp {
             "e" if cmd && k.modifiers.shift => self.export_pptx(),
             "e" if cmd => self.export_svg(),
             "f5" => {
-                self.present = true;
-                self.present_t = 0;
+                self.start_present();
                 cx.notify();
             }
             "o" if cmd && k.modifiers.shift => {
@@ -620,20 +619,15 @@ impl HayateApp {
                 cx.notify();
             }
             "z" if cmd && k.modifiers.shift => {
-                self.history.redo(&mut self.pres.world);
-                self.after_doc_change();
+                self.redo();
                 cx.notify();
             }
             "z" if cmd => {
-                self.history.undo(&mut self.pres.world);
-                self.after_doc_change();
+                self.undo();
                 cx.notify();
             }
             "s" if cmd => {
-                // Open the Save dialog pre-filled with the current path.
-                self.save_modal = Some(crate::SaveModal {
-                    buf: self.doc_path.clone(),
-                });
+                self.open_save_dialog();
                 cx.notify();
             }
             "o" if cmd => {
