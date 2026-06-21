@@ -183,11 +183,21 @@ pub fn build_slide_scene_edit(
             let tb = if !has_run {
                 match p.ph_run_style(slide, ph) {
                     Some(style) => {
+                        // Materialize paragraphs from the source, one styled run per line. This
+                        // gives the typeset path the slot's size/weight AND lets the editing path
+                        // (which renders plain text, not Typst) show the source while editing.
+                        let src = tb.typst_source.clone().unwrap_or_default();
+                        let paragraphs = src
+                            .split('\n')
+                            .map(|line| {
+                                Paragraph::new(vec![Run {
+                                    text: line.to_string(),
+                                    ..style.clone()
+                                }])
+                            })
+                            .collect();
                         styled = TextBody {
-                            paragraphs: vec![Paragraph::new(vec![Run {
-                                text: String::new(),
-                                ..style.clone()
-                            }])],
+                            paragraphs,
                             autofit: tb.autofit,
                             typst_source: tb.typst_source.clone(),
                         };
