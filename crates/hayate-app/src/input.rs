@@ -11,7 +11,8 @@ use gpui::{
 use hayate_model::edit;
 
 use crate::util::{
-    next_char_boundary, prev_char_boundary, range_from_utf16, range_to_utf16, utf16_to_byte,
+    caret_line_move, next_char_boundary, prev_char_boundary, range_from_utf16, range_to_utf16,
+    utf16_to_byte,
 };
 use crate::{
     pt_to_emu, AiPanel, FieldEdit, FieldKind, HayateApp, PaletteState, ScriptPanel, TextEdit,
@@ -154,6 +155,18 @@ impl HayateApp {
             "right" => {
                 if let Some(te) = self.text_edit.as_mut() {
                     let c = next_char_boundary(&te.buf, te.selected.end.min(te.buf.len()));
+                    te.selected = c..c;
+                }
+            }
+            "up" => {
+                if let Some(te) = self.text_edit.as_mut() {
+                    let c = caret_line_move(&te.buf, te.selected.start, -1);
+                    te.selected = c..c;
+                }
+            }
+            "down" => {
+                if let Some(te) = self.text_edit.as_mut() {
+                    let c = caret_line_move(&te.buf, te.selected.end, 1);
                     te.selected = c..c;
                 }
             }
