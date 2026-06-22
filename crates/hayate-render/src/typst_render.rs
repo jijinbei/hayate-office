@@ -208,11 +208,13 @@ fn wrap_source(
     let weight = if bold { ", weight: \"bold\"" } else { "" };
     // Faux-oblique: Noto Sans CJK (and many fonts) have no italic face and Typst won't synthesize
     // one, so emphasis (`_…_`) would stay upright. Slant the emphasized content with `skew` so
-    // italic renders for any script. A run-level italic flag slants the whole body the same way.
-    let emph_rule = "#show emph: it => box(skew(ax: -12deg, it.body))\n";
+    // italic renders for any script. Pivot at the baseline (`origin: bottom + left`) so the slanted
+    // text sits on the same baseline as the surrounding upright text (a center pivot raises it).
+    let emph_rule = "#show emph: it => box(skew(ax: -12deg, origin: bottom + left, it.body))\n";
     let body = prose_linebreaks(source);
     let body = if italic {
-        format!("#box(skew(ax: -12deg, reflow: true)[\n{body}\n])")
+        // Run-level italic slants the whole body the same way (best for short, single-line slots).
+        format!("#box(skew(ax: -12deg, origin: bottom + left, reflow: true)[\n{body}\n])")
     } else {
         body
     };
