@@ -16,7 +16,7 @@ use hayate_render::{
 
 use crate::icons::icon_button;
 use crate::paint::paint_scene;
-use crate::util::{hsla_of, prim_bounds, rotate_pt, run_font};
+use crate::util::{hsla_of, next_char_boundary, prim_bounds, rotate_pt, run_font};
 use crate::widgets::tool_button;
 use crate::{DraggedSlide, FieldKind, HayateApp, LeftTab, MenuTarget, SlideDragPreview, SELECTION};
 
@@ -74,6 +74,10 @@ impl Render for HayateApp {
             self.fit_zoom(window);
             self.rebuild();
         }
+
+        // Resolve a pending text click/drag (set by the mouse handlers) into a caret/selection now
+        // that we have the window's text system to measure glyph positions.
+        self.resolve_text_caret(window);
 
         // Document coordinates are absolute (points); on-screen size = slide_pt * zoom.
         let scene = self.scene.clone();
@@ -1214,6 +1218,50 @@ impl Render for HayateApp {
 }
 
 impl HayateApp {
+    /// Map a pending text click/drag (recorded by the mouse handlers, in canvas/scene px) to a
+    /// byte offset in the edit buffer and update the caret/selection. Needs the window's text
+    /// system to measure glyph positions, so it runs here in render rather than in the mouse path.
+    fn resolve_text_caret(&mut self, window: &mut Window) {
+        let Some(te) = self.text_edit.as_ref() else {
+            return;
+        };
+        let Some((click_x, click_y, extend)) = te.pending_hit else {
+            return;
+        };
+        let ent = te.entity;
+        let indent_em = self.list_indent_em;
+        // Resolve the offset against the editing scene's text node (drop the borrow before mutating).
+        let off = {
+            let Some(node) = self.scene.nodes.iter().find(|n| n.source == Some(ent)) else {
+                if let Some(te) = self.text_edit.as_mut() {
+                    te.pending_hit = None;
+                }
+                return;
+            };
+            match &node.prim {
+                Primitive::Text(tb) => text_offset_at(tb, indent_em, click_x, click_y, window),
+                _ => {
+                    if let Some(te) = self.text_edit.as_mut() {
+                        te.pending_hit = None;
+                    }
+                    return;
+                }
+            }
+        };
+        if let Some(te) = self.text_edit.as_mut() {
+            let off = off.min(te.buf.len());
+            if extend {
+                let a = te.select_anchor.unwrap_or(off);
+                te.selected = a.min(off)..a.max(off);
+            } else {
+                te.select_anchor = Some(off);
+                te.selected = off..off;
+            }
+            te.marked = None;
+            te.pending_hit = None;
+        }
+    }
+
     /// One tab in the ribbon strip; filled when active, dimmed otherwise.
     fn ribbon_tab_button(
         &self,
@@ -2343,6 +2391,109 @@ const RHAI_KEYWORDS: [&str; 16] = [
     "let", "const", "fn", "for", "in", "if", "else", "while", "loop", "return", "break",
     "continue", "switch", "true", "false", "throw",
 ];
+
+/// Map a click at (`click_x`, `click_y`) in scene px to the nearest byte offset in the edited
+/// text. Mirrors the caret layout in `render` (each source line is one row, no soft-wrap), shaping
+/// prefixes with the window's text system to find the closest character boundary on the row.
+fn text_offset_at(
+    tb: &hayate_render::scene::TextBlock,
+    indent_em: f32,
+    click_x: f32,
+    click_y: f32,
+    window: &mut Window,
+) -> usize {
+    use hayate_render::scene::ResolvedParagraph;
+    if tb.paragraphs.is_empty() {
+        return 0;
+    }
+    let fs_of = |p: &ResolvedParagraph| {
+        p.runs
+            .iter()
+            .map(|r| r.size_px)
+            .fold(0.0, f32::max)
+            .max(1.0)
+    };
+    // Which row (paragraph) does the click fall on? Track the global byte offset at each start.
+    let mut y = tb.bounds.y;
+    let mut start = 0usize;
+    let mut pick: Option<(usize, usize)> = None;
+    for (i, para) in tb.paragraphs.iter().enumerate() {
+        let len: usize = para.runs.iter().map(|r| r.text.len()).sum();
+        if click_y < y + fs_of(para) * 1.3 {
+            pick = Some((i, start));
+            break;
+        }
+        y += fs_of(para) * 1.3;
+        start += len + 1; // + newline
+    }
+    let (pi, pstart) = pick.unwrap_or_else(|| {
+        let last = tb.paragraphs.len() - 1;
+        let s = tb.paragraphs[..last]
+            .iter()
+            .map(|p| p.runs.iter().map(|r| r.text.len()).sum::<usize>() + 1)
+            .sum();
+        (last, s)
+    });
+    let para = &tb.paragraphs[pi];
+    let font_size = px(fs_of(para));
+    let style = para.runs.first();
+    let font = style
+        .map(run_font)
+        .unwrap_or_else(|| gpui::font("sans-serif"));
+    let color = hsla_of(
+        style
+            .map(|r| r.color)
+            .unwrap_or(hayate_ir::color::Rgba::rgb(0, 0, 0)),
+    );
+    let mut shape_w = |s: &str| -> f32 {
+        if s.is_empty() {
+            return 0.0;
+        }
+        let trun = TextRun {
+            len: s.len(),
+            font: font.clone(),
+            color,
+            background_color: None,
+            underline: None,
+            strikethrough: None,
+        };
+        f32::from(
+            window
+                .text_system()
+                .shape_line(SharedString::from(s.to_string()), font_size, &[trun], None)
+                .width,
+        )
+    };
+    let indent = f32::from(font_size) * (indent_em * para.bullet_level as f32);
+    let bullet_w = if para.bullet_level > 0 {
+        let glyph = match para.bullet_level {
+            1 => "\u{2022} ",
+            2 => "\u{25E6} ",
+            _ => "\u{25AA} ",
+        };
+        shape_w(glyph)
+    } else {
+        0.0
+    };
+    let text_x0 = tb.bounds.x + indent + bullet_w;
+    let line_text: String = para.runs.iter().map(|r| r.text.as_str()).collect();
+    // Closest character boundary to the click x.
+    let mut best_k = 0usize;
+    let mut best_d = f32::INFINITY;
+    let mut k = 0usize;
+    loop {
+        let d = (text_x0 + shape_w(&line_text[..k]) - click_x).abs();
+        if d < best_d {
+            best_d = d;
+            best_k = k;
+        }
+        if k >= line_text.len() {
+            break;
+        }
+        k = next_char_boundary(&line_text, k);
+    }
+    pstart + best_k
+}
 
 /// Token colors for the editor (VS Code "Dark+"-ish).
 const HL_DEFAULT: u32 = 0xeaeaea;

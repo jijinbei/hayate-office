@@ -38,6 +38,9 @@ impl HayateApp {
             buf,
             selected: caret..caret,
             marked: None,
+            select_anchor: None,
+            pending_hit: None,
+            dragging: false,
         });
         // Rebuild so the box now renders as its raw Typst source (not typeset), and the caret can
         // be placed on the plain-text node.

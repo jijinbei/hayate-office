@@ -371,6 +371,15 @@ struct TextEdit {
     selected: Range<usize>,
     /// IME composing (marked) range, as a BYTE range into `buf`.
     marked: Option<Range<usize>>,
+    /// Byte offset where the current click/drag selection began (the fixed end while dragging).
+    select_anchor: Option<usize>,
+    /// A click position (canvas/scene px) waiting to be mapped to a byte offset on the next
+    /// render — text hit-testing needs the window's text system, which mouse handlers lack. The
+    /// bool is `extend`: false sets the caret (and anchor), true extends the selection from the
+    /// anchor (drag).
+    pending_hit: Option<(f32, f32, bool)>,
+    /// Whether the mouse is currently dragging out a selection inside this box.
+    dragging: bool,
 }
 
 #[derive(Clone, Copy)]

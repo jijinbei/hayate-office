@@ -17,6 +17,14 @@ impl HayateApp {
         self.scene.size.w as f64 / self.pres.slide_size.w.max(1) as f64
     }
 
+    /// Scene-px bounds of the text box currently being edited (its node in the live scene), or
+    /// `None` when not editing. Used to tell a caret-placing click (inside) from a commit (outside).
+    pub(crate) fn edited_box_bounds(&self) -> Option<hayate_render::scene::PxRect> {
+        let ent = self.text_edit.as_ref()?.entity;
+        let node = self.scene.nodes.iter().find(|n| n.source == Some(ent))?;
+        Some(prim_bounds(&node.prim))
+    }
+
     pub(crate) fn on_mouse_down(&mut self, ev: &MouseDownEvent, cx: &mut Context<Self>) {
         // This low-level handler fires even when the click lands on the context-menu overlay
         // (which sits above the canvas). While a menu is open, do nothing here — the menu's
@@ -26,18 +34,31 @@ impl HayateApp {
         if self.context_menu.is_some() {
             return;
         }
-        // A click commits an in-progress text edit (Enter now inserts newlines instead). Revert
-        // the live preview, then commit the final buffer as one undoable transaction.
-        if let Some(te) = self.text_edit.take() {
-            // Revert the live preview to the original, then commit the final Typst source as one
-            // undoable transaction (so undo restores the pre-edit box, not the live-preview state).
-            self.revert_text_live(te.entity, &te.original);
-            let tx = edit::set_typst_source(&self.pres.world, te.entity, te.buf.clone());
-            self.commit_tx(tx);
-        }
         let o = self.canvas_origin.get();
         let x = f32::from(ev.position.x - o.x);
         let y = f32::from(ev.position.y - o.y);
+        // While editing, a click INSIDE the box places the caret near the click (and begins a
+        // drag-selection) instead of committing; a click OUTSIDE commits the edit.
+        if self.text_edit.is_some() {
+            if self
+                .edited_box_bounds()
+                .is_some_and(|b| x >= b.x && x <= b.x + b.w && y >= b.y && y <= b.y + b.h)
+            {
+                if let Some(te) = self.text_edit.as_mut() {
+                    te.pending_hit = Some((x, y, false));
+                    te.dragging = true;
+                }
+                cx.notify();
+                return;
+            }
+            // Click outside the box: commit. Revert the live preview to the original, then commit
+            // the final Typst source as one undoable transaction (so undo restores the pre-edit box).
+            if let Some(te) = self.text_edit.take() {
+                self.revert_text_live(te.entity, &te.original);
+                let tx = edit::set_typst_source(&self.pres.world, te.entity, te.buf.clone());
+                self.commit_tx(tx);
+            }
+        }
         // Double-click detection. The Linux backends do not populate `click_count`, so detect it
         // ourselves: a second press near the previous one within 450ms. (Tests set `click_count`
         // explicitly, which is honored too.) On a double, consume the streak so a following click
@@ -209,6 +230,18 @@ impl HayateApp {
     }
 
     pub(crate) fn on_mouse_move(&mut self, ev: &MouseMoveEvent, cx: &mut Context<Self>) {
+        // Dragging out a text selection inside the edited box: extend the selection to the cursor
+        // (resolved to a byte offset on the next render, which can measure text).
+        if self.text_edit.as_ref().is_some_and(|te| te.dragging) {
+            let o = self.canvas_origin.get();
+            let x = f32::from(ev.position.x - o.x);
+            let y = f32::from(ev.position.y - o.y);
+            if let Some(te) = self.text_edit.as_mut() {
+                te.pending_hit = Some((x, y, true));
+            }
+            cx.notify();
+            return;
+        }
         // Dragging a line endpoint: keep the fixed end, move the other to the cursor. The frame
         // size may go negative, so the line can point in any of the 360 degrees.
         if let Some(ld) = self.line_drag {
@@ -438,6 +471,14 @@ impl HayateApp {
     }
 
     pub(crate) fn on_mouse_up(&mut self, _ev: &MouseUpEvent, cx: &mut Context<Self>) {
+        // End a text-selection drag (the selection itself stays).
+        if self.text_edit.as_ref().is_some_and(|te| te.dragging) {
+            if let Some(te) = self.text_edit.as_mut() {
+                te.dragging = false;
+            }
+            cx.notify();
+            return;
+        }
         // Commit a line endpoint drag as one undoable step (revert the live preview first).
         if let Some(ld) = self.line_drag.take() {
             if let Some(final_f) = self.pres.world.frames.get(&ld.entity).copied() {

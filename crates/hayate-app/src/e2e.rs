@@ -579,6 +579,50 @@ fn enter_inserts_newline_and_click_commits(cx: &mut TestAppContext) {
 }
 
 #[gpui::test]
+fn click_inside_editing_box_places_caret_not_commit(cx: &mut TestAppContext) {
+    let app = cx.new(|cx| HayateApp::new(cx));
+    let title = app.read_with(cx, |s, _| s.pres.children(s.slide)[0]);
+    app.update(cx, |s, _| s.begin_text_edit(title));
+    // A point inside the edited box.
+    let (cx_in, cy_in) = app.read_with(cx, |s, _| {
+        let b = s.edited_box_bounds().expect("editing box has bounds");
+        (b.x + b.w * 0.5, b.y + b.h * 0.5)
+    });
+    app.update(cx, |s, cx| {
+        s.on_mouse_down(&mouse(MouseButton::Left, cx_in, cy_in), cx)
+    });
+    // Clicking inside keeps editing and queues a caret hit-test + selection drag (no commit).
+    let (editing, pending, dragging) = app.read_with(cx, |s, _| {
+        let te = s.text_edit.as_ref().unwrap();
+        (true, te.pending_hit.is_some(), te.dragging)
+    });
+    assert!(
+        editing && pending && dragging,
+        "in-box click places the caret and starts a drag, not a commit"
+    );
+
+    // Dragging extends the pending selection (still no commit).
+    app.update(cx, |s, cx| {
+        s.on_mouse_move(&mouse_move(cx_in + 30.0, cy_in), cx)
+    });
+    assert!(
+        app.read_with(cx, |s, _| s
+            .text_edit
+            .as_ref()
+            .is_some_and(|t| matches!(t.pending_hit, Some((_, _, true))))),
+        "dragging marks the pending hit as an extend"
+    );
+    // Mouse-up ends the drag but stays in edit mode.
+    app.update(cx, |s, cx| {
+        s.on_mouse_up(&mouse_up(cx_in + 30.0, cy_in), cx)
+    });
+    assert!(
+        app.read_with(cx, |s, _| s.text_edit.as_ref().is_some_and(|t| !t.dragging)),
+        "mouse-up ends the selection drag but keeps editing"
+    );
+}
+
+#[gpui::test]
 fn arrow_heads_and_stroke_width_edit(cx: &mut TestAppContext) {
     let app = cx.new(|cx| HayateApp::new(cx));
     // A plain line: no heads.
@@ -1051,7 +1095,9 @@ fn customize_placeholder_pins_geometry_and_unlocks(cx: &mut TestAppContext) {
             && s.pres.world.frames.get(&e) == Some(&inherited)),
         "customize pins the inherited frame onto the slide and unlocks the placeholder"
     );
-    // Now it can be dragged.
+    // Leave the text edit the double-click started (a click inside the box now places the caret,
+    // not a drag), then the customized placeholder can be moved.
+    app.update(cx, |s, cx| s.on_key_down(&keydown("escape"), cx));
     app.update(cx, |s, cx| {
         s.on_mouse_down(&mouse(MouseButton::Left, px_x, px_y), cx)
     });
