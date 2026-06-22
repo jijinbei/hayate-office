@@ -140,6 +140,53 @@ thread_local! {
 /// Max cached raster results per thread (bounds memory across zoom levels).
 const CACHE_CAP: usize = 256;
 
+/// Whether a line begins a Typst block construct that already breaks on its own (list item,
+/// heading, ordered item), trimmed of leading whitespace. Such lines are left to Typst — we only
+/// hard-break between two plain *prose* lines.
+fn is_block_line(line: &str) -> bool {
+    let t = line.trim_start();
+    t.starts_with("- ")
+        || t.starts_with("+ ")
+        || t.starts_with("/ ")
+        || t.starts_with('=')
+        || t.starts_with('#')
+        // ordered list: digits then '.'
+        || {
+            let digits: String = t.chars().take_while(|c| c.is_ascii_digit()).collect();
+            !digits.is_empty() && t[digits.len()..].starts_with('.')
+        }
+}
+
+/// Make Enter behave like a line break in a slide text box: a single newline between two plain
+/// prose lines becomes a Typst forced line break (`\`). Blank lines (paragraph breaks), lines
+/// adjacent to block constructs (lists/headings), and newlines inside a `$…$` math span are left
+/// untouched so Typst markup keeps working. Pure transform applied only at render time.
+fn prose_linebreaks(src: &str) -> String {
+    let lines: Vec<&str> = src.split('\n').collect();
+    let mut out = String::with_capacity(src.len() + 8);
+    let mut in_math = false;
+    for (i, line) in lines.iter().enumerate() {
+        out.push_str(line);
+        // Track `$` toggles across this line to know if the following newline sits inside math.
+        in_math ^= line.matches('$').count() % 2 == 1;
+        if i + 1 == lines.len() {
+            break; // last line: no trailing newline to consider
+        }
+        let next = lines[i + 1];
+        let both_prose = !line.trim().is_empty()
+            && !next.trim().is_empty()
+            && !is_block_line(line)
+            && !is_block_line(next);
+        let already_break = line.trim_end().ends_with('\\');
+        if both_prose && !in_math && !already_break {
+            out.push_str(" \\\n"); // Typst forced line break
+        } else {
+            out.push('\n');
+        }
+    }
+    out
+}
+
 /// Build the full Typst document (preamble + user source) for a box of width `box_w_pt`.
 /// `bold` sets the base font weight so a placeholder/run styled bold (e.g. a master Title) renders
 /// bold even when the source carries no `*…*` markup.
@@ -174,7 +221,7 @@ fn wrap_source(
         weight = weight,
         justify = justify,
         al = al,
-        body = source,
+        body = prose_linebreaks(source),
     )
 }
 
@@ -524,5 +571,38 @@ mod tests {
             !layout.shapes.is_empty(),
             "the fraction bar is a vector shape"
         );
+    }
+
+    #[test]
+    fn prose_linebreaks_only_breaks_between_prose() {
+        // A lone newline between two prose lines becomes a Typst forced break.
+        assert_eq!(prose_linebreaks("a\nb"), "a \\\nb");
+        // A blank line (paragraph break) is left alone.
+        assert_eq!(prose_linebreaks("a\n\nb"), "a\n\nb");
+        // Lists and headings already break in Typst — leave them.
+        assert_eq!(prose_linebreaks("- a\n- b"), "- a\n- b");
+        assert_eq!(prose_linebreaks("= 見出し\n本文"), "= 見出し\n本文");
+        // Newlines inside a math span are preserved.
+        assert_eq!(prose_linebreaks("$ sum\n= x $"), "$ sum\n= x $");
+        // An explicit trailing break is not doubled.
+        assert_eq!(prose_linebreaks("a \\\nb"), "a \\\nb");
+    }
+
+    #[test]
+    fn single_newline_renders_as_two_lines() {
+        let baselines = |src: &str| -> usize {
+            let r = layout_typst(src, 400.0, 18.0, black(), HAlign::Left, false);
+            let layout = r.as_ref().as_ref().expect("compiles");
+            let mut ys: Vec<i32> = layout
+                .glyph_runs
+                .iter()
+                .flat_map(|run| run.glyphs.iter().map(|g| g.y.round() as i32))
+                .collect();
+            ys.sort_unstable();
+            ys.dedup();
+            ys.len()
+        };
+        assert_eq!(baselines("a b"), 1, "a space-joined line is one row");
+        assert_eq!(baselines("a\nb"), 2, "a newline now renders as two rows");
     }
 }
