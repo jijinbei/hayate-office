@@ -399,6 +399,7 @@ fn build_page(
                 color,
                 align,
                 bold,
+                italic,
                 ..
             } => {
                 // Re-lay the Typst source out and emit real selectable text + vector shapes
@@ -411,6 +412,7 @@ fn build_page(
                     *color,
                     *align,
                     *bold,
+                    *italic,
                 );
                 if let Ok(layout) = r.as_ref() {
                     let mut gops = Vec::new();

@@ -147,6 +147,8 @@ pub enum Primitive {
         /// Base font weight (from the resolved run/placeholder style), so plain text in a bold
         /// slot (e.g. a master Title) renders bold without `*…*` markup.
         bold: bool,
+        /// Base italic (faux-oblique) for the whole box, from the resolved run/placeholder style.
+        italic: bool,
         rgba: std::sync::Arc<Vec<u8>>,
         px_w: u32,
         px_h: u32,

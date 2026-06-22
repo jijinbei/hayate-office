@@ -197,6 +197,7 @@ fn wrap_source(
     color: Rgba,
     align: HAlign,
     bold: bool,
+    italic: bool,
 ) -> String {
     let al = match align {
         HAlign::Left | HAlign::Justify => "left",
@@ -205,6 +206,16 @@ fn wrap_source(
     };
     let justify = matches!(align, HAlign::Justify);
     let weight = if bold { ", weight: \"bold\"" } else { "" };
+    // Faux-oblique: Noto Sans CJK (and many fonts) have no italic face and Typst won't synthesize
+    // one, so emphasis (`_…_`) would stay upright. Slant the emphasized content with `skew` so
+    // italic renders for any script. A run-level italic flag slants the whole body the same way.
+    let emph_rule = "#show emph: it => box(skew(ax: -12deg, it.body))\n";
+    let body = prose_linebreaks(source);
+    let body = if italic {
+        format!("#box(skew(ax: -12deg, reflow: true)[\n{body}\n])")
+    } else {
+        body
+    };
     format!(
         "#set page(width: {w}pt, height: auto, margin: 0pt, fill: none)\n\
          #set text(size: {sz}pt, fill: rgb(\"#{r:02x}{g:02x}{b:02x}\"){weight}, \
@@ -212,7 +223,7 @@ fn wrap_source(
          top-edge: \"ascender\", bottom-edge: \"descender\")\n\
          #set par(justify: {justify})\n\
          #set align({al})\n\
-         {body}",
+         {emph_rule}{body}",
         w = box_w_pt.max(1.0),
         sz = default_pt.max(1.0),
         r = color.r,
@@ -221,7 +232,8 @@ fn wrap_source(
         weight = weight,
         justify = justify,
         al = al,
-        body = prose_linebreaks(source),
+        emph_rule = emph_rule,
+        body = body,
     )
 }
 
@@ -285,9 +297,10 @@ pub fn render_typst_raster(
     color: Rgba,
     align: HAlign,
     bold: bool,
+    italic: bool,
 ) -> Rc<Result<RasterImage, String>> {
     let box_w_pt = (box_w_px / ppp.max(0.1)).max(1.0);
-    let full = wrap_source(source, box_w_pt, default_pt, color, align, bold);
+    let full = wrap_source(source, box_w_pt, default_pt, color, align, bold, italic);
     // Key on the exact compiled source + quantized scale: any change to text/size/color/align/width
     // changes `full`, so the cache self-invalidates.
     let key = format!("{}\u{0}{}", (ppp * 100.0).round() as i64, full);
@@ -457,8 +470,9 @@ pub fn layout_typst(
     color: Rgba,
     align: HAlign,
     bold: bool,
+    italic: bool,
 ) -> Rc<Result<TypstLayout, String>> {
-    let full = wrap_source(source, box_w_pt, default_pt, color, align, bold);
+    let full = wrap_source(source, box_w_pt, default_pt, color, align, bold, italic);
     LAYOUT_CACHE.with(|cache| {
         if let Some(hit) = cache.borrow().get(&full) {
             return Rc::clone(hit);
@@ -512,7 +526,16 @@ mod tests {
 
     #[test]
     fn renders_a_bulleted_list() {
-        let r = render_typst_raster("- a\n- b", 400.0, 1.0, 18.0, black(), HAlign::Left, false);
+        let r = render_typst_raster(
+            "- a\n- b",
+            400.0,
+            1.0,
+            18.0,
+            black(),
+            HAlign::Left,
+            false,
+            false,
+        );
         let img = r.as_ref().as_ref().expect("list compiles");
         assert!(img.px_w > 0 && img.px_h > 0);
         assert!(has_ink(img), "the list drew some pixels");
@@ -528,6 +551,7 @@ mod tests {
             black(),
             HAlign::Left,
             false,
+            false,
         );
         let img = r
             .as_ref()
@@ -538,20 +562,47 @@ mod tests {
 
     #[test]
     fn broken_source_errors() {
-        let r = render_typst_raster("$ x ^", 400.0, 1.0, 18.0, black(), HAlign::Left, false);
+        let r = render_typst_raster(
+            "$ x ^",
+            400.0,
+            1.0,
+            18.0,
+            black(),
+            HAlign::Left,
+            false,
+            false,
+        );
         assert!(r.as_ref().is_err(), "unbalanced math is a compile error");
     }
 
     #[test]
     fn identical_inputs_hit_cache() {
-        let a = render_typst_raster("hello", 300.0, 1.0, 18.0, black(), HAlign::Left, false);
-        let b = render_typst_raster("hello", 300.0, 1.0, 18.0, black(), HAlign::Left, false);
+        let a = render_typst_raster(
+            "hello",
+            300.0,
+            1.0,
+            18.0,
+            black(),
+            HAlign::Left,
+            false,
+            false,
+        );
+        let b = render_typst_raster(
+            "hello",
+            300.0,
+            1.0,
+            18.0,
+            black(),
+            HAlign::Left,
+            false,
+            false,
+        );
         assert!(Rc::ptr_eq(&a, &b), "second call returns the cached Rc");
     }
 
     #[test]
     fn layout_extracts_positioned_glyphs() {
-        let r = layout_typst("hello", 400.0, 18.0, black(), HAlign::Left, false);
+        let r = layout_typst("hello", 400.0, 18.0, black(), HAlign::Left, false, false);
         let layout = r.as_ref().as_ref().expect("compiles");
         let total: usize = layout.glyph_runs.iter().map(|g| g.glyphs.len()).sum();
         assert!(total >= 5, "at least one glyph per letter, got {total}");
@@ -564,7 +615,7 @@ mod tests {
     #[test]
     fn layout_math_has_a_fraction_bar() {
         // A fraction renders a horizontal rule (Shape) between numerator and denominator.
-        let r = layout_typst("$ 1/2 $", 400.0, 24.0, black(), HAlign::Left, false);
+        let r = layout_typst("$ 1/2 $", 400.0, 24.0, black(), HAlign::Left, false, false);
         let layout = r.as_ref().as_ref().expect("math compiles");
         assert!(!layout.glyph_runs.is_empty(), "digits are glyphs");
         assert!(
@@ -591,7 +642,7 @@ mod tests {
     #[test]
     fn single_newline_renders_as_two_lines() {
         let baselines = |src: &str| -> usize {
-            let r = layout_typst(src, 400.0, 18.0, black(), HAlign::Left, false);
+            let r = layout_typst(src, 400.0, 18.0, black(), HAlign::Left, false, false);
             let layout = r.as_ref().as_ref().expect("compiles");
             let mut ys: Vec<i32> = layout
                 .glyph_runs
@@ -604,5 +655,38 @@ mod tests {
         };
         assert_eq!(baselines("a b"), 1, "a space-joined line is one row");
         assert_eq!(baselines("a\nb"), 2, "a newline now renders as two rows");
+    }
+
+    #[test]
+    fn italic_faux_oblique_renders_for_cjk() {
+        // Noto Sans CJK has no italic face; faux-oblique (skew) must still slant it, so the
+        // emphasized render differs from the upright one (and from a compile error).
+        let upright =
+            render_typst_raster("あ", 200.0, 2.0, 40.0, black(), HAlign::Left, false, false);
+        let emph = render_typst_raster(
+            "_あ_",
+            200.0,
+            2.0,
+            40.0,
+            black(),
+            HAlign::Left,
+            false,
+            false,
+        );
+        let run_italic =
+            render_typst_raster("あ", 200.0, 2.0, 40.0, black(), HAlign::Left, false, true);
+        let u = upright.as_ref().as_ref().expect("upright compiles");
+        let e = emph.as_ref().as_ref().expect("emph compiles");
+        let ri = run_italic.as_ref().as_ref().expect("run italic compiles");
+        assert!(has_ink(u) && has_ink(e) && has_ink(ri));
+        // The page width is fixed, so the slant shows up as different pixels, not a wider box.
+        assert!(
+            *e.rgba != *u.rgba,
+            "emphasis slants the glyph (pixels differ)"
+        );
+        assert!(
+            *ri.rgba != *u.rgba,
+            "run-level italic slants the glyph (pixels differ)"
+        );
     }
 }

@@ -490,9 +490,10 @@ fn typst_or_text(
         let color = first
             .map(|r| theme.resolve_color(&r.color))
             .unwrap_or(Rgba::rgb(0, 0, 0));
-        // The run's bold flag becomes the Typst base weight, so a bold slot (e.g. a master Title)
-        // renders bold from plain text — no `*…*` needed.
+        // The run's bold/italic flags become the Typst base weight/slant, so a styled slot (e.g. a
+        // master Title) renders bold/italic from plain text — no `*…*`/`_…_` needed.
         let bold = first.map(|r| r.bold).unwrap_or(false);
+        let italic = first.map(|r| r.italic).unwrap_or(false);
         let align = tb
             .paragraphs
             .first()
@@ -500,7 +501,7 @@ fn typst_or_text(
             .unwrap_or(hayate_ir::text::HAlign::Left);
         let ppp = (vp.scale * hayate_ir::units::EMU_PER_PT as f64) as f32;
         let res = crate::typst_render::render_typst_raster(
-            src, bounds.w, ppp, default_pt, color, align, bold,
+            src, bounds.w, ppp, default_pt, color, align, bold, italic,
         );
         if let Ok(img) = res.as_ref() {
             return Primitive::Typst {
@@ -510,6 +511,7 @@ fn typst_or_text(
                 color,
                 align,
                 bold,
+                italic,
                 rgba: std::sync::Arc::clone(&img.rgba),
                 px_w: img.px_w,
                 px_h: img.px_h,
